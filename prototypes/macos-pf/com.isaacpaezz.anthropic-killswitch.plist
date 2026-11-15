@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.isaacpaezz.anthropic-killswitch</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/sh</string>
+		<string>-c</string>
+		<string>/sbin/pfctl -E 2&gt;/dev/null; /sbin/pfctl -a com.apple/250.AnthropicKillSwitch -f /etc/pf.anchors/anthropic-killswitch 2&gt;/dev/null</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<!-- Re-apply every 5 minutes in case something flushes the anchor. -->
+	<key>StartInterval</key>
+	<integer>300</integer>
+</dict>
+</plist>

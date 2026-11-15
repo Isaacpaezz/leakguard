@@ -1,0 +1,12 @@
+# Anthropic kill switch (pf anchor: com.apple/250.AnthropicKillSwitch)
+# Traffic to Anthropic may only leave through the corporate VPN (ipsec0, Chile).
+# If the VPN is down, packets to Anthropic are rejected instead of leaving
+# through the real connection, so Claude never sees the real IP.
+# Source: Anthropic AS399358 (IPv4) + 2607:6bc0::/48 (IPv6).
+
+table <anthropic> const persist { \
+	160.79.104.0/23, 160.79.106.0/24, 209.249.57.0/24, \
+	38.46.212.0/24, 38.84.152.0/24, 2607:6bc0::/48 }
+
+pass  out quick on ipsec0 to <anthropic> keep state
+block return out quick to <anthropic>
