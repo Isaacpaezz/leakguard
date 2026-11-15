@@ -10,6 +10,17 @@ Chile. VPN Bypass runs in `vpnOnly` mode, so only some traffic (AI services)
 goes through the VPN. Problem: if the VPN drops, that traffic silently falls
 back to the real connection and exposes the real IP.
 
+## Product vision (owner, 2026-11-15)
+
+- Purpose: block chosen services (Claude, OpenAI, others) when the VPN drops,
+  so they never try the real connection. Audience: Venezuela and other
+  countries where these services are restricted.
+- Must be as simple as VPN Bypass: a menu-bar or tray icon on macOS, Windows
+  and Linux that shows whether you are protected, and checkboxes to pick one
+  or several services.
+- The project keeps the IP ranges up to date for users (service catalog).
+- Open source with outside contributors; the owner decides what is merged.
+
 ## What already works (`prototypes/macos-pf/`)
 
 - pf anchor `com.apple/250.AnthropicKillSwitch`, loaded by a LaunchDaemon
@@ -37,7 +48,21 @@ back to the real connection and exposes the real IP.
 5. **Persistence.** OS updates and VPN clients may flush firewall rules.
    Re-apply them on boot and periodically, and verify after applying.
 
-## Proposed architecture (to decide)
+## Decisions (2026-11-15)
+
+| Topic | Decision |
+|---|---|
+| Tray app | Pure Go: a privileged service applies the firewall; a light Go systray app picks services and shows status. |
+| Landing page | README styled like gentle-shell; `tools/readmegen` generates the services table and "What's new"; CI blocks any PR whose README is stale (no bot pushes, compatible with branch protection). |
+| Contribution flow | Light: issue/PR templates, Conventional Commits, ~400-line PRs. Control via CODEOWNERS + branch protection on `main`. |
+| Catalog format | `catalog/services/<id>.json`, validated by `internal/catalog` (stdlib only, no dependencies). |
+
+Owner to-do on GitHub once the repo exists: enable branch protection on `main`
+(require PR, Code Owner review and the `CI` check), enable private
+vulnerability reporting, create labels `status:needs-triage`,
+`status:approved`, `catalog`.
+
+## Proposed architecture
 
 - One binary in **Go**: a single static executable per OS, easy to
   cross-compile and package with Homebrew, apt and winget.
@@ -52,13 +77,19 @@ back to the real connection and exposes the real IP.
   because a block rule always beats an allow rule in Windows Firewall.
 - Later: a menu-bar or tray UI.
 
-## First milestones
+## Milestones
 
-1. Port the macOS prototype into the Go CLI with configurable profiles, plus
-   `leakguard test`.
-2. Linux `nftables` backend.
-3. Windows backend.
-4. Release pipeline (GoReleaser, Homebrew tap) and CONTRIBUTING.md.
+0. ✅ Open source foundation: CONTRIBUTING, templates, CODEOWNERS, SECURITY,
+   AGENTS.md + skills, service catalog, self-updating README.
+1. 🔜 Port the macOS prototype into the Go CLI. Profiles come from
+   `internal/catalog`. Commands: `enable`, `disable`, `status`, `test`.
+2. Menu-bar app on macOS (Go systray) talking to the privileged service.
+3. Linux `nftables` backend and tray app.
+4. Windows backend and tray app.
+5. Self-updating catalog: a scheduled workflow refreshes ranges from their
+   sources (ASN prefixes) and opens a PR; the app downloads a signed catalog.
+   Domain-aware blocking for CDN-hosted services (OpenAI).
+6. Release pipeline (GoReleaser, Homebrew tap, winget, installers).
 
 ## Resume prompt
 

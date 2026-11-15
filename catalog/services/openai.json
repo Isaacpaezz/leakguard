@@ -1,0 +1,12 @@
+{
+  "id": "openai",
+  "name": "OpenAI (ChatGPT, Codex)",
+  "description": "ChatGPT, Codex and the OpenAI API.",
+  "status": "planned",
+  "domains": [
+    "api.openai.com",
+    "chatgpt.com",
+    "openai.com"
+  ],
+  "notes": "Served from shared CDN addresses (Cloudflare). Blocking by IP would also block unrelated sites, so support waits for domain-aware blocking."
+}

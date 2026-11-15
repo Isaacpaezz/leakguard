@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security problem or a leak privately
+    url: https://github.com/Isaacpaezz/leakguard/security/advisories/new
+    about: Never report leaks or vulnerabilities in a public issue. See SECURITY.md.

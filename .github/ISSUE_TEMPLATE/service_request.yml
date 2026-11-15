@@ -1,0 +1,41 @@
+name: Request or update a service
+description: Add a new service to protect, or fix the IP ranges or domains of an existing one.
+labels: ["catalog", "status:needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The catalog only accepts ranges that come from a verifiable source.
+        Good sources: the provider's official IP list, its ASN prefixes (bgp.he.net, RIPEstat) or official documentation.
+  - type: input
+    id: service
+    attributes:
+      label: Service
+      placeholder: Perplexity, Gemini, DeepSeek...
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Request type
+      options: [New service, Update IP ranges, Update domains, Remove stale ranges]
+    validations:
+      required: true
+  - type: textarea
+    id: ranges
+    attributes:
+      label: IP ranges and domains
+      description: IPv4 and IPv6 ranges in CIDR form, and the domains the apps use.
+      render: text
+  - type: textarea
+    id: sources
+    attributes:
+      label: Sources
+      description: Links that prove each range belongs to the service.
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why does it matter?
+      description: For example, the service is restricted in your country or it is used together with an already protected service.

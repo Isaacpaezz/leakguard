@@ -1,45 +1,161 @@
-# leakguard
+<a id="top"></a>
 
-**A destination-scoped VPN kill switch for macOS, Linux and Windows.**
+<h1 align="center">🛡️ leakguard</h1>
 
-Most VPN kill switches cut the whole machine when the tunnel drops. leakguard
-does something narrower: you choose a list of destinations (services, domains,
-IP ranges), and traffic to them may only leave through your VPN interface. If
-the tunnel drops, those destinations behave as if the internet were down,
-while everything else keeps working over your normal connection.
+<p align="center"><strong>When your VPN drops, the services you choose, such as Claude, go offline instead of leaking through your real connection.</strong></p>
 
-Use it when you split-tunnel (only some traffic goes through the VPN) and a
-dropped tunnel must never send that traffic over your real connection.
+<p align="center">
+  <a href="https://github.com/Isaacpaezz/leakguard/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Isaacpaezz/leakguard/ci.yml?branch=main&style=for-the-badge&label=CI" alt="CI status"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-2ea44f?style=for-the-badge" alt="MIT license"></a>
+  <img src="https://img.shields.io/badge/macOS%20·%20Linux%20·%20Windows-planned-blue?style=for-the-badge" alt="Platforms">
+</p>
 
-> **Status:** early stage. Only a working macOS prototype exists
-> (`prototypes/macos-pf/`). The cross-platform tool is being designed.
-> See [docs/HANDOFF.md](docs/HANDOFF.md).
+<p align="center">
+  <a href="#how-it-works">How it works</a> ·
+  <a href="#supported-services">Services</a> ·
+  <a href="#whats-new">What's new</a> ·
+  <a href="#roadmap">Roadmap</a> ·
+  <a href="CONTRIBUTING.md">Contribute</a> ·
+  <a href="#en-español">Español</a>
+</p>
 
-## How it works (macOS prototype)
+---
+
+## The problem
+
+In countries like Venezuela, many AI services (Claude, OpenAI and others) are
+restricted, so people reach them through a VPN. Tools such as VPN Bypass send
+**only** that traffic through the VPN and leave everything else on the normal
+connection (*split tunneling*).
+
+The risk shows up when the VPN drops. The operating system quietly falls
+back to the real connection, and the service sees your real IP address.
+
+## The idea
+
+leakguard is a **kill switch for the services you choose**, not for the whole
+computer:
+
+- ✅ You pick what to protect: Claude, OpenAI, or several services at once.
+- 🔒 Those services can **only** be reached through the VPN.
+- 📴 If the VPN drops, those services act as if there were no internet. They
+  never try your real connection.
+- 🌐 Everything else (email, YouTube, banking) keeps working normally.
+
+The goal is something as simple as VPN Bypass: an icon in the menu bar or
+system tray that shows whether you are protected, and a list of services you
+can tick on and off.
+
+## How it works
+
+leakguard does **not** wait to "notice" that the VPN dropped. That approach would
+leave a window where traffic could leak. Instead, the firewall allows packets
+to the protected services **only** on the VPN interface:
 
 ```
-pass  out quick on <vpn-interface> to <protected> keep state
-block return out quick to <protected>
+pass  out quick on <vpn-interface> to <protected-services> keep state
+block return out quick to <protected-services>
 ```
 
-Packets to the protected set are allowed only on the VPN interface and
-rejected immediately everywhere else (real NIC, Tailscale, etc.), so apps fail
-fast instead of leaking.
+If the VPN interface is gone, no allowed path is left and the connection fails
+immediately: in about 8 ms in our macOS tests. No detection race, and no leak.
 
-## Planned platforms
+| OS      | Firewall used                                           | Status       |
+|---------|---------------------------------------------------------|--------------|
+| macOS   | `pf` anchor + LaunchDaemon                              | 🧪 Prototype |
+| Linux   | `nftables` table: drop to the set when `oifname` ≠ VPN  | 🗓️ Planned   |
+| Windows | Windows Filtering Platform / Windows Firewall rules     | 🗓️ Planned   |
 
-| OS      | Mechanism                                              |
-|---------|--------------------------------------------------------|
-| macOS   | `pf` anchor under `com.apple/*` + LaunchDaemon         |
-| Linux   | `nftables` table: drop to the set when `oifname` ≠ VPN |
-| Windows | Windows Filtering Platform / Windows Firewall rules    |
+## Supported services
+
+IP ranges live in [`catalog/services/`](catalog/services/), one file per
+service, each with the sources that prove its ranges. This table is generated
+from that catalog, so it is always current.
+
+<!-- BEGIN GENERATED: services -->
+| Service | Profile | Status | IPv4 ranges | IPv6 ranges | Last verified |
+|---|---|---|---|---|---|
+| Anthropic (Claude) | `anthropic` | ✅ Supported | 5 | 1 | 2026-11-15 |
+| OpenAI (ChatGPT, Codex) | `openai` | 🗓️ Planned | – | – | – |
+<!-- END GENERATED: services -->
+
+Missing a service? [Request it](https://github.com/Isaacpaezz/leakguard/issues/new?template=service_request.yml).
+
+## What's new
+
+<!-- BEGIN GENERATED: whats-new -->
+**Not released yet** · changes on `main`
+
+**Added**
+- Service catalog (`catalog/services/*.json`) with Anthropic (Claude) supported and OpenAI planned.
+- Self-updating README: the service table and this section are generated from the catalog and this file, and CI blocks changes that leave it stale.
+- Contributor guide, issue and pull request templates, code owners, security policy and agent rules.
+- macOS `pf` prototype that blocks Claude when the VPN is down.
+<!-- END GENERATED: whats-new -->
+
+Full history: [CHANGELOG.md](CHANGELOG.md).
+
+## Try it today (macOS prototype)
+
+> ⚠️ Early stage. The prototype only protects Claude and expects the VPN interface to be `ipsec0`.
+
+```sh
+cd prototypes/macos-pf
+sudo ./install.sh     # installs the rules and checks that Claude is blocked off the VPN
+sudo ./uninstall.sh   # removes everything
+```
+
+Details: [prototypes/macos-pf/README.md](prototypes/macos-pf/README.md).
+
+## Roadmap
+
+| # | Milestone | Status |
+|---|-----------|--------|
+| 0 | Open source foundation: contributing rules, self-updating README | ✅ Done |
+| 1 | Go CLI for macOS: profiles from the catalog, `enable`, `disable`, `status`, `test` | 🔜 Next |
+| 2 | Menu-bar app on macOS: protection status and service checkboxes | 🗓️ Planned |
+| 3 | Linux backend (`nftables`) and tray app | 🗓️ Planned |
+| 4 | Windows backend and tray app | 🗓️ Planned |
+| 5 | Self-updating IP catalog and domain-aware blocking for CDN-hosted services | 🗓️ Planned |
+| 6 | Installers and releases (Homebrew, winget, packages) | 🗓️ Planned |
+
+Design notes and lessons learned: [docs/HANDOFF.md](docs/HANDOFF.md).
+
+## Contributing
+
+Contributions are welcome. The most valuable one today is **keeping service IP
+ranges accurate**. Read [CONTRIBUTING.md](CONTRIBUTING.md) to get started.
+Using an AI assistant? Read [AGENTS.md](AGENTS.md) too.
+
+- 🐛 [Report a bug](https://github.com/Isaacpaezz/leakguard/issues/new?template=bug_report.yml)
+- ➕ [Request or update a service](https://github.com/Isaacpaezz/leakguard/issues/new?template=service_request.yml)
+- 💡 [Suggest a feature](https://github.com/Isaacpaezz/leakguard/issues/new?template=feature_request.yml)
+- 🔐 Found a leak or a security problem? Follow [SECURITY.md](SECURITY.md), not a public issue.
 
 ## Responsible use
 
-leakguard is privacy and leak-prevention tooling. You are responsible for
-complying with your VPN provider's, your employer's and each protected
-service's terms of use.
+leakguard is privacy and leak-prevention software. You are responsible for
+following the terms of use of your VPN provider, your employer and every
+service you protect.
+
+## En español
+
+**leakguard** bloquea Claude, OpenAI o los servicios que elijas cuando tu VPN
+se cae. En lugar de usar tu conexión real y exponer tu IP, esos servicios
+quedan sin internet hasta que la VPN vuelve. El resto de tu computadora sigue
+funcionando con normalidad.
+
+Está pensado para países como Venezuela, donde estos servicios están
+restringidos y se usan a través de una VPN con *split tunneling* (por ejemplo,
+VPN Bypass). La meta es que sea igual de sencillo: un ícono en la barra de
+estado que te dice si estás protegido y una lista de servicios para marcar.
+
+El proyecto está en una etapa temprana. Hoy solo existe un prototipo para
+macOS. ¿Quieres colaborar? Lee [CONTRIBUTING.md](CONTRIBUTING.md); puedes
+abrir issues en español.
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE) © 2026 Isaac Paez
+
+<p align="right"><a href="#top">Back to top ↑</a></p>
