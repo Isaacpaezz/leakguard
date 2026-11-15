@@ -156,3 +156,27 @@ func TestValidateRejectsUnsafeRanges(t *testing.T) {
 		})
 	}
 }
+
+func TestEmbeddedCatalogLoads(t *testing.T) {
+	got, err := Embedded()
+	if err != nil {
+		t.Fatalf("Embedded() error = %v", err)
+	}
+	onDisk, err := Load(filepath.Join("..", "..", "catalog", "services"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(onDisk) || got[0].ID != onDisk[0].ID {
+		t.Fatalf("Embedded() ids = %v, want %v", ids(got), ids(onDisk))
+	}
+}
+
+func TestFind(t *testing.T) {
+	svcs := []Service{{ID: "anthropic"}, {ID: "openai"}}
+	if s, ok := Find(svcs, "openai"); !ok || s.ID != "openai" {
+		t.Fatalf("Find(openai) = %v, %v", s, ok)
+	}
+	if _, ok := Find(svcs, "gemini"); ok {
+		t.Fatal("Find(gemini) ok = true, want false")
+	}
+}
