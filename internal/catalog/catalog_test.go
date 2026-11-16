@@ -129,8 +129,9 @@ func TestLoadFailsClosed(t *testing.T) {
 	if _, err := Load(filepath.Join(t.TempDir(), "missing")); err == nil {
 		t.Fatal("Load(missing dir) error = nil, want error")
 	}
-	if _, err := Load(t.TempDir()); err == nil || !strings.Contains(err.Error(), "no services") {
-		t.Fatalf("Load(empty dir) error = %v, want no services error", err)
+	empty := t.TempDir()
+	if _, err := Load(empty); err == nil || err.Error() != "catalog: no services found in "+empty {
+		t.Fatalf("Load(empty dir) error = %v, want no services error naming %s", err, empty)
 	}
 }
 
@@ -154,5 +155,29 @@ func TestValidateRejectsUnsafeRanges(t *testing.T) {
 				t.Fatalf("Validate() = %v, want error mentioning %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestEmbeddedCatalogLoads(t *testing.T) {
+	got, err := Embedded()
+	if err != nil {
+		t.Fatalf("Embedded() error = %v", err)
+	}
+	onDisk, err := Load(filepath.Join("..", "..", "catalog", "services"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(onDisk) || got[0].ID != onDisk[0].ID {
+		t.Fatalf("Embedded() ids = %v, want %v", ids(got), ids(onDisk))
+	}
+}
+
+func TestFind(t *testing.T) {
+	svcs := []Service{{ID: "anthropic"}, {ID: "openai"}}
+	if s, ok := Find(svcs, "openai"); !ok || s.ID != "openai" {
+		t.Fatalf("Find(openai) = %v, %v", s, ok)
+	}
+	if _, ok := Find(svcs, "gemini"); ok {
+		t.Fatal("Find(gemini) ok = true, want false")
 	}
 }
