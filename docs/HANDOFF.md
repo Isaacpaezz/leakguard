@@ -81,8 +81,14 @@ vulnerability reporting, create labels `status:needs-triage`,
 
 0. ✅ Open source foundation: CONTRIBUTING, templates, CODEOWNERS, SECURITY,
    AGENTS.md + skills, service catalog, self-updating README.
-1. 🔜 Port the macOS prototype into the Go CLI. Profiles come from
+1. 🚧 In review. Port the macOS prototype into the Go CLI. Profiles come from
    `internal/catalog`. Commands: `enable`, `disable`, `status`, `test`.
+   Done in `cmd/leakguard` (plus `services`, `interfaces`, `apply`): JSON
+   config at `/Library/Application Support/leakguard/config.json`, pf anchor
+   `com.apple/250.leakguard`, LaunchDaemon `dev.leakguard` running a
+   root-owned copy at `/usr/local/libexec/leakguard/leakguard` every 60 s.
+   Pending: a live run by the owner (`sudo leakguard enable`, `test`,
+   `disable`), since tests never touch the real firewall.
 2. Menu-bar app on macOS (Go systray) talking to the privileged service.
 3. Linux `nftables` backend and tray app.
 4. Windows backend and tray app.

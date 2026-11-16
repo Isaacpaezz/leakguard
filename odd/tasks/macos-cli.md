@@ -20,10 +20,10 @@ Branch `feat/macos-cli`; delivered as a PR to `main`. Tracking for the parent se
 | T1 | Embed catalog in the binary (`catalog` package, `LoadFS`) | S1 | inline | 148e3de, fix 8a6caf4 |
 | T2 | `internal/config`: load/save/validate, VPN interface candidates | S2, S6 | inline | 148e3de |
 | T3 | `internal/pf`: render anchor rules, apply/flush/status via pfctl runner, real `pfctl -n` syntax test on macOS | S3, S4 | inline | d4812c9 |
-| T4 | `cmd/leakguard`: services, enable, disable, apply, status; LaunchDaemon install. Also fold in review advisories (L5) | S1, S2, S4, S6, S7 | worker (context backstop) | |
-| T5 | `leakguard test`: off-VPN refusal probe via IP_BOUND_IF | S5 | inline | |
-| T6 | Docs: README quickstart, CHANGELOG, HANDOFF, AGENTS layout; CI macOS job | S1, S7 | inline | |
-| T7 | Independent verification (Risk item 2: root daemon, firewall) | all | gentle-ai-verify | |
+| T4 | `cmd/leakguard`: services, enable, disable, apply, status; LaunchDaemon install. Also fold in review advisories (L5) | S1, S2, S4, S6, S7 | worker (context backstop) | 8946ec3, 374831b, 87b66e7, 03b3727 |
+| T5 | `leakguard test`: off-VPN refusal probe via IP_BOUND_IF | S5 | inline | 87b66e7, fix e9bc517 |
+| T6 | Docs: README quickstart, CHANGELOG, HANDOFF, AGENTS layout; CI macOS job | S1, S7 | inline | 03b3727 |
+| T7 | Independent verification (Risk item 2: root daemon, firewall) | all | gentle-ai-verify | native review review-5cb1470d73d86496 (approved) |
 
 ## Log
 
@@ -33,3 +33,6 @@ Branch `feat/macos-cli`; delivered as a PR to `main`. Tracking for the parent se
 - L4 (native review, lineage review-7f35a59d74a0d2a3, base main, commits 148e3de..d4812c9): tier high; one correction (Load empty-dir message named "."), fixed in 8a6caf4; approved and acknowledged.
 - L5 (review advisories, non-blocking, folded into T4): validate vpnInterface inside pf (Rules/Apply) since config.Load does not call Validate; fsync before rename in config.Save; reject trailing JSON after the config object; surface real pfctl errors in Status instead of treating them as an empty table; normalize pfctl table entries (netip.Prefix comparison) in Verify; compare embedded catalog with disk via reflect.DeepEqual.
 - L6 (delivery decision, 2026-11-16): slice passed 400 lines; chain_strategy=stacked-to-main. PR 1 = feat/macos-cli (T1-T3, reviewed). PR 2 = feat/macos-cli-commands based on PR 1 (T4-T6).
+- L7 (native review, lineage review-5cb1470d73d86496, base 05bbd1a, 2257 lines): tier high; one correction (probe counted unreachable/timeouts as blocked, a false proof when the real connection is offline), fixed in e9bc517 with RED->GREEN; approved and acknowledged. Advisory follow-ups (partly-untested domains passing, status ignoring disabled pf, bootout/bootstrap race, daemon logs) tracked in a GitHub issue.
+- L8 (owner live run, 2026-11-16): prototype uninstalled; `sudo leakguard enable --vpn ipsec0 anthropic` OK; `sudo leakguard status` = PROTECTED. `test --via en0` correctly refused to pass (en0 is unplugged Ethernet: network unreachable). `test --via en1` (Wi-Fi, the real connection) = IPv4 `OK blocked`, IPv6 untested (Wi-Fi has no IPv6 route), exit 0. `disable` not run yet.
+- L9 (follow-up for issue #5): `test` should pick the physical interface itself when the default route is the VPN, and say clearly when the `--via` interface is inactive.

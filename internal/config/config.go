@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -15,6 +16,10 @@ import (
 
 	"github.com/Isaacpaezz/leakguard/internal/catalog"
 )
+
+// DefaultPath is where the configuration lives. It is owned by root and
+// readable by everyone, so status and test work without sudo.
+const DefaultPath = "/Library/Application Support/leakguard/config.json"
 
 // ErrNotConfigured means no configuration file exists yet.
 var ErrNotConfigured = errors.New("leakguard is not configured yet")
@@ -34,16 +39,32 @@ var nonVPNPrefixes = []string{"lo", "en", "bridge", "awdl", "llw", "ap", "anpi",
 // Prefixes of interfaces that VPN clients create.
 var vpnPrefixes = []string{"utun", "ipsec", "ppp", "tun", "tap", "wg"}
 
+// ValidInterfaceName reports whether name is a plain interface name, safe to
+// paste into firewall rules.
+func ValidInterfaceName(name string) bool {
+	return interfaceName.MatchString(name)
+}
+
+// CheckVPNInterface reports why name cannot be used as the VPN interface.
+// The firewall backends call it too, so a bad name never reaches the rules.
+func CheckVPNInterface(name string) error {
+	switch {
+	case name == "":
+		return errors.New("VPN interface is not set")
+	case !ValidInterfaceName(name):
+		return fmt.Errorf("%q is not a valid interface name", name)
+	case hasPrefix(name, nonVPNPrefixes):
+		return fmt.Errorf("%q is not a VPN interface; it carries your real connection", name)
+	}
+	return nil
+}
+
 // Validate checks the configuration against the service catalog.
 func (c Config) Validate(services []catalog.Service) error {
-	switch {
-	case c.VPNInterface == "":
-		return errors.New("VPN interface is not set")
-	case !interfaceName.MatchString(c.VPNInterface):
-		return fmt.Errorf("%q is not a valid interface name", c.VPNInterface)
-	case hasPrefix(c.VPNInterface, nonVPNPrefixes):
-		return fmt.Errorf("%q is not a VPN interface; it carries your real connection", c.VPNInterface)
-	case len(c.Services) == 0:
+	if err := CheckVPNInterface(c.VPNInterface); err != nil {
+		return err
+	}
+	if len(c.Services) == 0 {
 		return errors.New("no services selected")
 	}
 	seen := map[string]bool{}
@@ -97,6 +118,9 @@ func Load(path string) (Config, error) {
 	if err := dec.Decode(&c); err != nil {
 		return c, fmt.Errorf("%s: %w", path, err)
 	}
+	if _, err := dec.Token(); err != io.EOF {
+		return Config{}, fmt.Errorf("%s: unexpected data after the configuration", path)
+	}
 	return c, nil
 }
 
@@ -120,6 +144,11 @@ func Save(path string, c Config) error {
 		return err
 	}
 	if err := tmp.Chmod(0o644); err != nil {
+		tmp.Close()
+		return err
+	}
+	// Flush to disk before the rename, so a crash never leaves an empty file.
+	if err := tmp.Sync(); err != nil {
 		tmp.Close()
 		return err
 	}
