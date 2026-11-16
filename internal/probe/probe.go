@@ -32,7 +32,7 @@ var ErrNotSupported = errors.New("binding a connection to an interface is not su
 type Outcome string
 
 const (
-	// Blocked means the connection was refused, unreachable or timed out.
+	// Blocked means the connection was refused immediately, as pf's block rule does.
 	Blocked Outcome = "OK blocked"
 	// Leak means the connection succeeded outside the VPN.
 	Leak Outcome = "LEAK"
@@ -112,28 +112,33 @@ func (p Prober) Run(ctx context.Context, iface string, services []catalog.Servic
 			dctx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
 			r.Err = p.Dial(dctx, iface, r.Addr)
-			r.Outcome = classify(r.Err)
+			r.Outcome, r.Err = classify(r.Err)
 		}(&results[i])
 	}
 	wg.Wait()
 	return results
 }
 
-func classify(err error) Outcome {
+// classify maps a dial error to an outcome. leakguard's pf rule uses
+// "block return", so a real block is always an immediate refusal. Unreachable
+// networks and timeouts also happen when the real connection is offline and
+// no rule is loaded, so they are untested, never blocked.
+func classify(err error) (Outcome, error) {
 	if err == nil {
-		return Leak
+		return Leak, nil
 	}
 	var ne net.Error
 	switch {
-	case errors.Is(err, syscall.ECONNREFUSED),
-		errors.Is(err, syscall.EHOSTUNREACH),
+	case errors.Is(err, syscall.ECONNREFUSED):
+		return Blocked, err
+	case errors.Is(err, syscall.EHOSTUNREACH),
 		errors.Is(err, syscall.ENETUNREACH),
 		errors.Is(err, context.DeadlineExceeded),
 		errors.Is(err, os.ErrDeadlineExceeded),
 		errors.As(err, &ne) && ne.Timeout():
-		return Blocked
+		return Untested, fmt.Errorf("no refusal (%w); is the real connection online?", err)
 	}
-	return Untested
+	return Untested, err
 }
 
 // Check fails when any address leaked or when a service has no blocked address.

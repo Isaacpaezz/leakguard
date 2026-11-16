@@ -75,7 +75,7 @@ func TestRunClassifiesOutcomes(t *testing.T) {
 	got := lines(p.Run(context.Background(), "en0", []catalog.Service{anthropic}))
 	want := "anthropic api.anthropic.com 160.79.104.10:443 OK blocked\n" +
 		"anthropic api.anthropic.com [2607:6bc0::10]:443 LEAK\n" +
-		"anthropic claude.ai 160.79.104.11:443 OK blocked\n"
+		"anthropic claude.ai 160.79.104.11:443 untested\n"
 	if got != want {
 		t.Fatalf("Run() =\n%s\nwant\n%s", got, want)
 	}
@@ -84,15 +84,22 @@ func TestRunClassifiesOutcomes(t *testing.T) {
 	}
 }
 
-func TestRunTreatsUnreachableAsBlocked(t *testing.T) {
-	for _, err := range []error{syscall.EHOSTUNREACH, syscall.ENETUNREACH, context.DeadlineExceeded} {
+// pf's "block return" always answers with an immediate refusal. Unreachable
+// networks and timeouts also happen when the real connection is offline and
+// no rule is loaded, so they prove nothing.
+func TestRunNeverPassesUnreachableOrTimeout(t *testing.T) {
+	for _, err := range []error{syscall.EHOSTUNREACH, syscall.ENETUNREACH, context.DeadlineExceeded, os.ErrDeadlineExceeded} {
 		res := fakeResolver{"api.anthropic.com": {"160.79.104.10"}}
 		p := Prober{Resolver: res, Dial: fakeDialer(&dialLog{}, map[string]error{"160.79.104.10:443": err})}
 		svc := anthropic
 		svc.Domains = []string{"api.anthropic.com"}
 		r := p.Run(context.Background(), "en0", []catalog.Service{svc})
-		if len(r) != 1 || r[0].Outcome != Blocked {
-			t.Errorf("error %v: results = %+v, want blocked", err, r)
+		if len(r) != 1 || r[0].Outcome != Untested || !errors.Is(r[0].Err, err) ||
+			!strings.Contains(r[0].Err.Error(), "no refusal") {
+			t.Errorf("error %v: results = %+v, want untested explaining no refusal", err, r)
+		}
+		if Check(r, []catalog.Service{svc}) == nil {
+			t.Errorf("error %v: Check() = nil, want failure", err)
 		}
 	}
 }
