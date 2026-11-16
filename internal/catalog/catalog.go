@@ -131,22 +131,27 @@ func Load(dir string) ([]Service, error) {
 	if _, err := os.Stat(dir); err != nil {
 		return nil, fmt.Errorf("catalog: %w", err)
 	}
-	return LoadFS(os.DirFS(dir), ".")
+	return loadFS(os.DirFS(dir), ".", dir)
 }
 
 // Embedded returns the catalog compiled into the binary.
 func Embedded() ([]Service, error) {
-	return LoadFS(embedded.Files, "services")
+	return loadFS(embedded.Files, "services", "the embedded catalog")
 }
 
 // LoadFS is Load for any file system; dir is a slash-separated fs path.
 func LoadFS(fsys fs.FS, dir string) ([]Service, error) {
+	return loadFS(fsys, dir, dir)
+}
+
+// loadFS reads dir from fsys; label names the location in error messages.
+func loadFS(fsys fs.FS, dir, label string) ([]Service, error) {
 	paths, err := fs.Glob(fsys, path.Join(dir, "*.json"))
 	if err != nil {
 		return nil, err
 	}
 	if len(paths) == 0 {
-		return nil, fmt.Errorf("catalog: no services found in %s", dir)
+		return nil, fmt.Errorf("catalog: no services found in %s", label)
 	}
 	services := make([]Service, 0, len(paths))
 	for _, p := range paths {

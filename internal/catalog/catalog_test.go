@@ -129,8 +129,9 @@ func TestLoadFailsClosed(t *testing.T) {
 	if _, err := Load(filepath.Join(t.TempDir(), "missing")); err == nil {
 		t.Fatal("Load(missing dir) error = nil, want error")
 	}
-	if _, err := Load(t.TempDir()); err == nil || !strings.Contains(err.Error(), "no services") {
-		t.Fatalf("Load(empty dir) error = %v, want no services error", err)
+	empty := t.TempDir()
+	if _, err := Load(empty); err == nil || err.Error() != "catalog: no services found in "+empty {
+		t.Fatalf("Load(empty dir) error = %v, want no services error naming %s", err, empty)
 	}
 }
 
