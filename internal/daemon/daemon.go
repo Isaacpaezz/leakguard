@@ -7,11 +7,13 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const (
@@ -28,6 +30,16 @@ const (
 	LaunchctlPath = "/bin/launchctl"
 	// Interval is how often, in seconds, the daemon re-applies the rules.
 	Interval = 60
+	// LogPath receives the output of every daemon run.
+	LogPath = "/Library/Logs/leakguard.log"
+	// BootoutWait bounds how long Install waits for launchd to remove the old job.
+	BootoutWait = 5 * time.Second
+	// pollInterval is how often Install checks whether the old job is gone.
+	pollInterval = 100 * time.Millisecond
+	// retryDelay is the pause before the single bootstrap retry.
+	retryDelay = time.Second
+	// logTail bounds how much of the log LastLogLine reads.
+	logTail = 4096
 )
 
 // Plist renders the LaunchDaemon definition that runs "binary apply".
@@ -47,9 +59,13 @@ func Plist(binary string) string {
 	<true/>
 	<key>StartInterval</key>
 	<integer>%d</integer>
+	<key>StandardOutPath</key>
+	<string>%s</string>
+	<key>StandardErrorPath</key>
+	<string>%s</string>
 </dict>
 </plist>
-`, Label, binary, Interval)
+`, Label, binary, Interval, LogPath, LogPath)
 }
 
 // Runner runs launchctl with the given arguments.
@@ -80,6 +96,61 @@ type Daemon struct {
 	// Secure makes an installed file root-owned and checks that no normal
 	// user can replace it. Nil means SecureRootOwned.
 	Secure func(path string) error
+	// Sleep waits between launchctl polls. Nil means time.Sleep.
+	Sleep func(time.Duration)
+}
+
+// LastLogLine returns the last non-empty line of the daemon log, reading only
+// its tail. A missing or empty log returns false.
+func (d Daemon) LastLogLine() (string, bool) {
+	f, err := os.Open(d.path(LogPath))
+	if err != nil {
+		return "", false
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return "", false
+	}
+	off := info.Size() - logTail
+	if off < 0 {
+		off = 0
+	}
+	buf := make([]byte, info.Size()-off)
+	n, err := f.ReadAt(buf, off)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", false
+	}
+	text := strings.TrimRight(string(buf[:n]), "\r\n\t ")
+	if text == "" {
+		return "", false
+	}
+	if i := strings.LastIndexByte(text, '\n'); i >= 0 {
+		text = text[i+1:]
+	}
+	return strings.TrimSpace(text), true
+}
+
+func (d Daemon) sleep(t time.Duration) {
+	if d.Sleep != nil {
+		d.Sleep(t)
+		return
+	}
+	time.Sleep(t)
+}
+
+// waitUnloaded polls launchd until the job is gone, for at most BootoutWait.
+// "launchctl print" fails once launchd no longer knows the job.
+func (d Daemon) waitUnloaded() {
+	for waited := time.Duration(0); ; waited += pollInterval {
+		if _, err := d.Launchctl.Run("print", "system/"+Label); err != nil {
+			return
+		}
+		if waited+pollInterval > BootoutWait {
+			return
+		}
+		d.sleep(pollInterval)
+	}
 }
 
 func (d Daemon) path(p string) string { return filepath.Join(d.Root, p) }
@@ -114,10 +185,20 @@ func (d Daemon) Install(src string) error {
 		os.Remove(plist)
 		return fmt.Errorf("refusing to install %s: %w", PlistPath, err)
 	}
-	// bootout fails when the daemon is not loaded yet; that is fine.
+	// bootout fails when the daemon is not loaded yet; that is fine. It
+	// returns before launchd has removed the job, and bootstrapping while the
+	// old job is still there fails ("Bootstrap failed: 5"), so wait for it.
 	d.Launchctl.Run("bootout", "system/"+Label)
-	_, err = d.Launchctl.Run("bootstrap", "system", plist)
-	return err
+	d.waitUnloaded()
+	if _, err = d.Launchctl.Run("bootstrap", "system", plist); err == nil {
+		return nil
+	}
+	d.sleep(retryDelay)
+	d.waitUnloaded()
+	if _, err = d.Launchctl.Run("bootstrap", "system", plist); err != nil {
+		return fmt.Errorf("the background service is not loaded: %w", err)
+	}
+	return nil
 }
 
 // Uninstall unloads the daemon and removes its plist and binary.

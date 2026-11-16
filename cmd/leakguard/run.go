@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/Isaacpaezz/leakguard/internal/daemon"
 	"github.com/Isaacpaezz/leakguard/internal/pf"
@@ -42,6 +43,7 @@ type Env struct {
 	Resolver         probe.Resolver
 	Dial             probe.Dialer
 	DefaultInterface func() (string, error)
+	Now              func() time.Time // nil means time.Now
 }
 
 const usage = `leakguard keeps the services you choose off your real connection:
@@ -60,13 +62,16 @@ Usage:
   sudo leakguard disable
       Turn the protection off. Your choices are kept for the next enable.
   leakguard status
-      Show what is protected. With sudo it also verifies the firewall rules.
+      Show what is protected and the last background run. With sudo it
+      also verifies that pf is enabled and the firewall rules are loaded.
   leakguard test [--via IFACE]
       Prove that protected services are blocked outside the VPN by
-      connecting through your normal connection (default: the interface of
-      the default route, or IFACE). Every connection must fail.
+      connecting through your real connection: IFACE, or the interface of
+      the default route, or, when the default route is the VPN, the only
+      other connected interface. Every connection must fail.
   sudo leakguard apply
-      Re-apply the saved rules. The background service runs this.
+      Re-apply the saved rules. The background service runs this and
+      logs each run to /Library/Logs/leakguard.log.
   leakguard help
       Show this help.
 

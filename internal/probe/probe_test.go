@@ -115,21 +115,49 @@ func TestRunNeverPassesUnknownErrors(t *testing.T) {
 	}
 }
 
-func TestRunSkipsAddressesOutsideTheCatalogRanges(t *testing.T) {
+// pf only blocks the catalog ranges, so a resolved address outside them is
+// reported as not covered and never dialed.
+func TestRunReportsAddressesOutsideTheCatalogRanges(t *testing.T) {
 	res := fakeResolver{
 		"api.anthropic.com": {"160.79.104.10", "104.18.0.1"},
 		"claude.ai":         {"104.18.0.2"},
 	}
 	log := &dialLog{}
 	p := Prober{Resolver: res, Dial: fakeDialer(log, map[string]error{"160.79.104.10:443": syscall.ECONNREFUSED})}
-	got := lines(p.Run(context.Background(), "en0", []catalog.Service{anthropic}))
+	r := p.Run(context.Background(), "en0", []catalog.Service{anthropic})
 	want := "anthropic api.anthropic.com 160.79.104.10:443 OK blocked\n" +
-		"anthropic claude.ai invalid AddrPort untested\n"
-	if got != want {
+		"anthropic api.anthropic.com 104.18.0.1:443 NOT COVERED\n" +
+		"anthropic claude.ai 104.18.0.2:443 NOT COVERED\n"
+	if got := lines(r); got != want {
 		t.Fatalf("Run() =\n%s\nwant\n%s", got, want)
+	}
+	if !strings.Contains(r[1].Err.Error(), "outside the catalog ranges; pf does not protect it") {
+		t.Fatalf("err = %v", r[1].Err)
 	}
 	if strings.Join(log.addrs, ",") != "160.79.104.10:443" {
 		t.Fatalf("dialed %v; must never dial outside the catalog ranges", log.addrs)
+	}
+	err := Check(r, []catalog.Service{anthropic})
+	if err == nil || !strings.Contains(err.Error(), "anthropic: api.anthropic.com resolves to 104.18.0.1, outside the catalog ranges; pf does not protect it") {
+		t.Fatalf("Check() = %v, want a not covered failure", err)
+	}
+}
+
+// Two domains may share an address; each domain still needs its own proof.
+func TestRunProbesSharedAddressesForEveryDomain(t *testing.T) {
+	res := fakeResolver{
+		"api.anthropic.com": {"160.79.104.10"},
+		"claude.ai":         {"160.79.104.10"},
+	}
+	p := Prober{Resolver: res, Dial: fakeDialer(&dialLog{}, map[string]error{"160.79.104.10:443": syscall.ECONNREFUSED})}
+	r := p.Run(context.Background(), "en0", []catalog.Service{anthropic})
+	want := "anthropic api.anthropic.com 160.79.104.10:443 OK blocked\n" +
+		"anthropic claude.ai 160.79.104.10:443 OK blocked\n"
+	if got := lines(r); got != want {
+		t.Fatalf("Run() =\n%s\nwant\n%s", got, want)
+	}
+	if err := Check(r, []catalog.Service{anthropic}); err != nil {
+		t.Fatalf("Check() = %v", err)
 	}
 }
 
@@ -145,18 +173,25 @@ func TestRunReportsResolutionFailureAsUntested(t *testing.T) {
 }
 
 func TestCheck(t *testing.T) {
-	other := catalog.Service{ID: "example"}
-	blocked := Result{Service: "anthropic", Outcome: Blocked}
+	other := catalog.Service{ID: "example", Domains: []string{"example.com"}}
+	api := Result{Service: "anthropic", Domain: "api.anthropic.com", Outcome: Blocked}
+	claude := Result{Service: "anthropic", Domain: "claude.ai", Outcome: Blocked}
+	example := Result{Service: "example", Domain: "example.com", Outcome: Blocked}
 	cases := []struct {
 		name    string
 		results []Result
 		want    string
 	}{
-		{"all blocked", []Result{blocked, {Service: "example", Outcome: Blocked}}, ""},
-		{"partly untested", []Result{blocked, {Service: "anthropic", Outcome: Untested}, {Service: "example", Outcome: Blocked}}, ""},
-		{"leak", []Result{blocked, {Service: "example", Outcome: Leak}}, "example is reachable outside the VPN"},
-		{"service untested", []Result{blocked, {Service: "example", Outcome: Untested}}, "example could not be tested"},
-		{"nothing", nil, "anthropic could not be tested"},
+		{"all blocked", []Result{api, claude, example}, ""},
+		// An address the real connection has no route for (IPv6 on an IPv4
+		// Wi-Fi) is not a leak when its domain has a blocked address.
+		{"address untested in a blocked domain", []Result{api, {Service: "anthropic", Domain: "api.anthropic.com", Outcome: Untested}, claude, example}, ""},
+		{"domain untested", []Result{api, {Service: "anthropic", Domain: "claude.ai", Outcome: Untested}, example}, "anthropic: claude.ai could not be tested; this is not a pass"},
+		{"domain missing", []Result{api, example}, "anthropic: claude.ai could not be tested; this is not a pass"},
+		{"not covered", []Result{api, claude, {Service: "anthropic", Domain: "claude.ai", Addr: netip.MustParseAddrPort("104.18.0.2:443"), Outcome: NotCovered}, example}, "anthropic: claude.ai resolves to 104.18.0.2, outside the catalog ranges; pf does not protect it"},
+		{"leak", []Result{api, claude, {Service: "example", Domain: "example.com", Outcome: Leak}}, "example is reachable outside the VPN"},
+		{"service untested", []Result{api, claude, {Service: "example", Domain: "example.com", Outcome: Untested}}, "example could not be tested; this is not a pass"},
+		{"nothing", nil, "anthropic could not be tested; this is not a pass"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

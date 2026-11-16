@@ -84,12 +84,12 @@ func (f Firewall) Apply(vpnInterface string, services []catalog.Service) error {
 	if err != nil {
 		return err
 	}
-	info, err := f.Runner.Run("", "-s", "info")
+	enabled, err := f.Enabled()
 	if err != nil {
 		return err
 	}
 	// Each "pfctl -E" takes a new enable reference, so only enable when off.
-	if !strings.Contains(info, "Status: Enabled") {
+	if !enabled {
 		if _, err := f.Runner.Run("", "-E"); err != nil {
 			return err
 		}
@@ -102,6 +102,21 @@ func (f Firewall) Apply(vpnInterface string, services []catalog.Service) error {
 		return err
 	}
 	return state.Verify(vpnInterface, services)
+}
+
+// Enabled reports whether pf is filtering. Rules in the anchor do nothing
+// while pf is disabled.
+func (f Firewall) Enabled() (bool, error) {
+	info, err := f.Runner.Run("", "-s", "info")
+	if err != nil {
+		return false, err
+	}
+	for _, l := range lines(info) {
+		if strings.HasPrefix(l, "Status: Enabled") {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // Flush removes every leakguard rule and table.

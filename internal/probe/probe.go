@@ -38,6 +38,9 @@ const (
 	Leak Outcome = "LEAK"
 	// Untested means nothing could be proven; it never counts as a pass.
 	Untested Outcome = "untested"
+	// NotCovered means a domain resolved outside the catalog ranges, which pf
+	// does not block; it is never dialed and always fails the test.
+	NotCovered Outcome = "NOT COVERED"
 )
 
 // Resolver looks up the addresses of a host; *net.Resolver implements it.
@@ -65,8 +68,14 @@ type Prober struct {
 	Timeout  time.Duration // zero means DefaultTimeout
 }
 
-// Run resolves each service's domains, keeps only the addresses inside the
-// service's catalog ranges, and dials them through iface in parallel.
+// errNotCovered explains a NotCovered result.
+var errNotCovered = errors.New("outside the catalog ranges; pf does not protect it")
+
+// Run resolves each service's domains and dials, through iface and in
+// parallel, every resolved address inside the service's catalog ranges.
+// Addresses outside the ranges are reported as NotCovered and never dialed.
+// Each domain gets its own results, even when domains share an address,
+// because every domain needs its own proof.
 func (p Prober) Run(ctx context.Context, iface string, services []catalog.Service) []Result {
 	timeout := p.Timeout
 	if timeout == 0 {
@@ -75,27 +84,26 @@ func (p Prober) Run(ctx context.Context, iface string, services []catalog.Servic
 	var results []Result
 	for _, svc := range services {
 		ranges := prefixes(svc)
-		seen := map[netip.Addr]bool{}
 		for _, domain := range svc.Domains {
 			rctx, cancel := context.WithTimeout(ctx, timeout)
 			addrs, err := p.Resolver.LookupNetIP(rctx, "ip", domain)
 			cancel()
-			found := false
+			seen := map[netip.Addr]bool{}
 			for _, a := range addrs {
 				a = a.Unmap()
-				if !inside(a, ranges) {
-					continue
-				}
-				found = true
 				if seen[a] {
 					continue
 				}
 				seen[a] = true
-				results = append(results, Result{Service: svc.ID, Domain: domain, Addr: netip.AddrPortFrom(a, Port)})
+				r := Result{Service: svc.ID, Domain: domain, Addr: netip.AddrPortFrom(a, Port)}
+				if !inside(a, ranges) {
+					r.Outcome, r.Err = NotCovered, errNotCovered
+				}
+				results = append(results, r)
 			}
-			if !found {
+			if len(seen) == 0 {
 				if err == nil {
-					err = errors.New("resolves only to addresses outside the catalog ranges")
+					err = errors.New("resolves to no address")
 				}
 				results = append(results, Result{Service: svc.ID, Domain: domain, Outcome: Untested, Err: err})
 			}
@@ -103,7 +111,7 @@ func (p Prober) Run(ctx context.Context, iface string, services []catalog.Servic
 	}
 	var wg sync.WaitGroup
 	for i := range results {
-		if results[i].Outcome == Untested {
+		if results[i].Outcome != "" {
 			continue
 		}
 		wg.Add(1)
@@ -141,20 +149,35 @@ func classify(err error) (Outcome, error) {
 	return Untested, err
 }
 
-// Check fails when any address leaked or when a service has no blocked address.
+// Check fails when any address leaked, when any resolved address is outside
+// the catalog ranges, or when any domain of a service has no blocked address.
+// An untested address does not fail a domain that has a blocked address: the
+// real connection may simply have no route for that address family.
 func Check(results []Result, services []catalog.Service) error {
-	blocked := map[string]bool{}
+	type key struct{ service, domain string }
+	blocked := map[key]bool{}
+	for _, r := range results {
+		if r.Outcome == Leak {
+			return fmt.Errorf("%s is reachable outside the VPN at %s", r.Service, r.Addr.Addr())
+		}
+	}
 	for _, r := range results {
 		switch r.Outcome {
-		case Leak:
-			return fmt.Errorf("%s is reachable outside the VPN at %s", r.Service, r.Addr.Addr())
+		case NotCovered:
+			return fmt.Errorf("%s: %s resolves to %s, %v", r.Service, r.Domain, r.Addr.Addr(), errNotCovered)
 		case Blocked:
-			blocked[r.Service] = true
+			blocked[key{r.Service, r.Domain}] = true
+			blocked[key{r.Service, ""}] = true
 		}
 	}
 	for _, s := range services {
-		if !blocked[s.ID] {
+		if !blocked[key{s.ID, ""}] {
 			return fmt.Errorf("%s could not be tested; this is not a pass", s.ID)
+		}
+		for _, d := range s.Domains {
+			if !blocked[key{s.ID, d}] {
+				return fmt.Errorf("%s: %s could not be tested; this is not a pass", s.ID, d)
+			}
 		}
 	}
 	return nil
