@@ -90,3 +90,47 @@ func TestVPNCandidates(t *testing.T) {
 		t.Fatalf("VPNCandidates() = %v, want %v", got, want)
 	}
 }
+
+func TestLoadRejectsTrailingData(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	os.WriteFile(path, []byte(`{"vpn_interface":"utun4","services":["anthropic"]} {"vpn_interface":"en0"}`), 0o644)
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "unexpected data after the configuration") {
+		t.Fatalf("Load() error = %v, want trailing data error", err)
+	}
+}
+
+func TestLoadAcceptsTrailingWhitespace(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	os.WriteFile(path, []byte("{\"vpn_interface\":\"utun4\",\"services\":[\"anthropic\"]}\n\n"), 0o644)
+	if _, err := Load(path); err != nil {
+		t.Fatalf("Load() = %v", err)
+	}
+}
+
+func TestCheckVPNInterface(t *testing.T) {
+	for _, ok := range []string{"ipsec0", "utun4", "wg0", "ppp0"} {
+		if err := CheckVPNInterface(ok); err != nil {
+			t.Errorf("CheckVPNInterface(%q) = %v", ok, err)
+		}
+	}
+	cases := map[string]string{
+		"":           "VPN interface is not set",
+		"ipsec0 all": "not a valid interface name",
+		"Ipsec0":     "not a valid interface name",
+		"en0":        "not a VPN interface",
+		"lo0":        "not a VPN interface",
+	}
+	for name, want := range cases {
+		if err := CheckVPNInterface(name); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("CheckVPNInterface(%q) = %v, want %q", name, err, want)
+		}
+	}
+}
+
+func TestValidInterfaceName(t *testing.T) {
+	for name, want := range map[string]bool{"en0": true, "ipsec0": true, "en0;": false, "": false, "a b": false} {
+		if got := ValidInterfaceName(name); got != want {
+			t.Errorf("ValidInterfaceName(%q) = %v, want %v", name, got, want)
+		}
+	}
+}

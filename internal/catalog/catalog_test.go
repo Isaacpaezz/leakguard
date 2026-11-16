@@ -3,6 +3,7 @@ package catalog
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -167,8 +168,8 @@ func TestEmbeddedCatalogLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != len(onDisk) || got[0].ID != onDisk[0].ID {
-		t.Fatalf("Embedded() ids = %v, want %v", ids(got), ids(onDisk))
+	if !reflect.DeepEqual(got, onDisk) {
+		t.Fatalf("Embedded() differs from catalog/services on disk:\n%+v\nwant\n%+v", got, onDisk)
 	}
 }
 

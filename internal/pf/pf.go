@@ -6,10 +6,12 @@ package pf
 import (
 	"bytes"
 	"fmt"
+	"net/netip"
 	"os/exec"
 	"strings"
 
 	"github.com/Isaacpaezz/leakguard/internal/catalog"
+	"github.com/Isaacpaezz/leakguard/internal/config"
 )
 
 const (
@@ -24,7 +26,12 @@ const (
 // Rules renders the anchor: traffic to the protected ranges may leave only on
 // vpnInterface and is rejected on every other interface. The rules load even
 // when vpnInterface does not exist, so protection holds with the VPN down.
-func Rules(vpnInterface string, services []catalog.Service) string {
+// An interface name that is not a plain VPN interface is rejected, so it can
+// never inject rules or route protected traffic over the real connection.
+func Rules(vpnInterface string, services []catalog.Service) (string, error) {
+	if err := config.CheckVPNInterface(vpnInterface); err != nil {
+		return "", err
+	}
 	var ids, ranges []string
 	for _, s := range services {
 		ids = append(ids, s.ID)
@@ -37,7 +44,7 @@ func Rules(vpnInterface string, services []catalog.Service) string {
 	fmt.Fprintf(&b, "table <%s> const persist { %s }\n", Table, strings.Join(ranges, ", "))
 	fmt.Fprintf(&b, "pass out quick on %s to <%s> keep state\n", vpnInterface, Table)
 	fmt.Fprintf(&b, "block return out quick to <%s>\n", Table)
-	return b.String()
+	return b.String(), nil
 }
 
 // Runner runs pfctl with the given stdin and arguments.
@@ -73,6 +80,10 @@ type State struct {
 
 // Apply enables pf if needed, replaces the anchor and verifies the result.
 func (f Firewall) Apply(vpnInterface string, services []catalog.Service) error {
+	rules, err := Rules(vpnInterface, services)
+	if err != nil {
+		return err
+	}
 	info, err := f.Runner.Run("", "-s", "info")
 	if err != nil {
 		return err
@@ -83,7 +94,7 @@ func (f Firewall) Apply(vpnInterface string, services []catalog.Service) error {
 			return err
 		}
 	}
-	if _, err := f.Runner.Run(Rules(vpnInterface, services), "-a", Anchor, "-f", "-"); err != nil {
+	if _, err := f.Runner.Run(rules, "-a", Anchor, "-f", "-"); err != nil {
 		return err
 	}
 	state, err := f.Status()
@@ -108,6 +119,10 @@ func (f Firewall) Status() (State, error) {
 	table, err := f.Runner.Run("", "-a", Anchor, "-t", Table, "-T", "show")
 	if err != nil {
 		// pfctl fails when the table does not exist, which means "not loaded".
+		// Any other failure is real and must not look like an empty table.
+		if !strings.Contains(strings.ToLower(err.Error()), "table does not exist") {
+			return State{}, err
+		}
 		table = ""
 	}
 	return State{Rules: lines(rules), Entries: lines(table)}, nil
@@ -133,18 +148,35 @@ func (s State) Verify(vpnInterface string, services []catalog.Service) error {
 	if !block {
 		return fmt.Errorf("block rule is not loaded")
 	}
-	loaded := map[string]bool{}
+	loaded := map[netip.Prefix]bool{}
 	for _, e := range s.Entries {
-		loaded[e] = true
+		if p, ok := parseEntry(e); ok {
+			loaded[p] = true
+		}
 	}
 	for _, svc := range services {
 		for _, r := range append(append([]string{}, svc.IPv4...), svc.IPv6...) {
-			if !loaded[r] {
+			p, err := netip.ParsePrefix(r)
+			if err != nil || !loaded[p.Masked()] {
 				return fmt.Errorf("range %s of %s is not loaded", r, svc.ID)
 			}
 		}
 	}
 	return nil
+}
+
+// parseEntry reads one "pfctl -T show" line. pfctl prints single hosts
+// without a prefix length and may format IPv6 differently from the catalog.
+func parseEntry(e string) (netip.Prefix, bool) {
+	if strings.Contains(e, "/") {
+		p, err := netip.ParsePrefix(e)
+		return p.Masked(), err == nil
+	}
+	a, err := netip.ParseAddr(e)
+	if err != nil {
+		return netip.Prefix{}, false
+	}
+	return netip.PrefixFrom(a, a.BitLen()), true
 }
 
 func lines(s string) []string {
