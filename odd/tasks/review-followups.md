@@ -15,14 +15,16 @@ Branch `fix/review-followups`; delivered as a PR to `main` that closes #5.
 
 | ID | Task | Specs | Route | Commit |
 |---|---|---|---|---|
-| T1 | Probe strictness: every domain needs a blocked address; resolved addresses outside the catalog fail as possible leaks | S1 | worker | |
-| T2 | `test` interface choice: auto-pick the connected physical interface when the default route is a VPN; clear error for an inactive `--via` | S5 | worker | |
-| T3 | `status` checks pf is enabled | S2 | worker | |
-| T4 | Daemon: wait for bootout before bootstrap (bounded); plist logs to `/Library/Logs/leakguard.log`; `status` shows the last log line | S3, S4 | worker | |
-| T5 | Native review of the slice, PR closing #5 | all | parent | |
+| T1 | Probe strictness: every domain needs a blocked address; resolved addresses outside the catalog fail as possible leaks | S1 | worker | 3c1eff5 |
+| T2 | `test` interface choice: auto-pick the connected physical interface when the default route is a VPN; clear error for an inactive `--via` | S5 | worker | 3c1eff5 |
+| T3 | `status` checks pf is enabled | S2 | worker | 3c1eff5 |
+| T4 | Daemon: wait for bootout before bootstrap (bounded); plist logs to `/Library/Logs/leakguard.log`; `status` shows the last log line | S3, S4 | worker | 3c1eff5 |
+| T5 | Native review of the slice, PR closing #5 | all | parent | assess medium, not due |
 
 ## Log
 
 - L1 (user, 2026-11-16): "si dale continua" (after merging PRs #3 and #4; continue with the next step: issue #5 before the first release).
 - L2 (evidence, live run 2026-11-16): owner's Mac: en0 = unplugged Ethernet, en1 = Wi-Fi (real connection, IPv4 only), default route = ipsec0. `test --via en1`: anthropic.com 160.79.104.10 `OK blocked`, 2607:6bc0::10 untested (no IPv6 route on Wi-Fi). Rules for anthropic are loaded on that Mac right now.
 - L3 (design note): an address untested only because the real interface has no route for that address family (IPv6 on an IPv4-only Wi-Fi) is not a leak; it stays reported as untested but must not fail a domain that has a blocked address. A whole domain with no blocked address fails. A resolved address outside the catalog ranges fails (pf does not cover it).
+- L4 (worker + parent checks, 2026-11-16): all packages green with -race; live `leakguard test` (no --via) picks en1, all 4 anthropic domains `OK blocked` on IPv4, exit 0; `test --via en0` -> "en0 is not connected ... (connected: en1)", exit 1. Native assess: medium, review not due.
+- L5 (follow-up): /Library/Logs/leakguard.log has no rotation (~1 line/min); add a newsyslog config later.
