@@ -62,7 +62,7 @@ immediately: in about 8 ms in our macOS tests. No detection race, and no leak.
 
 | OS      | Firewall used                                           | Status       |
 |---------|---------------------------------------------------------|--------------|
-| macOS   | `pf` anchor + LaunchDaemon                              | 🧪 Prototype |
+| macOS   | `pf` anchor + LaunchDaemon                              | 🚧 In review |
 | Linux   | `nftables` table: drop to the set when `oifname` ≠ VPN  | 🗓️ Planned   |
 | Windows | Windows Filtering Platform / Windows Firewall rules     | 🗓️ Planned   |
 
@@ -87,6 +87,9 @@ Missing a service? [Request it](https://github.com/Isaacpaezz/leakguard/issues/n
 **Not released yet** · changes on `main`
 
 **Added**
+- `leakguard` CLI for macOS: `services`, `interfaces`, `enable`, `disable`, `status`, `test` and `apply`, with services taken from the catalog.
+- `sudo leakguard enable --vpn ipsec0 anthropic` protects the chosen services and installs a LaunchDaemon that re-applies and verifies the rules at boot and every minute.
+- `leakguard test` proves the protection: it connects to each protected address through your normal connection and expects a refusal.
 - Service catalog (`catalog/services/*.json`) with Anthropic (Claude) supported and OpenAI planned.
 - Self-updating README: the service table and this section are generated from the catalog and this file, and CI blocks changes that leave it stale.
 - Contributor guide, issue and pull request templates, code owners, security policy and agent rules.
@@ -95,24 +98,37 @@ Missing a service? [Request it](https://github.com/Isaacpaezz/leakguard/issues/n
 
 Full history: [CHANGELOG.md](CHANGELOG.md).
 
-## Try it today (macOS prototype)
+## Try it today (macOS)
 
-> ⚠️ Early stage. The prototype only protects Claude and expects the VPN interface to be `ipsec0`.
+> ⚠️ Early stage. macOS only, command line only. Needs [Go](https://go.dev/dl/) 1.25 or newer.
 
 ```sh
-cd prototypes/macos-pf
-sudo ./install.sh     # installs the rules and checks that Claude is blocked off the VPN
-sudo ./uninstall.sh   # removes everything
+go install github.com/Isaacpaezz/leakguard/cmd/leakguard@latest
+# or, from a clone of this repository: go build ./cmd/leakguard
+
+leakguard services                             # what you can protect
+leakguard interfaces                           # find your VPN interface (connect the VPN first)
+sudo leakguard enable --vpn ipsec0 anthropic   # protect Claude through ipsec0
+leakguard status                               # what is protected (sudo also verifies the rules)
+leakguard test                                 # prove Claude is refused outside the VPN
+sudo leakguard disable                         # turn it off; your choices are kept
 ```
 
-Details: [prototypes/macos-pf/README.md](prototypes/macos-pf/README.md).
+`enable` loads the firewall rules and installs a background service that
+re-applies them at boot and every minute. If the VPN interface goes down,
+the protected services stop working until it is back. Run `leakguard help`
+for every option.
+
+The earlier shell prototype in [`prototypes/macos-pf`](prototypes/macos-pf/README.md)
+is kept as a legacy reference. If you installed it, remove it with
+`sudo prototypes/macos-pf/uninstall.sh` before using `leakguard`.
 
 ## Roadmap
 
 | # | Milestone | Status |
 |---|-----------|--------|
 | 0 | Open source foundation: contributing rules, self-updating README | ✅ Done |
-| 1 | Go CLI for macOS: profiles from the catalog, `enable`, `disable`, `status`, `test` | 🔜 Next |
+| 1 | Go CLI for macOS: profiles from the catalog, `enable`, `disable`, `status`, `test` | 🚧 In review |
 | 2 | Menu-bar app on macOS: protection status and service checkboxes | 🗓️ Planned |
 | 3 | Linux backend (`nftables`) and tray app | 🗓️ Planned |
 | 4 | Windows backend and tray app | 🗓️ Planned |
@@ -150,8 +166,8 @@ restringidos y se usan a través de una VPN con *split tunneling* (por ejemplo,
 VPN Bypass). La meta es que sea igual de sencillo: un ícono en la barra de
 estado que te dice si estás protegido y una lista de servicios para marcar.
 
-El proyecto está en una etapa temprana. Hoy solo existe un prototipo para
-macOS. ¿Quieres colaborar? Lee [CONTRIBUTING.md](CONTRIBUTING.md); puedes
+El proyecto está en una etapa temprana. Hoy existe una herramienta de línea
+de comandos para macOS (ver "Try it today"). ¿Quieres colaborar? Lee [CONTRIBUTING.md](CONTRIBUTING.md); puedes
 abrir issues en español.
 
 ## License

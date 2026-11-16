@@ -16,7 +16,12 @@ VPN Bypass: a tray or menu-bar icon plus service checkboxes.
 | Path | What it is |
 |---|---|
 | `catalog/services/*.json` | Service catalog: IP ranges, domains, sources. One file per service; the file name must equal `<id>.json`. |
-| `internal/catalog` | Loads and validates the catalog. The future CLI and tray app reuse it. |
+| `cmd/leakguard` | The CLI: `services`, `interfaces`, `enable`, `disable`, `status`, `test`, `apply`. `main` is a thin wrapper over a testable `run` with an injected `Env`. |
+| `internal/catalog` | Loads and validates the catalog, embedded in the binary. The CLI and the future tray app reuse it. |
+| `internal/config` | The user's VPN interface and services; load, save, validate, VPN interface candidates. |
+| `internal/pf` | macOS `pf` backend: renders, applies, flushes and verifies the `com.apple/250.leakguard` anchor. |
+| `internal/daemon` | macOS LaunchDaemon `dev.leakguard`: root-owned binary copy, plist, `launchctl`. |
+| `internal/probe` | `leakguard test`: connects to protected addresses outside the VPN and expects a refusal. |
 | `internal/readme`, `tools/readmegen` | Generate the README landing sections. |
 | `prototypes/macos-pf` | Working macOS `pf` prototype. Reference only; do not extend it. |
 | `CHANGELOG.md` | User-visible changes; its newest section feeds "What's new" in the README. |
