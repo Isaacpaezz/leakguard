@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/Isaacpaezz/leakguard/internal/catalog"
 	"github.com/Isaacpaezz/leakguard/internal/config"
@@ -274,15 +275,26 @@ func (c *cli) apply(args []string) error {
 	if err := c.requireRoot("apply"); err != nil {
 		return err
 	}
+	// The daemon's output goes to daemon.LogPath; every line is timestamped
+	// so "status" can show when the last run happened and how it ended.
+	stamp := c.now().Format(time.RFC3339)
 	cfg, services, err := c.loadValid()
+	if err == nil {
+		err = c.firewall().Apply(cfg.VPNInterface, services)
+	}
 	if err != nil {
-		return err
+		fmt.Fprintf(c.stderr, "%s leakguard: %v\n", stamp, err)
+		return exitError{exitFailure}
 	}
-	if err := c.firewall().Apply(cfg.VPNInterface, services); err != nil {
-		return err
-	}
-	fmt.Fprintf(c.stdout, "Protected through %s: %s\n", cfg.VPNInterface, strings.Join(cfg.Services, ", "))
+	fmt.Fprintf(c.stdout, "%s Protected through %s: %s\n", stamp, cfg.VPNInterface, strings.Join(cfg.Services, ", "))
 	return nil
+}
+
+func (c *cli) now() time.Time {
+	if c.env.Now != nil {
+		return c.env.Now()
+	}
+	return time.Now()
 }
 
 func (c *cli) status(args []string) error {
@@ -309,11 +321,20 @@ func (c *cli) status(args []string) error {
 	fmt.Fprintf(w, "VPN interface:\t%s (%s)\n", cfg.VPNInterface, vpnState)
 	fmt.Fprintf(w, "Services:\t%s\n", strings.Join(cfg.Services, ", "))
 	fmt.Fprintf(w, "Background service:\t%s\n", daemonState)
+	if line, ok := c.daemon().LastLogLine(); ok {
+		fmt.Fprintf(w, "Last background run:\t%s\n", line)
+	}
 	if !c.env.IsRoot() {
 		fmt.Fprintf(w, "Firewall:\trun \"sudo leakguard status\" to verify the rules\n")
 		return w.Flush()
 	}
 	verr := func() error {
+		switch on, err := c.firewall().Enabled(); {
+		case err != nil:
+			return err
+		case !on:
+			return errors.New("pf is disabled; turn it back on with: sudo leakguard apply")
+		}
 		state, err := c.firewall().Status()
 		if err != nil {
 			return err
@@ -327,6 +348,74 @@ func (c *cli) status(args []string) error {
 	}
 	fmt.Fprintf(w, "Firewall:\tPROTECTED\n")
 	return w.Flush()
+}
+
+func isVPN(iface string, cfg config.Config) bool {
+	return iface == cfg.VPNInterface || len(config.VPNCandidates([]string{iface})) > 0
+}
+
+// realConnections returns the connected interfaces outside the VPN.
+func (c *cli) realConnections(cfg config.Config) ([]string, error) {
+	ifs, err := c.env.Interfaces()
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, i := range ifs {
+		if i.Connected() && !isVPN(i.Name, cfg) {
+			out = append(out, i.Name)
+		}
+	}
+	return out, nil
+}
+
+// checkVia fails before probing when the chosen interface cannot carry
+// traffic: probing it would only report unreachable networks.
+func (c *cli) checkVia(iface string, cfg config.Config) error {
+	ifs, err := c.env.Interfaces()
+	if err != nil {
+		return fmt.Errorf("cannot list the interfaces: %w", err)
+	}
+	state := "does not exist"
+	for _, i := range ifs {
+		if i.Name == iface {
+			if i.Connected() {
+				return nil
+			}
+			state = "is not connected"
+		}
+	}
+	conns, _ := c.realConnections(cfg)
+	list := "none"
+	if len(conns) > 0 {
+		list = strings.Join(conns, ", ")
+	}
+	return fmt.Errorf("%s %s; pick the interface of your real connection with --via (connected: %s)", iface, state, list)
+}
+
+// realInterface returns the interface of the real connection: the default
+// route, or, when that is the VPN or unreadable, the only connected interface
+// outside the VPN. It never guesses between several.
+func (c *cli) realInterface(cfg config.Config) (string, error) {
+	route, err := c.env.DefaultInterface()
+	if err == nil && !isVPN(route, cfg) {
+		return route, nil
+	}
+	reason := fmt.Sprintf("the default route uses %s, a VPN interface", route)
+	if err != nil {
+		reason = fmt.Sprintf("cannot read the default route (%v)", err)
+	}
+	conns, lerr := c.realConnections(cfg)
+	switch {
+	case lerr != nil:
+		return "", fmt.Errorf("%s, and the interfaces cannot be listed (%v); name your real connection with --via IFACE", reason, lerr)
+	case len(conns) == 0:
+		return "", fmt.Errorf("%s, and no other interface is connected; connect Wi-Fi or Ethernet, or name your real connection with --via IFACE", reason)
+	case len(conns) > 1:
+		return "", fmt.Errorf("%s, and more than one other interface is connected (%s); name your real connection with --via IFACE", reason, strings.Join(conns, ", "))
+	}
+	fmt.Fprintf(c.stdout, "%s%s; testing through %s, the only connected interface outside the VPN.\n", strings.ToUpper(reason[:1]), reason[1:], conns[0])
+	return conns[0], nil
 }
 
 func (c *cli) test(args []string) error {
@@ -343,13 +432,15 @@ func (c *cli) test(args []string) error {
 		return err
 	}
 	iface := *via
-	if iface == "" {
-		if iface, err = c.env.DefaultInterface(); err != nil {
-			return fmt.Errorf("cannot find your normal connection (%v); name it with --via IFACE, for example --via en0", err)
+	if iface != "" {
+		if isVPN(iface, cfg) {
+			return fmt.Errorf("%s is a VPN interface; name your Wi-Fi or Ethernet interface with --via IFACE, for example --via en0", iface)
 		}
-	}
-	if iface == cfg.VPNInterface || len(config.VPNCandidates([]string{iface})) > 0 {
-		return fmt.Errorf("%s is a VPN interface; name your Wi-Fi or Ethernet interface with --via IFACE, for example --via en0", iface)
+		if err := c.checkVia(iface, cfg); err != nil {
+			return err
+		}
+	} else if iface, err = c.realInterface(cfg); err != nil {
+		return err
 	}
 	fmt.Fprintf(c.stdout, "Connecting to each protected address through %s, outside the VPN. Every connection must fail.\n\n", iface)
 	p := probe.Prober{Resolver: c.env.Resolver, Dial: c.env.Dial}
@@ -361,7 +452,7 @@ func (c *cli) test(args []string) error {
 			target += " " + r.Addr.Addr().String()
 		}
 		detail := ""
-		if r.Outcome == probe.Untested && r.Err != nil {
+		if (r.Outcome == probe.Untested || r.Outcome == probe.NotCovered) && r.Err != nil {
 			detail = r.Err.Error()
 		}
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", r.Outcome, r.Service, target, detail)

@@ -94,6 +94,12 @@ Missing a service? [Request it](https://github.com/Isaacpaezz/leakguard/issues/n
 - Self-updating README: the service table and this section are generated from the catalog and this file, and CI blocks changes that leave it stale.
 - Contributor guide, issue and pull request templates, code owners, security policy and agent rules.
 - macOS `pf` prototype that blocks Claude when the VPN is down.
+
+**Changed**
+- `leakguard test` fails unless every domain of a protected service has a refused address, and reports a resolved address outside the catalog ranges as `NOT COVERED` (pf does not block it).
+- `leakguard test` picks your real connection itself when the default route is the VPN, and stops with a clear message when the `--via` interface is not connected.
+- `sudo leakguard status` reports NOT PROTECTED when pf is disabled, and `status` shows the last background run.
+- The background service logs every run to `/Library/Logs/leakguard.log`, and `enable` waits for the old service to unload before loading the new one, retrying once.
 <!-- END GENERATED: whats-new -->
 
 Full history: [CHANGELOG.md](CHANGELOG.md).
@@ -115,9 +121,12 @@ sudo leakguard disable                         # turn it off; your choices are k
 ```
 
 `enable` loads the firewall rules and installs a background service that
-re-applies them at boot and every minute. If the VPN interface goes down,
-the protected services stop working until it is back. Run `leakguard help`
-for every option.
+re-applies them at boot and every minute and logs each run to
+`/Library/Logs/leakguard.log`. If the VPN interface goes down, the protected
+services stop working until it is back. `test` connects through your real
+connection (Wi-Fi or Ethernet) and finds it by itself even when the default
+route is the VPN; name it with `--via IFACE` if you have several. Run
+`leakguard help` for every option.
 
 The earlier shell prototype in [`prototypes/macos-pf`](prototypes/macos-pf/README.md)
 is kept as a legacy reference. If you installed it, remove it with

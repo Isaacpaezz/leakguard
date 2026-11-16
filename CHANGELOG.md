@@ -16,3 +16,9 @@ The newest section is shown automatically on the README landing page.
 - Self-updating README: the service table and this section are generated from the catalog and this file, and CI blocks changes that leave it stale.
 - Contributor guide, issue and pull request templates, code owners, security policy and agent rules.
 - macOS `pf` prototype that blocks Claude when the VPN is down.
+
+### Changed
+- `leakguard test` fails unless every domain of a protected service has a refused address, and reports a resolved address outside the catalog ranges as `NOT COVERED` (pf does not block it).
+- `leakguard test` picks your real connection itself when the default route is the VPN, and stops with a clear message when the `--via` interface is not connected.
+- `sudo leakguard status` reports NOT PROTECTED when pf is disabled, and `status` shows the last background run.
+- The background service logs every run to `/Library/Logs/leakguard.log`, and `enable` waits for the old service to unload before loading the new one, retrying once.

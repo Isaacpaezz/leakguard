@@ -8,18 +8,29 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 type fakeLaunchctl struct {
 	calls []string
 	fail  map[string]error
+	// seq answers the first calls of a key in order, before fail applies.
+	seq map[string][]error
 }
 
 func (f *fakeLaunchctl) Run(args ...string) (string, error) {
 	key := strings.Join(args, " ")
 	f.calls = append(f.calls, key)
+	if q := f.seq[key]; len(q) > 0 {
+		f.seq[key] = q[1:]
+		return "", q[0]
+	}
 	return "", f.fail[key]
 }
+
+const printJob = "print system/" + Label
+
+var errNoJob = errors.New("Could not find service \"dev.leakguard\" in domain for system")
 
 type secured struct{ paths []string }
 
@@ -30,9 +41,23 @@ func (s *secured) secure(path string) error {
 
 func newTestDaemon(t *testing.T) (Daemon, *fakeLaunchctl, *secured) {
 	t.Helper()
-	l := &fakeLaunchctl{}
+	l := &fakeLaunchctl{fail: map[string]error{printJob: errNoJob}, seq: map[string][]error{}}
 	s := &secured{}
-	return Daemon{Root: t.TempDir(), Launchctl: l, Secure: s.secure}, l, s
+	return Daemon{Root: t.TempDir(), Launchctl: l, Secure: s.secure, Sleep: func(time.Duration) {
+		t.Fatal("Install slept although the job was already gone")
+	}}, l, s
+}
+
+type clock struct{ slept []time.Duration }
+
+func (c *clock) sleep(d time.Duration) { c.slept = append(c.slept, d) }
+
+func (c *clock) total() time.Duration {
+	var t time.Duration
+	for _, d := range c.slept {
+		t += d
+	}
+	return t
 }
 
 func writeExecutable(t *testing.T, content string) string {
@@ -51,6 +76,8 @@ func TestPlist(t *testing.T) {
 		"<array>\n\t\t<string>/usr/local/libexec/leakguard/leakguard</string>\n\t\t<string>apply</string>\n\t</array>",
 		"<key>RunAtLoad</key>\n\t<true/>",
 		"<key>StartInterval</key>\n\t<integer>60</integer>",
+		"<key>StandardOutPath</key>\n\t<string>/Library/Logs/leakguard.log</string>",
+		"<key>StandardErrorPath</key>\n\t<string>/Library/Logs/leakguard.log</string>",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("Plist() is missing %q:\n%s", want, got)
@@ -91,7 +118,7 @@ func TestInstallCopiesBinaryWritesPlistAndBootstraps(t *testing.T) {
 	if info, _ := os.Stat(plist); info.Mode().Perm() != 0o644 {
 		t.Fatalf("plist mode = %v, want 0644", info.Mode().Perm())
 	}
-	want := "bootout system/" + Label + "|bootstrap system " + plist
+	want := "bootout system/" + Label + "|" + printJob + "|bootstrap system " + plist
 	if got := strings.Join(l.calls, "|"); got != want {
 		t.Fatalf("launchctl calls = %q, want %q", got, want)
 	}
@@ -105,17 +132,92 @@ func TestInstallCopiesBinaryWritesPlistAndBootstraps(t *testing.T) {
 
 func TestInstallIgnoresBootoutFailure(t *testing.T) {
 	d, l, _ := newTestDaemon(t)
-	l.fail = map[string]error{"bootout system/" + Label: errors.New("No such process")}
+	l.fail["bootout system/"+Label] = errors.New("No such process")
 	if err := d.Install(writeExecutable(t, "x")); err != nil {
 		t.Fatalf("Install() = %v", err)
 	}
 }
 
+// S3: bootout returns before launchd tears the job down.
+func TestInstallWaitsForBootoutBeforeBootstrap(t *testing.T) {
+	d, l, _ := newTestDaemon(t)
+	c := &clock{}
+	d.Sleep = c.sleep
+	l.seq[printJob] = []error{nil, nil, nil}
+	if err := d.Install(writeExecutable(t, "x")); err != nil {
+		t.Fatalf("Install() = %v", err)
+	}
+	want := "bootout system/" + Label + strings.Repeat("|"+printJob, 4) + "|bootstrap system " + filepath.Join(d.Root, PlistPath)
+	if got := strings.Join(l.calls, "|"); got != want {
+		t.Fatalf("launchctl calls = %q, want %q", got, want)
+	}
+	if len(c.slept) != 3 {
+		t.Fatalf("slept %v, want 3 polls", c.slept)
+	}
+}
+
+func TestInstallWaitIsBounded(t *testing.T) {
+	d, l, _ := newTestDaemon(t)
+	c := &clock{}
+	d.Sleep = c.sleep
+	delete(l.fail, printJob) // the job never goes away
+	if err := d.Install(writeExecutable(t, "x")); err != nil {
+		t.Fatalf("Install() = %v", err)
+	}
+	if c.total() > BootoutWait || c.total() < BootoutWait-time.Second {
+		t.Fatalf("waited %v in total, want about %v", c.total(), BootoutWait)
+	}
+	if !strings.Contains(strings.Join(l.calls, "|"), "bootstrap system ") {
+		t.Fatalf("launchctl calls = %v, want a bootstrap after the wait", l.calls)
+	}
+}
+
+func TestInstallRetriesBootstrapOnce(t *testing.T) {
+	d, l, _ := newTestDaemon(t)
+	c := &clock{}
+	d.Sleep = c.sleep
+	bootstrap := "bootstrap system " + filepath.Join(d.Root, PlistPath)
+	l.seq[bootstrap] = []error{errors.New("Bootstrap failed: 5: Input/output error")}
+	if err := d.Install(writeExecutable(t, "x")); err != nil {
+		t.Fatalf("Install() = %v", err)
+	}
+	if n := strings.Count(strings.Join(l.calls, "|"), bootstrap); n != 2 {
+		t.Fatalf("bootstrap ran %d times, want 2: %v", n, l.calls)
+	}
+	if c.total() == 0 || c.total() > 2*BootoutWait {
+		t.Fatalf("waited %v before the retry", c.total())
+	}
+}
+
 func TestInstallFailsWhenBootstrapFails(t *testing.T) {
 	d, l, _ := newTestDaemon(t)
-	l.fail = map[string]error{"bootstrap system " + filepath.Join(d.Root, PlistPath): errors.New("Bootstrap failed: 5")}
-	if err := d.Install(writeExecutable(t, "x")); err == nil || !strings.Contains(err.Error(), "Bootstrap failed") {
+	d.Sleep = (&clock{}).sleep
+	bootstrap := "bootstrap system " + filepath.Join(d.Root, PlistPath)
+	l.fail[bootstrap] = errors.New("Bootstrap failed: 5")
+	err := d.Install(writeExecutable(t, "x"))
+	if err == nil || !strings.Contains(err.Error(), "Bootstrap failed") || !strings.Contains(err.Error(), "the background service is not loaded") {
 		t.Fatalf("Install() = %v", err)
+	}
+	if n := strings.Count(strings.Join(l.calls, "|"), bootstrap); n != 2 {
+		t.Fatalf("bootstrap ran %d times, want 2 (one retry): %v", n, l.calls)
+	}
+}
+
+func TestLastLogLine(t *testing.T) {
+	d, _, _ := newTestDaemon(t)
+	if line, ok := d.LastLogLine(); ok || line != "" {
+		t.Fatalf("LastLogLine() without a log = %q, %v", line, ok)
+	}
+	log := filepath.Join(d.Root, LogPath)
+	os.MkdirAll(filepath.Dir(log), 0o755)
+	old := strings.Repeat("2026-11-16T10:00:00Z Protected through ipsec0: anthropic\n", 2000)
+	os.WriteFile(log, []byte(old+"2026-11-16T10:01:00Z leakguard: pfctl: syntax error\n\n"), 0o644)
+	if line, ok := d.LastLogLine(); !ok || line != "2026-11-16T10:01:00Z leakguard: pfctl: syntax error" {
+		t.Fatalf("LastLogLine() = %q, %v", line, ok)
+	}
+	os.WriteFile(log, nil, 0o644)
+	if line, ok := d.LastLogLine(); ok || line != "" {
+		t.Fatalf("LastLogLine() with an empty log = %q, %v", line, ok)
 	}
 }
 
@@ -163,7 +265,7 @@ func TestUninstallRemovesEverything(t *testing.T) {
 
 func TestUninstallWhenNothingIsInstalled(t *testing.T) {
 	d, l, _ := newTestDaemon(t)
-	l.fail = map[string]error{"bootout system/" + Label: errors.New("No such process")}
+	l.fail["bootout system/"+Label] = errors.New("No such process")
 	if err := d.Uninstall(); err != nil {
 		t.Fatalf("Uninstall() = %v", err)
 	}

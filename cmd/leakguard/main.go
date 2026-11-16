@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 
 	"github.com/Isaacpaezz/leakguard/internal/daemon"
 	"github.com/Isaacpaezz/leakguard/internal/pf"
@@ -41,6 +42,7 @@ func systemEnv() Env {
 			}
 			return probe.ParseDefaultRoute(string(out))
 		},
+		Now: time.Now,
 	}
 }
 

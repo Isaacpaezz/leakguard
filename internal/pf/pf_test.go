@@ -158,6 +158,26 @@ func TestStateVerify(t *testing.T) {
 	}
 }
 
+func TestEnabled(t *testing.T) {
+	for _, tc := range []struct {
+		status string
+		want   bool
+	}{{"Enabled", true}, {"Disabled", false}} {
+		r := loadedFake(tc.status)
+		got, err := (Firewall{Runner: r}).Enabled()
+		if err != nil || got != tc.want {
+			t.Errorf("Enabled() with %s = %v, %v; want %v", tc.status, got, err, tc.want)
+		}
+		if len(r.calls) != 1 || r.calls[0].args != "-s info" {
+			t.Errorf("calls = %v, want only -s info", r.calls)
+		}
+	}
+	r := &fakeRunner{fail: map[string]error{"-s info": errors.New("Permission denied")}}
+	if got, err := (Firewall{Runner: r}).Enabled(); got || err == nil {
+		t.Fatalf("Enabled() = %v, %v; want false and the pfctl error", got, err)
+	}
+}
+
 func TestFlush(t *testing.T) {
 	r := &fakeRunner{}
 	if err := (Firewall{Runner: r}).Flush(); err != nil {

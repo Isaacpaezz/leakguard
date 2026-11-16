@@ -12,6 +12,7 @@ import (
 	"sync"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/Isaacpaezz/leakguard/internal/catalog"
 	"github.com/Isaacpaezz/leakguard/internal/config"
@@ -34,10 +35,17 @@ func (f *fakePfctl) Run(stdin string, args ...string) (string, error) {
 
 type fakeLaunchctl struct{ calls []string }
 
+// Run answers like a launchd that unloads jobs at once: "print" fails
+// because the job is already gone.
 func (f *fakeLaunchctl) Run(args ...string) (string, error) {
 	f.calls = append(f.calls, strings.Join(args, " "))
+	if args[0] == "print" {
+		return "", errors.New("Could not find service")
+	}
 	return "", nil
 }
+
+var fixedNow = time.Date(2026, 11, 16, 15, 0, 0, 0, time.UTC)
 
 type fakeResolver map[string][]string
 
@@ -51,6 +59,16 @@ func (f fakeResolver) LookupNetIP(_ context.Context, _, host string) ([]netip.Ad
 		out = append(out, netip.MustParseAddr(r))
 	}
 	return out, nil
+}
+
+// anthropicResolver resolves every catalog domain of anthropic inside its ranges.
+func anthropicResolver() fakeResolver {
+	return fakeResolver{
+		"anthropic.com":     {"160.79.104.10", "2607:6bc0::10"},
+		"api.anthropic.com": {"160.79.104.10", "2607:6bc0::10"},
+		"claude.ai":         {"160.79.104.10"},
+		"claude.com":        {"160.79.104.10"},
+	}
 }
 
 type harness struct {
@@ -96,12 +114,13 @@ func newHarness(t *testing.T, root bool) *harness {
 		Interfaces: func() ([]Interface, error) {
 			return []Interface{
 				{Name: "en0", Up: true, HasAddress: true},
+				{Name: "en1", Up: true, HasAddress: true},
 				{Name: "utun0", Up: true},
 				{Name: "ipsec0", Up: true, HasAddress: true},
 			}, nil
 		},
 		Executable: func() (string, error) { return exe, nil },
-		Resolver:   fakeResolver{"api.anthropic.com": {"160.79.104.10", "2607:6bc0::10"}},
+		Resolver:   anthropicResolver(),
 		Dial: func(_ context.Context, iface string, addr netip.AddrPort) error {
 			h.mu.Lock()
 			defer h.mu.Unlock()
@@ -110,6 +129,7 @@ func newHarness(t *testing.T, root bool) *harness {
 			return syscall.ECONNREFUSED
 		},
 		DefaultInterface: func() (string, error) { return "en0", nil },
+		Now:              func() time.Time { return fixedNow },
 	}
 	return h
 }
@@ -166,6 +186,7 @@ func TestHelpListsEveryCommand(t *testing.T) {
 		expect(t, code, out, errOut, 0, []string{
 			"leakguard services", "leakguard interfaces", "sudo leakguard enable [--vpn IFACE] SERVICE...",
 			"sudo leakguard disable", "leakguard status", "leakguard test [--via IFACE]", "sudo leakguard apply",
+			"the only\n      other connected interface",
 			"sudo leakguard enable --vpn ipsec0 anthropic",
 		}, nil)
 	}
@@ -355,6 +376,21 @@ func TestApply(t *testing.T) {
 	h.saveConfig(t, config.Config{VPNInterface: "ipsec0", Services: []string{"anthropic"}})
 	code, out, errOut = h.run("apply")
 	expect(t, code, out, errOut, 0, []string{"Protected through ipsec0: anthropic"}, nil)
+	// S4: the daemon log needs a timestamp on every run.
+	if out != "2026-11-16T15:00:00Z Protected through ipsec0: anthropic\n" {
+		t.Fatalf("stdout = %q, want one timestamped line", out)
+	}
+}
+
+func TestApplyTimestampsFailures(t *testing.T) {
+	h := newHarness(t, true)
+	h.saveConfig(t, config.Config{VPNInterface: "ipsec0", Services: []string{"anthropic"}})
+	h.pfctl.fail = map[string]error{"-a " + pf.Anchor + " -f -": errors.New("pfctl: syntax error")}
+	code, out, errOut := h.run("apply")
+	expect(t, code, out, errOut, 1, nil, []string{"leakguard: pfctl: syntax error"})
+	if out != "" || errOut != "2026-11-16T15:00:00Z leakguard: pfctl: syntax error\n" {
+		t.Fatalf("stdout = %q, stderr = %q, want one timestamped error line", out, errOut)
+	}
 }
 
 func TestApplyFailsClosedWithoutAValidConfig(t *testing.T) {
@@ -386,6 +422,21 @@ func TestStatus(t *testing.T) {
 	}
 }
 
+func TestStatusShowsTheLastLogLine(t *testing.T) {
+	h := newHarness(t, false)
+	h.saveConfig(t, config.Config{VPNInterface: "ipsec0", Services: []string{"anthropic"}})
+	code, out, errOut := h.run("status")
+	expect(t, code, out, errOut, 0, []string{"Services:"}, nil)
+	if strings.Contains(out, "Last background run") {
+		t.Fatalf("status shows a log line without a log:\n%s", out)
+	}
+	log := h.path(daemon.LogPath)
+	os.MkdirAll(filepath.Dir(log), 0o755)
+	os.WriteFile(log, []byte("2026-11-16T14:59:00Z Protected through ipsec0: anthropic\n2026-11-16T15:00:00Z leakguard: pfctl: syntax error\n"), 0o644)
+	code, out, errOut = h.run("status")
+	expect(t, code, out, errOut, 0, []string{"Last background run: 2026-11-16T15:00:00Z leakguard: pfctl: syntax error\n"}, nil)
+}
+
 func TestStatusVerifiesWithRoot(t *testing.T) {
 	h := newHarness(t, true)
 	h.run("enable", "--vpn", "ipsec0", "anthropic")
@@ -395,6 +446,21 @@ func TestStatusVerifiesWithRoot(t *testing.T) {
 	h.pfctl.outputs["-a "+pf.Anchor+" -s rules"] = ""
 	code, out, errOut = h.run("status")
 	expect(t, code, out, errOut, 1, []string{"NOT PROTECTED: leakguard rules are not loaded"}, nil)
+}
+
+// S2: rules in the anchor filter nothing while pf itself is disabled.
+func TestStatusFailsWhenPfIsDisabled(t *testing.T) {
+	h := newHarness(t, true)
+	h.run("enable", "--vpn", "ipsec0", "anthropic")
+	h.pfctl.outputs["-s info"] = "Status: Disabled for 0 days\n"
+	code, out, errOut := h.run("status")
+	expect(t, code, out, errOut, 1, []string{"Firewall:", "NOT PROTECTED: pf is disabled"}, nil)
+	if strings.Contains(out, "Firewall:           PROTECTED") || strings.Contains(out, " PROTECTED\n") {
+		t.Fatalf("status says PROTECTED with pf disabled:\n%s", out)
+	}
+	h.pfctl.fail = map[string]error{"-s info": errors.New("pfctl: /dev/pf: Permission denied")}
+	code, out, errOut = h.run("status")
+	expect(t, code, out, errOut, 1, []string{"NOT PROTECTED: pfctl: /dev/pf: Permission denied"}, nil)
 }
 
 func TestTestCommand(t *testing.T) {
@@ -435,18 +501,137 @@ func TestTestNeverPassesUntested(t *testing.T) {
 	}
 }
 
+func TestTestFailsWhenAnAddressIsNotCovered(t *testing.T) {
+	h := newHarness(t, false)
+	h.saveConfig(t, config.Config{VPNInterface: "ipsec0", Services: []string{"anthropic"}})
+	res := anthropicResolver()
+	res["claude.ai"] = []string{"160.79.104.10", "104.18.0.2"}
+	h.env.Resolver = res
+	code, out, errOut := h.run("test")
+	expect(t, code, out, errOut, 1,
+		[]string{"NOT COVERED", "claude.ai 104.18.0.2", "outside the catalog ranges; pf does not protect it"},
+		[]string{"leakguard: anthropic: claude.ai resolves to 104.18.0.2, outside the catalog ranges; pf does not protect it"})
+	if strings.Contains(out, "All protected services are blocked") {
+		t.Fatalf("test passed with an address outside the catalog:\n%s", out)
+	}
+	for _, d := range h.dialed {
+		if strings.HasPrefix(d, "104.18.0.2") {
+			t.Fatalf("dialed %s outside the catalog ranges", d)
+		}
+	}
+}
+
+func TestTestFailsWhenOneDomainIsUntested(t *testing.T) {
+	h := newHarness(t, false)
+	h.saveConfig(t, config.Config{VPNInterface: "ipsec0", Services: []string{"anthropic"}})
+	res := anthropicResolver()
+	delete(res, "claude.com")
+	h.env.Resolver = res
+	code, out, errOut := h.run("test")
+	expect(t, code, out, errOut, 1, []string{"untested", "claude.com", "no such host"},
+		[]string{"leakguard: anthropic: claude.com could not be tested; this is not a pass"})
+}
+
+// L2: IPv6 has no route on an IPv4-only Wi-Fi; that address stays untested
+// but does not fail a domain whose IPv4 address is blocked.
+func TestTestPassesWithAnUntestedAddressInABlockedDomain(t *testing.T) {
+	h := newHarness(t, false)
+	h.saveConfig(t, config.Config{VPNInterface: "ipsec0", Services: []string{"anthropic"}})
+	h.env.Dial = func(_ context.Context, _ string, addr netip.AddrPort) error {
+		if addr.Addr().Is6() {
+			return syscall.EHOSTUNREACH
+		}
+		return syscall.ECONNREFUSED
+	}
+	code, out, errOut := h.run("test")
+	expect(t, code, out, errOut, 0, []string{"untested", "2607:6bc0::10", "no refusal", "All protected services are blocked outside the VPN."}, nil)
+}
+
 func TestTestRefusesTheVPNInterface(t *testing.T) {
 	h := newHarness(t, false)
 	h.saveConfig(t, config.Config{VPNInterface: "ipsec0", Services: []string{"anthropic"}})
-	h.env.DefaultInterface = func() (string, error) { return "ipsec0", nil }
-	code, out, errOut := h.run("test")
+	code, out, errOut := h.run("test", "--via", "ipsec0")
 	expect(t, code, out, errOut, 1, nil, []string{"leakguard: ipsec0 is a VPN interface", "--via"})
-	h.env.DefaultInterface = func() (string, error) { return "", errors.New("no default route found") }
-	code, out, errOut = h.run("test")
-	expect(t, code, out, errOut, 1, nil, []string{"leakguard: cannot find your normal connection", "--via"})
 	code, out, errOut = h.run("test", "--via", "en0;rm")
 	expect(t, code, out, errOut, 2, nil, []string{`leakguard: "en0;rm" is not a valid interface name`})
 	if len(h.dialed) != 0 {
 		t.Fatalf("dialed %v through the wrong interface", h.dialed)
+	}
+}
+
+// L2: en0 is an unplugged Ethernet port, en1 the Wi-Fi, the default route the VPN.
+func liveInterfaces() ([]Interface, error) {
+	return []Interface{
+		{Name: "lo0", Up: true},
+		{Name: "en0", Up: true},
+		{Name: "en1", Up: true, HasAddress: true},
+		{Name: "ipsec0", Up: true, HasAddress: true},
+		{Name: "utun3", Up: true, HasAddress: true},
+	}, nil
+}
+
+func TestTestPicksTheRealInterfaceWhenTheDefaultRouteIsTheVPN(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		route  func() (string, error)
+		reason string
+	}{
+		{"vpn route", func() (string, error) { return "ipsec0", nil }, "The default route uses ipsec0, a VPN interface"},
+		{"no route", func() (string, error) { return "", errors.New("no default route found") }, "Cannot read the default route (no default route found)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t, false)
+			h.saveConfig(t, config.Config{VPNInterface: "ipsec0", Services: []string{"anthropic"}})
+			h.env.DefaultInterface = tc.route
+			h.env.Interfaces = liveInterfaces
+			code, out, errOut := h.run("test")
+			expect(t, code, out, errOut, 0, []string{
+				tc.reason + "; testing through en1, the only connected interface outside the VPN.\n",
+				"through en1, outside the VPN", "All protected services are blocked outside the VPN."}, nil)
+			if h.dialIface != "en1" {
+				t.Fatalf("dialed through %q, want en1", h.dialIface)
+			}
+		})
+	}
+}
+
+func TestTestNeverGuessesTheRealInterface(t *testing.T) {
+	h := newHarness(t, false)
+	h.saveConfig(t, config.Config{VPNInterface: "ipsec0", Services: []string{"anthropic"}})
+	h.env.DefaultInterface = func() (string, error) { return "ipsec0", nil }
+	code, out, errOut := h.run("test")
+	expect(t, code, out, errOut, 1, nil, []string{"leakguard: the default route uses ipsec0, a VPN interface, and more than one other interface is connected (en0, en1); name your real connection with --via IFACE\n"})
+	if out != "" {
+		t.Fatalf("stdout = %q, want empty", out)
+	}
+
+	h.env.Interfaces = func() ([]Interface, error) {
+		return []Interface{{Name: "en0", Up: true}, {Name: "ipsec0", Up: true, HasAddress: true}}, nil
+	}
+	code, out, errOut = h.run("test")
+	expect(t, code, out, errOut, 1, nil, []string{"leakguard: the default route uses ipsec0, a VPN interface, and no other interface is connected; connect Wi-Fi or Ethernet, or name your real connection with --via IFACE\n"})
+
+	h.env.DefaultInterface = func() (string, error) { return "", errors.New("no default route found") }
+	h.env.Interfaces = func() ([]Interface, error) { return nil, errors.New("permission denied") }
+	code, out, errOut = h.run("test")
+	expect(t, code, out, errOut, 1, nil, []string{"leakguard: cannot read the default route (no default route found), and the interfaces cannot be listed (permission denied); name your real connection with --via IFACE\n"})
+	if len(h.dialed) != 0 {
+		t.Fatalf("dialed %v without knowing the real interface", h.dialed)
+	}
+}
+
+func TestTestRejectsAnInactiveVia(t *testing.T) {
+	h := newHarness(t, false)
+	h.saveConfig(t, config.Config{VPNInterface: "ipsec0", Services: []string{"anthropic"}})
+	h.env.Interfaces = liveInterfaces
+	code, out, errOut := h.run("test", "--via", "en0")
+	expect(t, code, out, errOut, 1, nil, []string{"leakguard: en0 is not connected; pick the interface of your real connection with --via (connected: en1)\n"})
+	code, out, errOut = h.run("test", "--via", "en9")
+	expect(t, code, out, errOut, 1, nil, []string{"leakguard: en9 does not exist; pick the interface of your real connection with --via (connected: en1)\n"})
+	h.env.Interfaces = func() ([]Interface, error) { return []Interface{{Name: "en0"}}, nil }
+	code, out, errOut = h.run("test", "--via", "en0")
+	expect(t, code, out, errOut, 1, nil, []string{"leakguard: en0 is not connected; pick the interface of your real connection with --via (connected: none)\n"})
+	if out != "" || len(h.dialed) != 0 {
+		t.Fatalf("probed through an inactive interface: stdout %q, dialed %v", out, h.dialed)
 	}
 }
