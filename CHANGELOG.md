@@ -21,7 +21,12 @@ The newest section is shown automatically on the README landing page.
 - `leakguard status` without `sudo` asks the background service, which verifies the rules as root, so it reports PROTECTED or NOT PROTECTED without a password.
 
 ### Changed
+- Menu-bar app: the VPN interface list shows only connected VPN interfaces, not idle system tunnels.
 - `leakguard test` fails unless every domain of a protected service has a refused address, and reports a resolved address outside the catalog ranges as `NOT COVERED` (pf does not block it).
 - `leakguard test` picks your real connection itself when the default route is the VPN, and stops with a clear message when the `--via` interface is not connected.
 - `sudo leakguard status` reports NOT PROTECTED when pf is disabled, and `status` shows the last background run.
 - The background service logs every run to `/Library/Logs/leakguard.log`, and `enable` waits for the old service to unload before loading the new one, retrying once.
+- `sudo leakguard apply` and `sudo leakguard enable` end a pause from the menu-bar app, so the protection comes back after a reboot.
+- The menu-bar app no longer gets stuck when the background service runs without a choice: choose the VPN interface first and tick a service, or tick a service and the only connected VPN is used.
+- The menu-bar app clears the error line once the background service answers again, and shows why "Set up leakguard…" failed even when the prompt printed nothing.
+- The background service's pause command is now `pause` instead of `disable`, so it never reads like `sudo leakguard disable`, which uninstalls. Apps ignore status fields they do not know, so a newer background service keeps working with an older app.

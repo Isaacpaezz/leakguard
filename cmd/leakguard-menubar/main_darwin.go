@@ -59,12 +59,18 @@ type app struct {
 	client  ipc.Client
 	actions chan action
 
-	st        *ipc.Status
-	stErr     error
-	errLine   string
-	menu      menubar.Menu
-	icon      menubar.State
-	settingUp bool
+	st      *ipc.Status
+	stErr   error
+	errLine string
+	// errFresh is set when the click just handled wrote errLine, so the
+	// poll right after it keeps the line (see menubar.ErrorLineAfterPoll).
+	errFresh bool
+	// pendingVPN is the VPN interface chosen while the daemon has no
+	// services yet; it is sent with the first ticked service.
+	pendingVPN string
+	menu       menubar.Menu
+	icon       menubar.State
+	settingUp  bool
 
 	// catalog and draft drive the menu while leakguard is not set up: the
 	// clicks change the draft only, and "Set up" sends it to enable.
@@ -113,10 +119,14 @@ func (a *app) poll() {
 	} else {
 		a.st, a.stErr = &st, nil
 	}
+	a.errLine = menubar.ErrorLineAfterPoll(a.errLine, a.errFresh, err)
+	a.errFresh = false
+	a.pendingVPN = menubar.KeepPendingVPN(a.st, a.stErr, a.pendingVPN)
 	a.draw()
 }
 
 func (a *app) handle(act action) {
+	a.errFresh = true
 	switch act.kind {
 	case actSetUp:
 		a.setUp()
@@ -138,9 +148,15 @@ func (a *app) handle(act action) {
 	var err error
 	switch act.kind {
 	case actService:
-		req, err = menubar.ToggleService(*a.st, act.arg)
+		req, err = menubar.ToggleService(*a.st, a.pendingVPN, connectedVPNCandidates(), act.arg)
 	case actVPN:
-		req, err = menubar.ChooseVPN(*a.st, act.arg)
+		var send bool
+		req, send, err = menubar.ChooseVPN(*a.st, act.arg)
+		if err == nil && !send {
+			a.pendingVPN = act.arg
+			a.errLine = ""
+			return
+		}
 	case actToggle:
 		if a.menu.Toggle.Resume {
 			req, err = menubar.ResumeRequest(*a.st)
@@ -237,7 +253,7 @@ func (a *app) setUp() {
 		out, err := exec.Command("/usr/bin/osascript", "-e", script).CombinedOutput()
 		msg := ""
 		if err != nil {
-			msg = menubar.SetupFailure(string(out))
+			msg = menubar.SetupFailure(string(out), err)
 		}
 		a.actions <- action{kind: actSetUpDone, arg: msg}
 	}()
@@ -274,27 +290,18 @@ func connectedVPNCandidates() []string {
 	return config.VPNCandidates(names)
 }
 
-func vpnCandidates() []string {
-	ifs, err := net.Interfaces()
-	if err != nil {
-		return nil
-	}
-	names := make([]string, 0, len(ifs))
-	for _, i := range ifs {
-		names = append(names, i.Name)
-	}
-	return config.VPNCandidates(names)
-}
-
 func (a *app) draw() {
-	setup := menubar.Setup{Catalog: a.catalog}
+	setup := menubar.Setup{Catalog: a.catalog, PendingVPN: a.pendingVPN}
 	if a.notSetUp() {
 		setup.Draft = a.currentDraft()
 		setup.Update = menubar.InstalledState("") == menubar.InstallOld
 	} else if a.st != nil {
 		a.draft = nil // a later "not set up" starts from the default again
 	}
-	m := menubar.Build(a.st, a.stErr, vpnCandidates(), setup)
+	// Only connected VPN interfaces are offered: macOS keeps system tunnels
+	// (utun0-3) up without an address, and they are never the user's VPN.
+	// The saved interface is still shown, marked "not connected".
+	m := menubar.Build(a.st, a.stErr, connectedVPNCandidates(), setup)
 	if m.State == menubar.StateNotSetUp && a.catalogErr != nil {
 		m.Status = "Could not read the service list: " + a.catalogErr.Error()
 		m.SetUp.Enabled = false

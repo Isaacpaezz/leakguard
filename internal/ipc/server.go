@@ -14,9 +14,6 @@ import (
 // Handler runs one checked request and returns its response.
 type Handler func(Request) Response
 
-// errNotAuthorized is all an unauthorized peer learns.
-const errNotAuthorized = "not authorized"
-
 // Server listens on a Unix socket and answers one request per connection.
 type Server struct {
 	// Path is the socket path.
@@ -132,7 +129,8 @@ func (s *Server) handle(conn net.Conn) {
 		authorize = authorizePeer
 	}
 	if err := authorize(conn); err != nil {
-		writeMessage(conn, Response{Error: errNotAuthorized})
+		// ErrNotAuthorized is all an unauthorized peer learns.
+		writeMessage(conn, Response{Error: ErrNotAuthorized.Error()})
 		return
 	}
 	req, err := ReadRequest(conn)

@@ -36,8 +36,9 @@ const (
 	CmdStatus = "status"
 	// CmdSet saves and applies a VPN interface and services; it also ends a pause.
 	CmdSet = "set"
-	// CmdDisable pauses the protection: the rules are removed until the next set.
-	CmdDisable = "disable"
+	// CmdPause pauses the protection: the rules are removed until the next
+	// set. It never uninstalls anything, unlike "sudo leakguard disable".
+	CmdPause = "pause"
 )
 
 // ReasonPaused is the Status reason while the protection is paused.
@@ -89,12 +90,12 @@ func ReadRequest(r io.Reader) (Request, error) {
 	if err != nil {
 		return req, err
 	}
-	if err := decodeStrict(line, &req, "request"); err != nil {
+	if err := decode(line, &req, "request", true); err != nil {
 		return Request{}, err
 	}
 	switch req.Cmd {
 	case CmdSet:
-	case CmdStatus, CmdDisable:
+	case CmdStatus, CmdPause:
 		if req.VPNInterface != "" || req.Services != nil {
 			return Request{}, fmt.Errorf("%s takes no arguments", req.Cmd)
 		}
@@ -104,14 +105,16 @@ func ReadRequest(r io.Reader) (Request, error) {
 	return req, nil
 }
 
-// readResponse reads one response with the same limits as ReadRequest.
+// readResponse reads one response with the same limits as ReadRequest, but
+// ignores unknown fields: a newer daemon may add status fields, and an older
+// app must still read the ones it knows.
 func readResponse(r io.Reader) (Response, error) {
 	var resp Response
 	line, err := readLine(r, "response")
 	if err != nil {
 		return resp, err
 	}
-	if err := decodeStrict(line, &resp, "response"); err != nil {
+	if err := decode(line, &resp, "response", false); err != nil {
 		return Response{}, err
 	}
 	if !resp.OK && resp.Error == "" {
@@ -136,9 +139,12 @@ func readLine(r io.Reader, what string) ([]byte, error) {
 	return line, nil
 }
 
-func decodeStrict(line []byte, v any, what string) error {
+// decode reads exactly one JSON value from line. strict rejects unknown fields.
+func decode(line []byte, v any, what string, strict bool) error {
 	dec := json.NewDecoder(bytes.NewReader(line))
-	dec.DisallowUnknownFields()
+	if strict {
+		dec.DisallowUnknownFields()
+	}
 	if err := dec.Decode(v); err != nil {
 		return fmt.Errorf("invalid %s: %w", what, err)
 	}

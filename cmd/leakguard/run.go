@@ -74,7 +74,7 @@ Usage:
       Protect SERVICE... through the VPN interface IFACE and keep the
       protection on across reboots. Without --vpn, the saved interface is
       used, or the only connected VPN interface. Without SERVICE..., the
-      saved services are used.
+      saved services are used. It also ends a pause from the menu-bar app.
   sudo leakguard disable
       Turn the protection off. Your choices are kept for the next enable.
   leakguard status
@@ -89,6 +89,7 @@ Usage:
       other connected interface. Every connection must fail.
   sudo leakguard apply
       Re-apply the saved rules now, without the background service.
+      Once they are loaded, a pause from the menu-bar app ends.
   sudo leakguard serve
       Run the background service that enable installs: it re-applies the
       saved rules at start and every 30 seconds, logs each run to

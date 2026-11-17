@@ -86,7 +86,8 @@ vulnerability reporting, create labels `status:needs-triage`,
    Done in `cmd/leakguard` (plus `services`, `interfaces`, `apply`): JSON
    config at `/Library/Application Support/leakguard/config.json`, pf anchor
    `com.apple/250.leakguard`, LaunchDaemon `dev.leakguard` running a
-   root-owned copy at `/usr/local/libexec/leakguard/leakguard` every 60 s.
+   root-owned copy at `/usr/local/libexec/leakguard/leakguard` (since
+   milestone 2 it runs `serve`, which re-applies every 30 s).
    Pending: a live run by the owner (`sudo leakguard enable`, `test`,
    `disable`), since tests never touch the real firewall.
 2. 🚧 Menu-bar app on macOS (Go systray) talking to the privileged service.
@@ -95,8 +96,14 @@ vulnerability reporting, create labels `status:needs-triage`,
    config at start and every 30 s unless paused, and serves
    `/var/run/leakguard.sock` (`internal/ipc`): one newline-terminated JSON
    request and response per connection, at most 64 KiB, 5 s deadline;
-   commands `status`, `set`, `disable` (pause: flush and save
-   `"paused": true`; `set` ends it; `sudo leakguard disable` still uninstalls).
+   commands `status`, `set`, `pause` (flush and save `"paused": true`; `set`,
+   `sudo leakguard enable` and `sudo leakguard apply` end it;
+   `sudo leakguard disable` still uninstalls). The command was called
+   `disable` before the first release; it was renamed so it never reads like
+   the uninstalling CLI command. Requests are decoded strictly (unknown
+   fields refused); responses ignore unknown fields so an older app keeps
+   working with a newer daemon. A refused peer gets `not authorized`, which
+   the client returns as `ipc.ErrNotAuthorized`.
    Authorization is twofold: the socket is `root:admin` (gid 80) mode 0660,
    and the server reads `LOCAL_PEERCRED` and refuses peers that are not uid 0
    or in group 80. Other platforms refuse every peer. One mutex serializes
@@ -107,8 +114,12 @@ vulnerability reporting, create labels `status:needs-triage`,
    imports it; other systems get a stub that exits 1). The logic lives in
    `internal/menubar` and is tested without a GUI: status to menu (template
    icons: filled shield protected, outline not protected or paused, slashed
-   not set up), clicks to `set`/`disable` (unticking the last service pauses),
-   plain-language errors. The app polls every 3 s and after each click.
+   not set up), clicks to `set`/`pause` (unticking the last service pauses),
+   plain-language errors. When the daemon answers but has no services yet,
+   choosing a VPN is held by the app and sent with the first ticked service;
+   ticking a service first uses the only connected VPN, or asks for the VPN.
+   The error line of a failed click is cleared by a later successful poll.
+   The app polls every 3 s and after each click.
    First run works from the menu: while the daemon is unavailable, ticking
    services and choosing the VPN only edit a local draft (default: no
    services; the VPN when exactly one candidate is connected). "Set up

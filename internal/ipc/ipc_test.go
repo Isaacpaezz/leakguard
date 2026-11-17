@@ -35,7 +35,7 @@ func TestReadRequestAccepts(t *testing.T) {
 		want Request
 	}{
 		{`{"cmd":"status"}` + "\n", Request{Cmd: CmdStatus}},
-		{`{"cmd":"disable"}` + "\n", Request{Cmd: CmdDisable}},
+		{`{"cmd":"pause"}` + "\n", Request{Cmd: CmdPause}},
 		{`{"cmd":"set","vpn_interface":"ipsec0","services":["anthropic"]}` + "\n",
 			Request{Cmd: CmdSet, VPNInterface: "ipsec0", Services: []string{"anthropic"}}},
 	}
@@ -57,11 +57,12 @@ func TestReadRequestRejects(t *testing.T) {
 		{"unknown command", `{"cmd":"reboot"}` + "\n", `unknown command "reboot"`},
 		{"missing command", `{}` + "\n", `unknown command ""`},
 		{"unknown field", `{"cmd":"status","admin":true}` + "\n", `unknown field "admin"`},
-		{"trailing data", `{"cmd":"status"} {"cmd":"disable"}` + "\n", "unexpected data after the request"},
+		{"trailing data", `{"cmd":"status"} {"cmd":"pause"}` + "\n", "unexpected data after the request"},
+		{"old name of pause", `{"cmd":"disable"}` + "\n", `unknown command "disable"`},
 		{"no newline", `{"cmd":"status"}`, "incomplete request"},
 		{"not json", "hello\n", "invalid request"},
 		{"arguments to status", `{"cmd":"status","services":["anthropic"]}` + "\n", "status takes no arguments"},
-		{"arguments to disable", `{"cmd":"disable","vpn_interface":"ipsec0"}` + "\n", "disable takes no arguments"},
+		{"arguments to pause", `{"cmd":"pause","vpn_interface":"ipsec0"}` + "\n", "pause takes no arguments"},
 		{"too large", `{"cmd":"set","vpn_interface":"` + strings.Repeat("a", MaxMessage) + `"}` + "\n", "request is larger than 65536 bytes"},
 	}
 	for _, tc := range cases {
@@ -201,7 +202,7 @@ func statusHandler(calls *atomic.Int32) Handler {
 		switch req.Cmd {
 		case CmdSet:
 			return Response{OK: true, Status: &Status{VPNInterface: req.VPNInterface, Services: req.Services}}
-		case CmdDisable:
+		case CmdPause:
 			return Response{OK: true, Status: &Status{Reason: "paused"}}
 		}
 		return Response{OK: true, Status: &Status{Protected: true, VPNInterface: "ipsec0", VPNConnected: true,
@@ -297,11 +298,11 @@ func TestServerRefusesUnauthorizedPeers(t *testing.T) {
 	var calls atomic.Int32
 	startServer(t, &Server{Path: path, Handler: statusHandler(&calls), Chown: (&recorder{}).chown,
 		Authorize: func(net.Conn) error { return errors.New("uid 501 is not an administrator") }})
-	if got := rawExchange(t, path, `{"cmd":"disable"}`+"\n"); got != `{"ok":false,"error":"not authorized"}`+"\n" {
+	if got := rawExchange(t, path, `{"cmd":"pause"}`+"\n"); got != `{"ok":false,"error":"not authorized"}`+"\n" {
 		t.Fatalf("response = %q", got)
 	}
 	_, err := Client{Path: path}.Pause()
-	if err == nil || err.Error() != "not authorized" || errors.Is(err, ErrDaemonUnavailable) {
+	if !errors.Is(err, ErrNotAuthorized) || err.Error() != "not authorized" || errors.Is(err, ErrDaemonUnavailable) {
 		t.Fatalf("Pause() = %v, want not authorized", err)
 	}
 	if calls.Load() != 0 {
@@ -314,8 +315,28 @@ func TestServerReportsHandlerErrors(t *testing.T) {
 	startServer(t, &Server{Path: path, Authorize: allowAll, Chown: (&recorder{}).chown,
 		Handler: func(Request) Response { return Response{Error: `service "openai" is not supported yet`} }})
 	_, err := Client{Path: path}.Set("ipsec0", []string{"openai"})
-	if err == nil || err.Error() != `service "openai" is not supported yet` {
+	if err == nil || err.Error() != `service "openai" is not supported yet` || errors.Is(err, ErrNotAuthorized) {
 		t.Fatalf("Set() = %v", err)
+	}
+}
+
+// A newer daemon may add response fields; an older app still reads the rest.
+func TestReadResponseIgnoresUnknownFields(t *testing.T) {
+	in := `{"ok":true,"status":{"protected":true,"vpn_interface":"ipsec0","new_field":{"x":1},` +
+		`"catalog":[{"id":"anthropic","name":"Anthropic (Claude)","status":"supported","added":true}]},"server":"v2"}` + "\n"
+	resp, err := readResponse(strings.NewReader(in))
+	if err != nil || !resp.OK || resp.Status == nil || !resp.Status.Protected || resp.Status.VPNInterface != "ipsec0" ||
+		len(resp.Status.Catalog) != 1 || resp.Status.Catalog[0].ID != "anthropic" {
+		t.Fatalf("readResponse() = %+v, %v", resp, err)
+	}
+	for in, want := range map[string]string{
+		`{"ok":true,"status":{}} {"ok":true}` + "\n": "unexpected data after the response",
+		`{"ok":false}` + "\n":                        "an error without a message",
+		`{"ok":true}` + "\n":                         "no status",
+	} {
+		if _, err := readResponse(strings.NewReader(in)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("readResponse(%q) = %v, want %q", in, err, want)
+		}
 	}
 }
 
@@ -419,7 +440,7 @@ func TestClientReadsTheAnswerAfterABrokenWrite(t *testing.T) {
 		services[i] = "anthropic"
 	}
 	_, err = Client{Path: path}.Set("ipsec0", services)
-	if err == nil || err.Error() != "not authorized" {
+	if !errors.Is(err, ErrNotAuthorized) || err.Error() != "not authorized" {
 		t.Fatalf("Set() = %v, want not authorized", err)
 	}
 }

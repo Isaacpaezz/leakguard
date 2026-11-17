@@ -299,7 +299,7 @@ func TestServeSetKeepsRulesWhenApplyFails(t *testing.T) {
 	}
 }
 
-func TestServeDisablePausesWithoutStopping(t *testing.T) {
+func TestServePauseKeepsTheDaemonRunning(t *testing.T) {
 	h := newHarness(t, true)
 	h.saveConfig(t, anthropicConfig)
 	h.env.ApplyEvery = 5 * time.Millisecond
@@ -328,7 +328,7 @@ func TestServeDisablePausesWithoutStopping(t *testing.T) {
 }
 
 // S3: if the rules cannot be removed, the pause is not saved.
-func TestServeDisableFailsWhenFlushFails(t *testing.T) {
+func TestServePauseFailsWhenFlushFails(t *testing.T) {
 	h := newHarness(t, true)
 	h.saveConfig(t, anthropicConfig)
 	h.pfctl.fail = map[string]error{flushAnchor: errors.New("pfctl: device busy")}

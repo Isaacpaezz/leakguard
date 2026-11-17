@@ -95,9 +95,13 @@ func SetupScript(cli string, d Draft, all []catalog.Service) (string, error) {
 	return `do shell script "` + appleScriptString(cmd) + `" with administrator privileges`, nil
 }
 
-// SetupFailure explains the output of a failed osascript run of SetupScript,
-// such as "0:95: execution error: User canceled. (-128)".
-func SetupFailure(output string) string {
+// SetupFailure explains a failed osascript run of SetupScript from its
+// output, such as "0:95: execution error: User canceled. (-128)". Without
+// any output, it reports err, the error from running osascript.
+func SetupFailure(output string, err error) string {
+	if strings.TrimSpace(output) == "" && err != nil {
+		return "Set up failed: " + firstLine(err.Error())
+	}
 	lines := strings.Split(strings.TrimSpace(output), "\n")
 	last := strings.TrimSpace(lines[len(lines)-1])
 	if _, msg, ok := strings.Cut(last, "execution error: "); ok {
