@@ -77,8 +77,11 @@ func startServe(t *testing.T, h *harness) *serving {
 	s.client = ipc.Client{Path: h.env.Socket}
 	go func() { s.done <- run([]string{"serve"}, &s.stdout, &s.stderr, h.env) }()
 	deadline := time.Now().Add(5 * time.Second)
+	// The socket file appears at bind(), a moment before listen(); only a
+	// successful connection proves serve is ready.
 	for {
-		if _, err := os.Lstat(h.env.Socket); err == nil {
+		if conn, err := net.Dial("unix", h.env.Socket); err == nil {
+			conn.Close()
 			break
 		}
 		select {
