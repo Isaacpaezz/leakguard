@@ -88,12 +88,14 @@ Missing a service? [Request it](https://github.com/Isaacpaezz/leakguard/issues/n
 
 **Added**
 - `leakguard` CLI for macOS: `services`, `interfaces`, `enable`, `disable`, `status`, `test` and `apply`, with services taken from the catalog.
-- `sudo leakguard enable --vpn ipsec0 anthropic` protects the chosen services and installs a LaunchDaemon that re-applies and verifies the rules at boot and every minute.
+- `sudo leakguard enable --vpn ipsec0 anthropic` protects the chosen services and installs a LaunchDaemon that re-applies and verifies the rules at boot and every 30 seconds.
 - `leakguard test` proves the protection: it connects to each protected address through your normal connection and expects a refusal.
 - Service catalog (`catalog/services/*.json`) with Anthropic (Claude) supported and OpenAI planned.
 - Self-updating README: the service table and this section are generated from the catalog and this file, and CI blocks changes that leave it stale.
 - Contributor guide, issue and pull request templates, code owners, security policy and agent rules.
 - macOS `pf` prototype that blocks Claude when the VPN is down.
+- The background service now runs `leakguard serve`: it stays running, re-applies the rules every 30 seconds and listens on `/var/run/leakguard.sock` for the menu-bar app. Only administrators can talk to it, and it can pause the protection without uninstalling.
+- `leakguard status` without `sudo` asks the background service, which verifies the rules as root, so it reports PROTECTED or NOT PROTECTED without a password.
 
 **Changed**
 - `leakguard test` fails unless every domain of a protected service has a refused address, and reports a resolved address outside the catalog ranges as `NOT COVERED` (pf does not block it).
@@ -120,9 +122,15 @@ leakguard test                                 # prove Claude is refused outside
 sudo leakguard disable                         # turn it off; your choices are kept
 ```
 
-`enable` loads the firewall rules and installs a background service that
-re-applies them at boot and every minute and logs each run to
-`/Library/Logs/leakguard.log`. If the VPN interface goes down, the protected
+`enable` loads the firewall rules and installs a background service
+(`leakguard serve`, run by macOS as root) that re-applies them at boot and
+every 30 seconds and logs each run to `/Library/Logs/leakguard.log`. The same
+service also listens on `/var/run/leakguard.sock` for the upcoming menu-bar
+app, so you can change services without typing your password each time. Only
+administrators of the Mac can talk to it: the socket belongs to the `admin`
+group, and the service checks who is calling and refuses everyone else.
+`leakguard status` asks it, so it can tell you PROTECTED without `sudo`.
+If the VPN interface goes down, the protected
 services stop working until it is back. `test` connects through your real
 connection (Wi-Fi or Ethernet) and finds it by itself even when the default
 route is the VPN; name it with `--via IFACE` if you have several. Run
@@ -138,7 +146,7 @@ is kept as a legacy reference. If you installed it, remove it with
 |---|-----------|--------|
 | 0 | Open source foundation: contributing rules, self-updating README | ✅ Done |
 | 1 | Go CLI for macOS: profiles from the catalog, `enable`, `disable`, `status`, `test` | 🚧 In review |
-| 2 | Menu-bar app on macOS: protection status and service checkboxes | 🗓️ Planned |
+| 2 | Menu-bar app on macOS: protection status and service checkboxes | 🚧 In progress |
 | 3 | Linux backend (`nftables`) and tray app | 🗓️ Planned |
 | 4 | Windows backend and tray app | 🗓️ Planned |
 | 5 | Self-updating IP catalog and domain-aware blocking for CDN-hosted services | 🗓️ Planned |

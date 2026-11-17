@@ -1,6 +1,6 @@
-// Package daemon installs the macOS LaunchDaemon that re-applies the leakguard
-// firewall rules at boot and every minute, because OS updates and VPN clients
-// may flush them.
+// Package daemon installs the macOS LaunchDaemon that runs "leakguard serve":
+// it re-applies the firewall rules at boot and periodically, because OS
+// updates and VPN clients may flush them, and answers the menu-bar app.
 package daemon
 
 import (
@@ -28,8 +28,6 @@ const (
 	LegacyPlistPath = "/Library/LaunchDaemons/com.isaacpaezz.anthropic-killswitch.plist"
 	// LaunchctlPath is the absolute path to launchctl; never resolved through $PATH.
 	LaunchctlPath = "/bin/launchctl"
-	// Interval is how often, in seconds, the daemon re-applies the rules.
-	Interval = 60
 	// LogPath receives the output of every daemon run.
 	LogPath = "/Library/Logs/leakguard.log"
 	// BootoutWait bounds how long Install waits for launchd to remove the old job.
@@ -42,7 +40,8 @@ const (
 	logTail = 4096
 )
 
-// Plist renders the LaunchDaemon definition that runs "binary apply".
+// Plist renders the LaunchDaemon definition that runs "binary serve" at boot
+// and restarts it whenever it exits.
 func Plist(binary string) string {
 	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -53,19 +52,19 @@ func Plist(binary string) string {
 	<key>ProgramArguments</key>
 	<array>
 		<string>%s</string>
-		<string>apply</string>
+		<string>serve</string>
 	</array>
 	<key>RunAtLoad</key>
 	<true/>
-	<key>StartInterval</key>
-	<integer>%d</integer>
+	<key>KeepAlive</key>
+	<true/>
 	<key>StandardOutPath</key>
 	<string>%s</string>
 	<key>StandardErrorPath</key>
 	<string>%s</string>
 </dict>
 </plist>
-`, Label, binary, Interval, LogPath, LogPath)
+`, Label, binary, LogPath, LogPath)
 }
 
 // Runner runs launchctl with the given arguments.
