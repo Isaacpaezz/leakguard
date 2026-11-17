@@ -264,9 +264,10 @@ func rawExchange(t *testing.T, path, request string) string {
 	}
 	defer conn.Close()
 	conn.SetDeadline(time.Now().Add(5 * time.Second))
-	if _, err := conn.Write([]byte(request)); err != nil {
-		t.Fatal(err)
-	}
+	// A refused peer gets its answer and the connection is closed without
+	// reading, so the write may fail with a broken pipe (Linux); the answer
+	// is still there to read.
+	conn.Write([]byte(request))
 	line, err := bufio.NewReader(conn).ReadString('\n')
 	if err != nil {
 		t.Fatalf("reading the response: %v", err)
