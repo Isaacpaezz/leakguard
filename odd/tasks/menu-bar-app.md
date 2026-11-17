@@ -24,9 +24,9 @@ Delivered as two stacked PRs: A (`feat/daemon-socket`): the root daemon listens 
 
 | ID | Task | Specs | Route | Commit |
 |---|---|---|---|---|
-| T1 | `internal/ipc`: protocol types, client, server with peer check; tests with a temp socket | S2, S3 | worker | |
-| T2 | `leakguard serve` + plist KeepAlive + pause flag + `status` via socket; docs | S2, S3 | worker | |
-| T3 | Native review + PR A | all | parent | |
+| T1 | `internal/ipc`: protocol types, client, server with peer check; tests with a temp socket | S2, S3 | worker | 4d12945, fix 803f2bd |
+| T2 | `leakguard serve` + plist KeepAlive + pause flag + `status` via socket; docs | S2, S3 | worker | 1fcab4d |
+| T3 | Native review + PR A | all | parent | verify (escalated item 2): S2/S3 pass; PR A |
 | T4 | `cmd/leakguard-menubar` with systray; icons; docs; CI build on macOS | S1, S4 | worker | |
 | T5 | Native review + PR B; owner live check | all | parent | |
 
@@ -36,3 +36,5 @@ Delivered as two stacked PRs: A (`feat/daemon-socket`): the root daemon listens 
 - L2 (owner, 2026-11-16): "si mergea y dale con lo recomendado" (merge PR #6, build the menu-bar app with option 2: the root daemon listens to the app, restricted to administrators).
 - L3 (owner, 2026-11-15): tray app technology "Go puro: servicio + systray (Recomendado)".
 - L4 (evidence): admin group gid is 80 on the owner's Mac; `fyne.io/systray` latest is v1.12.2.
+- L5 (interruption, 2026-11-16): the first T1-T2 worker was interrupted when the parent session ended; a second worker audited its uncommitted output against every requirement and added 2 tests.
+- L6 (verification, escalated as Task Size item 2): S2 and S3 pass, no blockers. Fixed in 803f2bd with RED->GREEN: a second `serve` took over a live socket (and closing one unlinked the other's), and the socket was created with the inherited umask (0777 under umask 000) before chmod. Notes kept as known limits: only the 16 groups in xucred are checked (fails closed); JSON keys are matched case-insensitively by encoding/json; `set` saves before applying; `sudo leakguard apply` ignores `paused`.
