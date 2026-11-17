@@ -1,8 +1,11 @@
 package menubar
 
 import (
+	"errors"
+	"io/fs"
 	"os/exec"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -171,66 +174,113 @@ func TestSetupScriptRejects(t *testing.T) {
 	}
 }
 
+const (
+	nextToApp = "/Users/me/bin/leakguard"
+	appExe    = "/Users/me/bin/leakguard-menubar"
+)
+
 func TestFindCLI(t *testing.T) {
+	rootOwned := func(string) error { return nil }
+	missing := func(p string) error { return &fs.PathError{Op: "lstat", Path: p, Err: fs.ErrNotExist} }
+	notRoot := func(p string) error { return errors.New(p + " is not owned by root") }
 	tests := []struct {
-		name   string
-		exe    string
-		exists []string
-		want   string
-		found  bool
+		name    string
+		exe     string
+		inst    Install
+		exists  []string
+		check   func(string) error
+		want    string
+		wantErr string
 	}{
 		{
-			name:   "the installed root-owned copy wins over the one next to the app",
-			exe:    "/Users/me/bin/leakguard-menubar",
-			exists: []string{"/Users/me/bin/leakguard", InstalledCLI},
+			name:   "current install: the root-owned installed copy wins",
+			exe:    appExe,
+			inst:   InstallCurrent,
+			exists: []string{nextToApp, InstalledCLI},
+			check:  rootOwned,
 			want:   InstalledCLI,
-			found:  true,
 		},
 		{
-			name:   "installed copy only",
-			exe:    "/Users/me/bin/leakguard-menubar",
-			exists: []string{InstalledCLI},
-			want:   InstalledCLI,
-			found:  true,
+			name:    "current install not owned by root is refused, never replaced",
+			exe:     appExe,
+			inst:    InstallCurrent,
+			exists:  []string{nextToApp, InstalledCLI},
+			check:   notRoot,
+			wantErr: "the installed leakguard is not owned by root; reinstall with sudo leakguard enable",
+		},
+		{
+			name:   "current plist without the installed binary uses the one next to the app",
+			exe:    appExe,
+			inst:   InstallCurrent,
+			exists: []string{nextToApp},
+			check:  missing,
+			want:   nextToApp,
+		},
+		{
+			name:   "older install: the one next to the app updates it",
+			exe:    appExe,
+			inst:   InstallOld,
+			exists: []string{nextToApp, InstalledCLI},
+			check:  rootOwned,
+			want:   nextToApp,
+		},
+		{
+			name:    "older install and nothing next to the app",
+			exe:     appExe,
+			inst:    InstallOld,
+			exists:  []string{InstalledCLI},
+			check:   rootOwned,
+			wantErr: "Update leakguard: put the new leakguard next to this app, or run: sudo leakguard enable",
 		},
 		{
 			name:   "first run uses the one next to the app",
-			exe:    "/Users/me/bin/leakguard-menubar",
-			exists: []string{"/Users/me/bin/leakguard"},
-			want:   "/Users/me/bin/leakguard",
-			found:  true,
+			exe:    appExe,
+			inst:   InstallNone,
+			exists: []string{nextToApp},
+			check:  missing,
+			want:   nextToApp,
 		},
 		{
-			name: "none",
-			exe:  "/Users/me/bin/leakguard-menubar",
+			name:    "first run with nothing next to the app",
+			exe:     appExe,
+			inst:    InstallNone,
+			check:   missing,
+			wantErr: "Put the leakguard command next to this app, then try again",
 		},
 		{
-			name:   "unknown executable still finds the installed copy",
-			exists: []string{InstalledCLI},
-			want:   InstalledCLI,
-			found:  true,
-		},
-		{
-			name: "unknown executable and no installed copy",
+			name:    "unknown executable on the first run",
+			inst:    InstallNone,
+			check:   missing,
+			wantErr: "Put the leakguard command next to this app, then try again",
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			var asked []string
-			isExe := func(p string) bool {
-				asked = append(asked, p)
-				for _, e := range tc.exists {
-					if e == p {
-						return true
-					}
+			isExe := func(p string) bool { return slices.Contains(tc.exists, p) }
+			got, err := FindCLI(tc.exe, tc.inst, isExe, tc.check)
+			if tc.wantErr != "" {
+				if err == nil || err.Error() != tc.wantErr {
+					t.Fatalf("FindCLI = %q, %v; want error %q", got, err, tc.wantErr)
 				}
-				return false
+				if got != "" {
+					t.Errorf("path with an error = %q", got)
+				}
+				return
 			}
-			got, found := FindCLI(tc.exe, isExe)
-			if got != tc.want || found != tc.found {
-				t.Errorf("FindCLI = %q, %v; want %q, %v (asked %v)", got, found, tc.want, tc.found, asked)
+			if err != nil || got != tc.want {
+				t.Errorf("FindCLI = %q, %v; want %q", got, err, tc.want)
 			}
 		})
+	}
+}
+
+func TestSetupScriptRejectsInvalidUTF8(t *testing.T) {
+	s, err := SetupScript("/tmp/\xff\xfe/leakguard", oneService, fullCatalog)
+	if err == nil || err.Error() != "the path of the leakguard command is not valid UTF-8" {
+		t.Errorf("SetupScript = %q, %v; want the UTF-8 error", s, err)
+	}
+	if s != "" {
+		t.Errorf("script with an error = %q", s)
 	}
 }
 

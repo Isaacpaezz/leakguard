@@ -2,9 +2,11 @@ package menubar
 
 import (
 	"errors"
+	"io/fs"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/Isaacpaezz/leakguard/internal/catalog"
 	"github.com/Isaacpaezz/leakguard/internal/config"
@@ -13,26 +15,51 @@ import (
 // InstalledCLI is the root-owned copy of the CLI that the daemon runs.
 const InstalledCLI = "/usr/local/libexec/leakguard/leakguard"
 
+// Messages FindCLI returns when it finds nothing safe to run.
+const (
+	errNotRootOwned = "the installed leakguard is not owned by root; reinstall with sudo leakguard enable"
+	errUpdate       = "Update leakguard: put the new leakguard next to this app, or run: sudo leakguard enable"
+	errNoCLI        = "Put the leakguard command next to this app, then try again"
+)
+
 // FindCLI returns the leakguard CLI to run as root for "Set up leakguard…".
-// The installed copy (InstalledCLI) wins whenever it exists: enable made it
-// root-owned, so no user can have changed it. The leakguard next to the app
-// executable exe is used only on the first run, when no installed copy
-// exists yet; it may be writable by the user, so it is never preferred.
-// FindCLI reports false when neither is an executable file.
-func FindCLI(exe string, isExecutable func(path string) bool) (string, bool) {
-	if isExecutable(InstalledCLI) {
-		return InstalledCLI, true
+//
+// The installed copy (InstalledCLI) is used only when the installed
+// LaunchDaemon runs "serve" (inst is InstallCurrent): an older copy would
+// re-install the periodic apply, the socket would never appear, and the app
+// would stay "not set up". Before it is trusted, checkInstalled must confirm
+// that it, and every directory above it, is owned by root and not writable
+// by anyone else, without following symlinks. If that check fails for any
+// reason other than a missing file, FindCLI refuses instead of running
+// another binary.
+//
+// The leakguard next to the app executable exe may be writable by the user,
+// so it is used only when no current installed copy exists: on the first run
+// or to update an older install.
+func FindCLI(exe string, inst Install, isExecutable func(path string) bool, checkInstalled func(path string) error) (string, error) {
+	if inst == InstallCurrent {
+		err := checkInstalled(InstalledCLI)
+		switch {
+		case err == nil:
+			return InstalledCLI, nil
+		case !errors.Is(err, fs.ErrNotExist):
+			return "", errors.New(errNotRootOwned)
+		}
 	}
 	if exe != "" {
 		if next := filepath.Join(filepath.Dir(exe), "leakguard"); isExecutable(next) {
-			return next, true
+			return next, nil
 		}
 	}
-	return "", false
+	if inst == InstallOld {
+		return "", errors.New(errUpdate)
+	}
+	return "", errors.New(errNoCLI)
 }
 
 // ShellQuote quotes s as one POSIX shell word: inside single quotes nothing
-// is special, and each single quote becomes '\”.
+// is special, so each single quote closes the quoting, adds an escaped quote
+// and reopens it.
 func ShellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
@@ -50,6 +77,9 @@ func appleScriptString(s string) string {
 func SetupScript(cli string, d Draft, all []catalog.Service) (string, error) {
 	if !filepath.IsAbs(cli) {
 		return "", errors.New("the leakguard command needs an absolute path")
+	}
+	if !utf8.ValidString(cli) {
+		return "", errors.New("the path of the leakguard command is not valid UTF-8")
 	}
 	if strings.ContainsFunc(cli, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
 		return "", errors.New("the path of the leakguard command contains control characters")

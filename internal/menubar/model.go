@@ -57,6 +57,9 @@ type Draft struct {
 type Setup struct {
 	Catalog []catalog.Service
 	Draft   Draft
+	// Update is set when an older leakguard is installed: its background
+	// service predates the socket, so "Set up" updates it.
+	Update bool
 }
 
 // DefaultDraft is the first draft: no services, and the VPN interface when
@@ -146,7 +149,14 @@ func buildNotSetUp(candidates []string, setup Setup) Menu {
 		VPNs:     vpnItems(st, candidates),
 		SetUp:    SetUpItem{Visible: true},
 	}
-	if m.Status == "" {
+	switch {
+	case m.Status != "" && setup.Update:
+		m.Status = "Update needed. " + m.Status
+	case m.Status != "":
+	case setup.Update:
+		m.Status = "Update needed: click Set up leakguard… to update"
+		m.SetUp.Enabled = true
+	default:
 		m.Status = "Ready: click Set up leakguard…"
 		m.SetUp.Enabled = true
 	}
@@ -304,6 +314,12 @@ func ResumeRequest(st ipc.Status) (Request, error) {
 		return Request{}, errors.New("Nothing to resume: choose a VPN interface and a service")
 	}
 	return Request{VPNInterface: st.VPNInterface, Services: slices.Clone(st.Services)}, nil
+}
+
+// SetupNeeded reports whether "Set up leakguard…" may run after a fresh
+// status check returned err: only when the daemon is still unavailable.
+func SetupNeeded(err error) bool {
+	return errors.Is(err, ipc.ErrDaemonUnavailable)
 }
 
 // notAuthorized is the daemon's answer to a peer that is not an administrator.

@@ -500,3 +500,71 @@ func TestDraftToggleDoesNotChangeTheOriginal(t *testing.T) {
 		t.Errorf("original draft changed to %v", d.Services)
 	}
 }
+
+func TestBuildNotSetUpOlderInstall(t *testing.T) {
+	unavailable := fmt.Errorf("%w (dial unix: no such file)", ipc.ErrDaemonUnavailable)
+	tests := []struct {
+		name  string
+		draft Draft
+		want  Menu
+	}{
+		{
+			name:  "complete draft asks to update",
+			draft: Draft{VPNInterface: "ipsec0", Services: []string{"anthropic"}},
+			want: Menu{
+				State:    StateNotSetUp,
+				Status:   "Update needed: click Set up leakguard… to update",
+				Services: services("anthropic"),
+				VPNs:     []VPNItem{{Name: "ipsec0", Label: "ipsec0", Checked: true}},
+				SetUp:    SetUpItem{Visible: true, Enabled: true},
+			},
+		},
+		{
+			name:  "incomplete draft still keeps set up disabled",
+			draft: Draft{VPNInterface: "ipsec0"},
+			want: Menu{
+				State:    StateNotSetUp,
+				Status:   "Update needed. Choose at least one service",
+				Services: services(),
+				VPNs:     []VPNItem{{Name: "ipsec0", Label: "ipsec0", Checked: true}},
+				SetUp:    SetUpItem{Visible: true},
+			},
+		},
+		{
+			name: "empty draft asks for the VPN",
+			want: Menu{
+				State:    StateNotSetUp,
+				Status:   "Update needed. Choose your VPN interface",
+				Services: services(),
+				VPNs:     []VPNItem{{Name: "ipsec0", Label: "ipsec0"}},
+				SetUp:    SetUpItem{Visible: true},
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Build(nil, unavailable, []string{"ipsec0"}, Setup{Catalog: fullCatalog, Draft: tc.draft, Update: true})
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("Build:\n got %+v\nwant %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSetupNeeded(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"daemon still unavailable", fmt.Errorf("%w (dial)", ipc.ErrDaemonUnavailable), true},
+		{"daemon answers now", nil, false},
+		{"daemon answers but refuses", errors.New("not authorized"), false},
+		{"daemon slow", fmt.Errorf("read: %w", os.ErrDeadlineExceeded), false},
+	}
+	for _, tc := range tests {
+		if got := SetupNeeded(tc.err); got != tc.want {
+			t.Errorf("%s: SetupNeeded = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

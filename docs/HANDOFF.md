@@ -116,9 +116,17 @@ vulnerability reporting, create labels `status:needs-triage`,
    `<leakguard> enable --vpn IFACE SERVICE...` once through
    `osascript ... with administrator privileges`. The draft must pass
    `config.Validate` against the embedded catalog, and every argument is
-   quoted for the shell, then the command for AppleScript. The binary run as
-   root is the installed root-owned copy when it exists; the `leakguard` next
-   to the app (possibly user-writable) is used only before the first install.
+   quoted for the shell, then the command for AppleScript (paths must be
+   absolute, valid UTF-8, without control characters). The binary run as
+   root is the installed copy only when `/Library/LaunchDaemons/dev.leakguard.plist`
+   runs `serve` (`menubar.InstalledState`) and `menubar.CheckInstalledCLI`
+   confirms, with `lstat` (no symlinks), that it and every parent directory
+   are owned by root and not group/other-writable; a failed check refuses
+   instead of falling back. Upgrades from an older install (plist runs a
+   periodic `apply`) work from the menu: the status says "Update needed" and
+   "Set up" uses the `leakguard` next to the app (possibly user-writable),
+   which is otherwise used only for the first install. Before running setup
+   the app polls the daemon once more and drops the draft if it now answers.
    Pending: a live check by the owner.
 3. Linux `nftables` backend and tray app.
 4. Windows backend and tray app.

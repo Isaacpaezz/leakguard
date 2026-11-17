@@ -201,6 +201,19 @@ func (a *app) setUp() {
 	if a.settingUp || !a.notSetUp() || !a.menu.SetUp.Enabled {
 		return
 	}
+	// The daemon may have come up since the last poll: then there is
+	// nothing to set up, and the draft is dropped.
+	st, err := a.client.Status()
+	if !menubar.SetupNeeded(err) {
+		if err == nil {
+			a.st, a.stErr = &st, nil
+		} else {
+			a.st, a.stErr = nil, err
+		}
+		a.draft = nil
+		a.errLine = ""
+		return
+	}
 	exe, err := os.Executable()
 	if err == nil {
 		exe, err = filepath.EvalSymlinks(exe)
@@ -208,9 +221,9 @@ func (a *app) setUp() {
 	if err != nil {
 		exe = ""
 	}
-	cli, ok := menubar.FindCLI(exe, isExecutable)
-	if !ok {
-		a.errLine = "Put the leakguard command next to this app, then try again"
+	cli, err := menubar.FindCLI(exe, menubar.InstalledState(""), isExecutable, menubar.CheckInstalledCLI)
+	if err != nil {
+		a.errLine = err.Error()
 		return
 	}
 	script, err := menubar.SetupScript(cli, a.currentDraft(), a.catalog)
@@ -277,6 +290,7 @@ func (a *app) draw() {
 	setup := menubar.Setup{Catalog: a.catalog}
 	if a.notSetUp() {
 		setup.Draft = a.currentDraft()
+		setup.Update = menubar.InstalledState("") == menubar.InstallOld
 	} else if a.st != nil {
 		a.draft = nil // a later "not set up" starts from the default again
 	}
