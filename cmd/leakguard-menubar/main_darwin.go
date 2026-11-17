@@ -290,18 +290,6 @@ func connectedVPNCandidates() []string {
 	return config.VPNCandidates(names)
 }
 
-func vpnCandidates() []string {
-	ifs, err := net.Interfaces()
-	if err != nil {
-		return nil
-	}
-	names := make([]string, 0, len(ifs))
-	for _, i := range ifs {
-		names = append(names, i.Name)
-	}
-	return config.VPNCandidates(names)
-}
-
 func (a *app) draw() {
 	setup := menubar.Setup{Catalog: a.catalog, PendingVPN: a.pendingVPN}
 	if a.notSetUp() {
@@ -310,7 +298,10 @@ func (a *app) draw() {
 	} else if a.st != nil {
 		a.draft = nil // a later "not set up" starts from the default again
 	}
-	m := menubar.Build(a.st, a.stErr, vpnCandidates(), setup)
+	// Only connected VPN interfaces are offered: macOS keeps system tunnels
+	// (utun0-3) up without an address, and they are never the user's VPN.
+	// The saved interface is still shown, marked "not connected".
+	m := menubar.Build(a.st, a.stErr, connectedVPNCandidates(), setup)
 	if m.State == menubar.StateNotSetUp && a.catalogErr != nil {
 		m.Status = "Could not read the service list: " + a.catalogErr.Error()
 		m.SetUp.Enabled = false

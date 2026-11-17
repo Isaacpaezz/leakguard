@@ -21,6 +21,7 @@ The newest section is shown automatically on the README landing page.
 - `leakguard status` without `sudo` asks the background service, which verifies the rules as root, so it reports PROTECTED or NOT PROTECTED without a password.
 
 ### Changed
+- Menu-bar app: the VPN interface list shows only connected VPN interfaces, not idle system tunnels.
 - `leakguard test` fails unless every domain of a protected service has a refused address, and reports a resolved address outside the catalog ranges as `NOT COVERED` (pf does not block it).
 - `leakguard test` picks your real connection itself when the default route is the VPN, and stops with a clear message when the `--via` interface is not connected.
 - `sudo leakguard status` reports NOT PROTECTED when pf is disabled, and `status` shows the last background run.
