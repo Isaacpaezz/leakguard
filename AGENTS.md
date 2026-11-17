@@ -21,6 +21,8 @@ VPN Bypass: a tray or menu-bar icon plus service checkboxes.
 | `internal/catalog` | Loads and validates the catalog, embedded in the binary. The CLI and the future tray app reuse it. |
 | `internal/config` | The user's VPN interface and services; load, save, validate, VPN interface candidates. |
 | `internal/pf` | macOS `pf` backend: renders, applies, flushes and verifies the `com.apple/250.leakguard` anchor. |
+| `cmd/leakguard-menubar` | macOS menu-bar app (`fyne.io/systray`, needs cgo): draws `internal/menubar`, polls the daemon every 3 s, embeds the template icons made by `gen_icons.go`. Other systems get a stub that exits 1. The CLI must never import systray. |
+| `internal/menubar` | The menu-bar app's logic without a GUI: status to menu description, clicks to `set`/`disable` requests, the first-run draft (clicks before setup stay local), plain-language errors, the validated and quoted "Set up" AppleScript, which CLI is safe to run as root (current install, root-owned without symlinks, else the one next to the app). |
 | `internal/daemon` | macOS LaunchDaemon `dev.leakguard` (runs `leakguard serve`, KeepAlive): root-owned binary copy, plist, `launchctl`. |
 | `internal/probe` | `leakguard test`: connects to protected addresses outside the VPN and expects a refusal. |
 | `internal/readme`, `tools/readmegen` | Generate the README landing sections. |

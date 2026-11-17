@@ -102,8 +102,32 @@ vulnerability reporting, create labels `status:needs-triage`,
    or in group 80. Other platforms refuse every peer. One mutex serializes
    the apply loop and requests. `leakguard status` without root asks the
    socket and falls back to reading the files.
-   Pending (PR B): `cmd/leakguard-menubar` with `fyne.io/systray`, and a live
-   check by the owner.
+   Done (PR B, `feat/menu-bar-app`): `cmd/leakguard-menubar`, a separate
+   binary on `fyne.io/systray` v1.12.2 (cgo; the CLI stays cgo-free and never
+   imports it; other systems get a stub that exits 1). The logic lives in
+   `internal/menubar` and is tested without a GUI: status to menu (template
+   icons: filled shield protected, outline not protected or paused, slashed
+   not set up), clicks to `set`/`disable` (unticking the last service pauses),
+   plain-language errors. The app polls every 3 s and after each click.
+   First run works from the menu: while the daemon is unavailable, ticking
+   services and choosing the VPN only edit a local draft (default: no
+   services; the VPN when exactly one candidate is connected). "Set up
+   leakguard…" is enabled once the draft is complete and runs
+   `<leakguard> enable --vpn IFACE SERVICE...` once through
+   `osascript ... with administrator privileges`. The draft must pass
+   `config.Validate` against the embedded catalog, and every argument is
+   quoted for the shell, then the command for AppleScript (paths must be
+   absolute, valid UTF-8, without control characters). The binary run as
+   root is the installed copy only when `/Library/LaunchDaemons/dev.leakguard.plist`
+   runs `serve` (`menubar.InstalledState`) and `menubar.CheckInstalledCLI`
+   confirms, with `lstat` (no symlinks), that it and every parent directory
+   are owned by root and not group/other-writable; a failed check refuses
+   instead of falling back. Upgrades from an older install (plist runs a
+   periodic `apply`) work from the menu: the status says "Update needed" and
+   "Set up" uses the `leakguard` next to the app (possibly user-writable),
+   which is otherwise used only for the first install. Before running setup
+   the app polls the daemon once more and drops the draft if it now answers.
+   Pending: a live check by the owner.
 3. Linux `nftables` backend and tray app.
 4. Windows backend and tray app.
 5. Self-updating catalog: a scheduled workflow refreshes ranges from their

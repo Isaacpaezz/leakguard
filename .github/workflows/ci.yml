@@ -41,3 +41,7 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go test ./...
+      - name: Menu-bar app builds
+        run: go build ./cmd/leakguard-menubar
+      - name: CLI builds without cgo
+        run: CGO_ENABLED=0 go build ./cmd/leakguard

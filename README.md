@@ -95,6 +95,7 @@ Missing a service? [Request it](https://github.com/Isaacpaezz/leakguard/issues/n
 - Contributor guide, issue and pull request templates, code owners, security policy and agent rules.
 - macOS `pf` prototype that blocks Claude when the VPN is down.
 - The background service now runs `leakguard serve`: it stays running, re-applies the rules every 30 seconds and listens on `/var/run/leakguard.sock` for the menu-bar app. Only administrators can talk to it, and it can pause the protection without uninstalling.
+- macOS menu-bar app (`leakguard-menubar`): a shield shows whether you are protected; tick services, choose the VPN interface, and pause or resume without a password. The first setup happens in the menu too: tick services, choose the VPN, and "Set up leakguard…" installs it with one administrator prompt, and updates an older install the same way.
 - `leakguard status` without `sudo` asks the background service, which verifies the rules as root, so it reports PROTECTED or NOT PROTECTED without a password.
 
 **Changed**
@@ -108,7 +109,7 @@ Full history: [CHANGELOG.md](CHANGELOG.md).
 
 ## Try it today (macOS)
 
-> ⚠️ Early stage. macOS only, command line only. Needs [Go](https://go.dev/dl/) 1.25 or newer.
+> ⚠️ Early stage. macOS only. Needs [Go](https://go.dev/dl/) 1.25 or newer.
 
 ```sh
 go install github.com/Isaacpaezz/leakguard/cmd/leakguard@latest
@@ -125,7 +126,7 @@ sudo leakguard disable                         # turn it off; your choices are k
 `enable` loads the firewall rules and installs a background service
 (`leakguard serve`, run by macOS as root) that re-applies them at boot and
 every 30 seconds and logs each run to `/Library/Logs/leakguard.log`. The same
-service also listens on `/var/run/leakguard.sock` for the upcoming menu-bar
+service also listens on `/var/run/leakguard.sock` for the menu-bar
 app, so you can change services without typing your password each time. Only
 administrators of the Mac can talk to it: the socket belongs to the `admin`
 group, and the service checks who is calling and refuses everyone else.
@@ -139,6 +140,56 @@ route is the VPN; name it with `--via IFACE` if you have several. Run
 The earlier shell prototype in [`prototypes/macos-pf`](prototypes/macos-pf/README.md)
 is kept as a legacy reference. If you installed it, remove it with
 `sudo prototypes/macos-pf/uninstall.sh` before using `leakguard`.
+
+## Menu-bar app (macOS)
+
+> ⚠️ Early stage. Build it from a clone of this repository; it needs the
+> Xcode command line tools (`xcode-select --install`).
+
+```sh
+go build -o leakguard ./cmd/leakguard
+go build -o leakguard-menubar ./cmd/leakguard-menubar && ./leakguard-menubar
+```
+
+A shield appears in the menu bar:
+
+| Icon | Meaning |
+|---|---|
+| Filled shield | Protected: the ticked services can only use the VPN. |
+| Shield outline | Not protected, or paused. The first line of the menu says why. |
+| Shield with a slash | leakguard is not set up on this Mac (its background service is not running). |
+
+The menu shows the status, one checkbox per service (services that are not
+supported yet appear as "coming soon"), a VPN interface submenu, and
+"Pause protection" or "Resume protection". Changes need no password: the
+background service only listens to administrators of the Mac, so the app must
+run in an administrator's account. Unticking the last service pauses the
+protection.
+
+The first time, no terminal is needed. While leakguard is not set up, the
+menu already lists the services and your VPN interfaces (connect the VPN
+first; if exactly one is connected it is chosen for you). Tick the services and
+choose the VPN interface; until both are chosen, the first line says what is
+missing and "Set up leakguard…" stays disabled. Then click "Set up
+leakguard…": it runs `leakguard enable --vpn IFACE SERVICE...` once with the
+macOS administrator prompt, which protects your choice and installs the
+background service.
+
+Upgrading from an older leakguard (one installed before the menu-bar app,
+whose background service only re-applied the rules) also works from the menu:
+the first line says "Update needed", and "Set up leakguard…" updates it with
+the `leakguard` command next to the app (build it as above). If there is none,
+the menu tells you to put it there or run `sudo leakguard enable`.
+
+Anything run as administrator uses the installed copy
+`/usr/local/libexec/leakguard/leakguard` only when it is current and it, and
+every folder above it, belongs to root and nobody else can change it;
+otherwise the app refuses and asks you to reinstall with
+`sudo leakguard enable`. The `leakguard` next to the app is used only for the
+first install or to update an older one.
+
+"Quit" closes only the menu-bar app; the protection keeps running in the
+background. To turn it off, use "Pause protection" or `sudo leakguard disable`.
 
 ## Roadmap
 
