@@ -60,6 +60,10 @@ type Setup struct {
 	// Update is set when an older leakguard is installed: its background
 	// service predates the socket, so "Set up" updates it.
 	Update bool
+	// PendingVPN is the VPN interface chosen while the daemon answers but has
+	// no services yet. The app holds it and sends it with the first ticked
+	// service (see ChooseVPN and KeepPendingVPN).
+	PendingVPN string
 }
 
 // DefaultDraft is the first draft: no services, and the VPN interface when
@@ -85,7 +89,7 @@ func (d Draft) ToggleService(all []catalog.Service, id string) (Draft, error) {
 		return d, fmt.Errorf("unknown service %q", id)
 	}
 	if s.Status != catalog.StatusSupported {
-		return d, fmt.Errorf("%s is coming soon and cannot be protected yet", s.Name)
+		return d, comingSoon(s.Name)
 	}
 	ids := toggled(catalogItems(all), d.Services, id)
 	return Draft{VPNInterface: d.VPNInterface, Services: ids}, nil
@@ -98,6 +102,17 @@ func (d Draft) ChooseVPN(name string) (Draft, error) {
 		return d, err
 	}
 	return Draft{VPNInterface: name, Services: slices.Clone(d.Services)}, nil
+}
+
+func comingSoon(name string) error {
+	return fmt.Errorf("%s is coming soon and cannot be protected yet", name)
+}
+
+// onlyConnectedVPN returns the VPN interface when exactly one VPN candidate
+// is connected, and "" otherwise: guessing between several would send
+// protected traffic over the wrong interface.
+func onlyConnectedVPN(connected []string) string {
+	return DefaultDraft(connected).VPNInterface
 }
 
 // missing reports what the draft still misses, or "" when it can be set up.
@@ -205,11 +220,15 @@ func Build(st *ipc.Status, err error, candidates []string, setup Setup) Menu {
 	case st == nil:
 		return Menu{State: StateNotProtected, Status: "Checking…"}
 	}
-	m := Menu{
-		Services: serviceItems(*st),
-		VPNs:     vpnItems(*st, candidates),
-	}
 	configured := st.VPNInterface != "" && len(st.Services) > 0
+	shown := *st
+	if !configured && setup.PendingVPN != "" {
+		shown.VPNInterface, shown.VPNConnected = setup.PendingVPN, true
+	}
+	m := Menu{
+		Services: serviceItems(shown),
+		VPNs:     vpnItems(shown, candidates),
+	}
 	switch {
 	case st.Protected:
 		m.State = StateProtected
@@ -220,6 +239,9 @@ func Build(st *ipc.Status, err error, candidates []string, setup Setup) Menu {
 	case st.Reason == ipc.ReasonPaused:
 		m.State = StatePaused
 		m.Status = "Paused: the selected services are not protected"
+	case (st.Reason == ipc.ReasonNotConfigured || !configured) && setup.PendingVPN != "":
+		m.State = StateNotProtected
+		m.Status = "Now tick a service to protect through " + setup.PendingVPN
 	case st.Reason == ipc.ReasonNotConfigured || !configured:
 		m.State = StateNotProtected
 		m.Status = "Not set up yet: choose a VPN interface, then a service"
@@ -243,9 +265,9 @@ func serviceItems(st ipc.Status) []ServiceItem {
 			ID:      s.ID,
 			Label:   s.Name,
 			Checked: slices.Contains(st.Services, s.ID),
-			Enabled: s.Status == "supported",
+			Enabled: s.Status == string(catalog.StatusSupported),
 		}
-		if s.Status == "planned" {
+		if s.Status == string(catalog.StatusPlanned) {
 			item.Label += " (coming soon)"
 		}
 		items = append(items, item)
@@ -274,33 +296,74 @@ func vpnItems(st ipc.Status, candidates []string) []VPNItem {
 	return items
 }
 
-// ToggleService is the request for a click on service id. Unticking the last
-// service pauses instead of sending an empty list, which the daemon refuses.
-func ToggleService(st ipc.Status, id string) (Request, error) {
+// ToggleService is the request for a click on service id while the daemon
+// answers. Unticking the last service pauses instead of sending an empty
+// list, which the daemon refuses.
+//
+// The services go through pendingVPN when the user chose one before any
+// service (see ChooseVPN), else the saved VPN interface, else the only
+// connected VPN candidate in connected. With none of them it asks the user
+// to choose the VPN first, never guessing between several.
+func ToggleService(st ipc.Status, pendingVPN string, connected []string, id string) (Request, error) {
 	i := slices.IndexFunc(st.Catalog, func(s ipc.Service) bool { return s.ID == id })
 	if i < 0 {
 		return Request{}, fmt.Errorf("unknown service %q", id)
 	}
-	if st.Catalog[i].Status != "supported" {
-		return Request{}, fmt.Errorf("%s is coming soon and cannot be protected yet", st.Catalog[i].Name)
+	if st.Catalog[i].Status != string(catalog.StatusSupported) {
+		return Request{}, comingSoon(st.Catalog[i].Name)
 	}
 	ids := toggled(st.Catalog, st.Services, id)
 	if len(ids) == 0 {
 		return PauseRequest(), nil
 	}
-	if st.VPNInterface == "" {
+	vpn := pendingVPN
+	if vpn == "" {
+		vpn = st.VPNInterface
+	}
+	if vpn == "" {
+		vpn = onlyConnectedVPN(connected)
+	}
+	if vpn == "" {
 		return Request{}, errors.New("Choose a VPN interface first")
 	}
-	return Request{VPNInterface: st.VPNInterface, Services: ids}, nil
+	return Request{VPNInterface: vpn, Services: ids}, nil
 }
 
-// ChooseVPN is the request for a click on VPN interface name: the same
-// services through name.
-func ChooseVPN(st ipc.Status, name string) (Request, error) {
+// ChooseVPN is the click on VPN interface name while the daemon answers.
+// With services selected it is a request for the same services through name
+// (send is true). With none (the daemon has no usable configuration yet)
+// nothing is sent: the daemon would refuse an empty list, so the app holds
+// name as its pending VPN interface and sends it with the first ticked
+// service. A held name passes the same check as the firewall's.
+func ChooseVPN(st ipc.Status, name string) (req Request, send bool, err error) {
 	if len(st.Services) == 0 {
-		return Request{}, fmt.Errorf("Tick a service to protect through %s", name)
+		if err := config.CheckVPNInterface(name); err != nil {
+			return Request{}, false, err
+		}
+		return Request{}, false, nil
 	}
-	return Request{VPNInterface: name, Services: slices.Clone(st.Services)}, nil
+	return Request{VPNInterface: name, Services: slices.Clone(st.Services)}, true, nil
+}
+
+// KeepPendingVPN is the pending VPN interface after a status poll returned
+// st and err: kept only while the daemon answers without any services, and
+// dropped once it has a choice or stops answering.
+func KeepPendingVPN(st *ipc.Status, err error, pending string) string {
+	if err != nil || st == nil || len(st.Services) > 0 {
+		return ""
+	}
+	return pending
+}
+
+// ErrorLineAfterPoll is the menu's error line after a status poll that
+// returned err. A line set by the click just handled (fresh) stays for the
+// poll right after it; an older one is cleared once the daemon answers
+// again, so a past failure does not stay on the menu.
+func ErrorLineAfterPoll(line string, fresh bool, err error) string {
+	if fresh || err != nil {
+		return line
+	}
+	return ""
 }
 
 // PauseRequest is the request for "Pause protection".
@@ -322,9 +385,6 @@ func SetupNeeded(err error) bool {
 	return errors.Is(err, ipc.ErrDaemonUnavailable)
 }
 
-// notAuthorized is the daemon's answer to a peer that is not an administrator.
-const notAuthorized = "not authorized"
-
 // Explain turns an error from the daemon or the socket into a short sentence
 // for the user.
 func Explain(err error) string {
@@ -333,7 +393,7 @@ func Explain(err error) string {
 		return ""
 	case errors.Is(err, ipc.ErrDaemonUnavailable):
 		return "leakguard is not set up on this Mac (its background service is not running)"
-	case err.Error() == notAuthorized, errors.Is(err, fs.ErrPermission):
+	case errors.Is(err, ipc.ErrNotAuthorized), errors.Is(err, fs.ErrPermission):
 		return "Only administrators can change leakguard"
 	case errors.Is(err, os.ErrDeadlineExceeded):
 		return "The leakguard background service did not answer; try again"

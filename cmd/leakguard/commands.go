@@ -205,6 +205,7 @@ func (c *cli) enable(args []string) error {
 		c.warn("ignoring the saved configuration: %v", err)
 		saved = config.Config{}
 	}
+	// A new Config is never paused: enable ends a pause from the menu-bar app.
 	cfg := config.Config{VPNInterface: *vpn, Services: ids}
 	if len(cfg.Services) == 0 {
 		cfg.Services = saved.Services
@@ -267,8 +268,10 @@ func (c *cli) disable(args []string) error {
 	return nil
 }
 
-// apply is what the daemon runs. Without a valid configuration it fails and
-// leaves any loaded rules in place (fail closed).
+// apply loads the saved rules. Without a valid configuration it fails and
+// leaves any loaded rules in place (fail closed). Once the rules are loaded
+// it ends a pause from the menu-bar app, so the daemon loads them again
+// after a reboot.
 func (c *cli) apply(args []string) error {
 	if _, err := c.parse(flag.NewFlagSet("apply", flag.ContinueOnError), args, false); err != nil {
 		return err
@@ -279,6 +282,12 @@ func (c *cli) apply(args []string) error {
 	cfg, services, err := c.loadValid()
 	if err == nil {
 		err = c.firewall().Apply(cfg.VPNInterface, services)
+	}
+	if err == nil && cfg.Paused {
+		cfg.Paused = false
+		if serr := config.Save(c.configPath(), cfg); serr != nil {
+			err = fmt.Errorf("the rules are loaded, but the pause could not be cleared: %w", serr)
+		}
 	}
 	return c.logApply(cfg, err)
 }

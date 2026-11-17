@@ -13,6 +13,10 @@ import (
 // installed or not running.
 var ErrDaemonUnavailable = errors.New("the leakguard background service is not running")
 
+// ErrNotAuthorized means the daemon refused the peer: it is not root or an
+// administrator. Its text is also what the daemon sends.
+var ErrNotAuthorized = errors.New("not authorized")
+
 // Client talks to the daemon.
 type Client struct {
 	// Path is the socket path; empty means DefaultPath.
@@ -33,7 +37,7 @@ func (c Client) Set(vpn string, services []string) (Status, error) {
 // Pause removes the rules until the next Set. It returns the status after
 // the change.
 func (c Client) Pause() (Status, error) {
-	return c.do(Request{Cmd: CmdDisable})
+	return c.do(Request{Cmd: CmdPause})
 }
 
 func (c Client) do(req Request) (Status, error) {
@@ -60,7 +64,10 @@ func (c Client) do(req Request) (Status, error) {
 		}
 		return Status{}, err
 	}
-	if !resp.OK {
+	switch {
+	case !resp.OK && resp.Error == ErrNotAuthorized.Error():
+		return Status{}, ErrNotAuthorized
+	case !resp.OK:
 		return Status{}, errors.New(resp.Error)
 	}
 	return *resp.Status, nil

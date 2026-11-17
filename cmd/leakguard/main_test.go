@@ -189,6 +189,8 @@ func TestHelpListsEveryCommand(t *testing.T) {
 			"sudo leakguard serve", "asks the background service",
 			"the only\n      other connected interface",
 			"sudo leakguard enable --vpn ipsec0 anthropic",
+			"It also ends a pause from the menu-bar app.",
+			"Once they are loaded, a pause from the menu-bar app ends.",
 		}, nil)
 	}
 }
@@ -380,6 +382,40 @@ func TestApply(t *testing.T) {
 	// S4: the daemon log needs a timestamp on every run.
 	if out != "2026-11-16T15:00:00Z Protected through ipsec0: anthropic\n" {
 		t.Fatalf("stdout = %q, want one timestamped line", out)
+	}
+}
+
+// A pause from the menu-bar app must not survive the root CLI: once apply or
+// enable loads the rules, the saved config is unpaused, so the daemon loads
+// them again after a reboot.
+func TestApplyAndEnableEndAPause(t *testing.T) {
+	for _, args := range [][]string{{"apply"}, {"enable"}, {"enable", "--vpn", "ipsec0", "anthropic"}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			h := newHarness(t, true)
+			h.saveConfig(t, config.Config{VPNInterface: "ipsec0", Services: []string{"anthropic"}, Paused: true})
+			code, out, errOut := h.run(args...)
+			expect(t, code, out, errOut, 0, []string{"Protected through ipsec0"}, nil)
+			got, err := h.loadConfig(t)
+			if err != nil || got.Paused || got.VPNInterface != "ipsec0" || strings.Join(got.Services, ",") != "anthropic" {
+				t.Fatalf("saved config = %+v, %v; want ipsec0, anthropic, unpaused", got, err)
+			}
+			if !strings.Contains(strings.Join(h.pfctl.calls, "|"), "-a "+pf.Anchor+" -f -") {
+				t.Fatalf("pfctl calls = %v, want the anchor loaded", h.pfctl.calls)
+			}
+		})
+	}
+}
+
+// If apply cannot load the rules, the pause stays saved: it ends only when
+// the rules are really loaded.
+func TestApplyKeepsThePauseWhenTheRulesFail(t *testing.T) {
+	h := newHarness(t, true)
+	h.saveConfig(t, config.Config{VPNInterface: "ipsec0", Services: []string{"anthropic"}, Paused: true})
+	h.pfctl.fail = map[string]error{"-a " + pf.Anchor + " -f -": errors.New("pfctl: syntax error")}
+	code, out, errOut := h.run("apply")
+	expect(t, code, out, errOut, 1, nil, []string{"leakguard: pfctl: syntax error"})
+	if got, err := h.loadConfig(t); err != nil || !got.Paused {
+		t.Fatalf("saved config = %+v, %v; want still paused", got, err)
 	}
 }
 

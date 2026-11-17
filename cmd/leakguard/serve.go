@@ -105,7 +105,7 @@ func (s *service) handle(req ipc.Request) ipc.Response {
 	switch req.Cmd {
 	case ipc.CmdSet:
 		err = s.c.set(req.VPNInterface, req.Services)
-	case ipc.CmdDisable:
+	case ipc.CmdPause:
 		err = s.c.pause()
 	}
 	if err != nil {

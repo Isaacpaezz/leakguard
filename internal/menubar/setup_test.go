@@ -288,14 +288,20 @@ func TestSetupFailure(t *testing.T) {
 	tests := map[string]string{
 		"0:95: execution error: User canceled. (-128)\n": "Set up canceled",
 		"0:120: execution error: leakguard: name at least one service, for example: sudo leakguard enable anthropic (see leakguard services) (1)\n": "Set up failed: leakguard: name at least one service, for example: sudo leakguard enable anthropic (see leakguard services)",
-		"":                    "Set up failed",
 		"something odd\n":     "Set up failed: something odd",
 		"a\nb\nlast line\n\n": "Set up failed: last line",
 	}
 	for out, want := range tests {
-		if got := SetupFailure(out); got != want {
+		if got := SetupFailure(out, errors.New("exit status 1")); got != want {
 			t.Errorf("SetupFailure(%q) = %q, want %q", out, got, want)
 		}
+	}
+	// Without any output, the error from running osascript is the only clue.
+	if got := SetupFailure("", errors.New(`exec: "/usr/bin/osascript": no such file`)); got != `Set up failed: exec: "/usr/bin/osascript": no such file` {
+		t.Errorf("SetupFailure with empty output = %q", got)
+	}
+	if got := SetupFailure(" \n", nil); got != "Set up failed" {
+		t.Errorf("SetupFailure without output or error = %q", got)
 	}
 }
 
