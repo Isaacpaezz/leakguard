@@ -422,3 +422,23 @@ func TestClientReadsTheAnswerAfterABrokenWrite(t *testing.T) {
 		t.Fatalf("Set() = %v, want not authorized", err)
 	}
 }
+
+// A second daemon must never take the socket of one that is still running.
+func TestServerRefusesToTakeOverALiveSocket(t *testing.T) {
+	path := socketPath(t)
+	var calls atomic.Int32
+	startServer(t, &Server{Path: path, Handler: statusHandler(&calls), Authorize: allowAll, Chown: (&recorder{}).chown})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	err := (&Server{Path: path, Handler: statusHandler(new(atomic.Int32)), Authorize: allowAll,
+		Chown: (&recorder{}).chown}).Serve(ctx)
+	if err == nil || !strings.Contains(err.Error(), "already running") {
+		t.Fatalf("second Serve() = %v, want already running", err)
+	}
+	if _, err := (Client{Path: path}).Status(); err != nil {
+		t.Fatalf("first server no longer answers: %v", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("first server handled %d requests, want 1", calls.Load())
+	}
+}

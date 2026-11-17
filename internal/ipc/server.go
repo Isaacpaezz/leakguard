@@ -81,13 +81,24 @@ func (s *Server) listen() (*net.UnixListener, error) {
 	case err == nil && info.Mode()&fs.ModeSocket == 0:
 		return nil, fmt.Errorf("refusing to replace %s: it is not a socket", s.Path)
 	case err == nil:
+		// Never take the socket of a daemon that is still running: two
+		// daemons would apply rules concurrently, and closing one would
+		// unlink the other's socket.
+		if conn, err := net.DialTimeout("unix", s.Path, time.Second); err == nil {
+			conn.Close()
+			return nil, fmt.Errorf("refusing to replace %s: another leakguard daemon is already running", s.Path)
+		}
 		if err := os.Remove(s.Path); err != nil {
 			return nil, err
 		}
 	case !errors.Is(err, fs.ErrNotExist):
 		return nil, err
 	}
+	// Create the socket without any access for others, whatever umask the
+	// daemon inherited, so it is never reachable by everyone before chmod.
+	restore := restrictUmask()
 	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: s.Path, Net: "unix"})
+	restore()
 	if err != nil {
 		return nil, err
 	}
