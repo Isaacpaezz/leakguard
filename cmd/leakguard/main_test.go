@@ -186,6 +186,7 @@ func TestHelpListsEveryCommand(t *testing.T) {
 		expect(t, code, out, errOut, 0, []string{
 			"leakguard services", "leakguard interfaces", "sudo leakguard enable [--vpn IFACE] SERVICE...",
 			"sudo leakguard disable", "leakguard status", "leakguard test [--via IFACE]", "sudo leakguard apply",
+			"sudo leakguard serve", "asks the background service",
 			"the only\n      other connected interface",
 			"sudo leakguard enable --vpn ipsec0 anthropic",
 		}, nil)

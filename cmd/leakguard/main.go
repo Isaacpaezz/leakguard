@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Isaacpaezz/leakguard/internal/daemon"
+	"github.com/Isaacpaezz/leakguard/internal/ipc"
 	"github.com/Isaacpaezz/leakguard/internal/pf"
 	"github.com/Isaacpaezz/leakguard/internal/probe"
 )
@@ -42,7 +43,8 @@ func systemEnv() Env {
 			}
 			return probe.ParseDefaultRoute(string(out))
 		},
-		Now: time.Now,
+		Now:    time.Now,
+		Socket: ipc.DefaultPath,
 	}
 }
 

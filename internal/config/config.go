@@ -28,6 +28,9 @@ var ErrNotConfigured = errors.New("leakguard is not configured yet")
 type Config struct {
 	VPNInterface string   `json:"vpn_interface"`
 	Services     []string `json:"services"`
+	// Paused is set when the menu-bar app pauses the protection: the daemon
+	// keeps running but does not load the rules until the next change.
+	Paused bool `json:"paused,omitempty"`
 }
 
 // The name is pasted into firewall rules, so only plain interface names pass.

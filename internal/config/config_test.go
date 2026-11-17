@@ -134,3 +134,28 @@ func TestValidInterfaceName(t *testing.T) {
 		}
 	}
 }
+
+// The menu-bar app's pause is saved, so the daemon does not re-apply the rules.
+func TestPausedRoundTripsAndIsOmittedWhenFalse(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	want := Config{VPNInterface: "utun4", Services: []string{"anthropic"}, Paused: true}
+	if err := Save(path, want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("Load() = %+v, %v; want %+v", got, err, want)
+	}
+	want.Paused = false
+	Save(path, want)
+	if data, _ := os.ReadFile(path); strings.Contains(string(data), "paused") {
+		t.Fatalf("an unpaused config mentions paused:\n%s", data)
+	}
+	if err := want.Validate(testCatalog); err != nil {
+		t.Fatalf("Validate() = %v", err)
+	}
+	want.Paused = true
+	if err := want.Validate(testCatalog); err != nil {
+		t.Fatalf("Validate() of a paused config = %v", err)
+	}
+}

@@ -13,6 +13,7 @@ import (
 	"github.com/Isaacpaezz/leakguard/internal/catalog"
 	"github.com/Isaacpaezz/leakguard/internal/config"
 	"github.com/Isaacpaezz/leakguard/internal/daemon"
+	"github.com/Isaacpaezz/leakguard/internal/ipc"
 	"github.com/Isaacpaezz/leakguard/internal/pf"
 	"github.com/Isaacpaezz/leakguard/internal/probe"
 )
@@ -275,13 +276,18 @@ func (c *cli) apply(args []string) error {
 	if err := c.requireRoot("apply"); err != nil {
 		return err
 	}
-	// The daemon's output goes to daemon.LogPath; every line is timestamped
-	// so "status" can show when the last run happened and how it ended.
-	stamp := c.now().Format(time.RFC3339)
 	cfg, services, err := c.loadValid()
 	if err == nil {
 		err = c.firewall().Apply(cfg.VPNInterface, services)
 	}
+	return c.logApply(cfg, err)
+}
+
+// logApply prints the result of one apply. The daemon's output goes to
+// daemon.LogPath; every line is timestamped so "status" can show when the
+// last run happened and how it ended.
+func (c *cli) logApply(cfg config.Config, err error) error {
+	stamp := c.now().Format(time.RFC3339)
 	if err != nil {
 		fmt.Fprintf(c.stderr, "%s leakguard: %v\n", stamp, err)
 		return exitError{exitFailure}
@@ -300,6 +306,12 @@ func (c *cli) now() time.Time {
 func (c *cli) status(args []string) error {
 	if _, err := c.parse(flag.NewFlagSet("status", flag.ContinueOnError), args, false); err != nil {
 		return err
+	}
+	// Without root, the daemon verifies the rules for us when it answers.
+	if !c.env.IsRoot() && c.env.Socket != "" {
+		if st, err := (ipc.Client{Path: c.env.Socket}).Status(); err == nil {
+			return c.printDaemonStatus(st)
+		}
 	}
 	cfg, services, err := c.loadValid()
 	if errors.Is(err, errNotConfigured) {
@@ -328,26 +340,28 @@ func (c *cli) status(args []string) error {
 		fmt.Fprintf(w, "Firewall:\trun \"sudo leakguard status\" to verify the rules\n")
 		return w.Flush()
 	}
-	verr := func() error {
-		switch on, err := c.firewall().Enabled(); {
-		case err != nil:
-			return err
-		case !on:
-			return errors.New("pf is disabled; turn it back on with: sudo leakguard apply")
-		}
-		state, err := c.firewall().Status()
-		if err != nil {
-			return err
-		}
-		return state.Verify(cfg.VPNInterface, services)
-	}()
-	if verr != nil {
+	if verr := c.verify(cfg, services); verr != nil {
 		fmt.Fprintf(w, "Firewall:\tNOT PROTECTED: %v\n", verr)
 		w.Flush()
 		return exitError{exitFailure}
 	}
 	fmt.Fprintf(w, "Firewall:\tPROTECTED\n")
 	return w.Flush()
+}
+
+// verify checks, as root, that pf is enabled and the anchor protects services.
+func (c *cli) verify(cfg config.Config, services []catalog.Service) error {
+	switch on, err := c.firewall().Enabled(); {
+	case err != nil:
+		return err
+	case !on:
+		return errors.New("pf is disabled; turn it back on with: sudo leakguard apply")
+	}
+	state, err := c.firewall().Status()
+	if err != nil {
+		return err
+	}
+	return state.Verify(cfg.VPNInterface, services)
 }
 
 func isVPN(iface string, cfg config.Config) bool {

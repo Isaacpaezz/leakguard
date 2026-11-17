@@ -89,7 +89,21 @@ vulnerability reporting, create labels `status:needs-triage`,
    root-owned copy at `/usr/local/libexec/leakguard/leakguard` every 60 s.
    Pending: a live run by the owner (`sudo leakguard enable`, `test`,
    `disable`), since tests never touch the real firewall.
-2. Menu-bar app on macOS (Go systray) talking to the privileged service.
+2. 🚧 Menu-bar app on macOS (Go systray) talking to the privileged service.
+   Done (PR A, `feat/daemon-socket`): the LaunchDaemon runs `leakguard serve`
+   (RunAtLoad, KeepAlive) instead of a periodic `apply`. It applies the saved
+   config at start and every 30 s unless paused, and serves
+   `/var/run/leakguard.sock` (`internal/ipc`): one newline-terminated JSON
+   request and response per connection, at most 64 KiB, 5 s deadline;
+   commands `status`, `set`, `disable` (pause: flush and save
+   `"paused": true`; `set` ends it; `sudo leakguard disable` still uninstalls).
+   Authorization is twofold: the socket is `root:admin` (gid 80) mode 0660,
+   and the server reads `LOCAL_PEERCRED` and refuses peers that are not uid 0
+   or in group 80. Other platforms refuse every peer. One mutex serializes
+   the apply loop and requests. `leakguard status` without root asks the
+   socket and falls back to reading the files.
+   Pending (PR B): `cmd/leakguard-menubar` with `fyne.io/systray`, and a live
+   check by the owner.
 3. Linux `nftables` backend and tray app.
 4. Windows backend and tray app.
 5. Self-updating catalog: a scheduled workflow refreshes ranges from their

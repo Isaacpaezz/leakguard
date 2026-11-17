@@ -16,11 +16,12 @@ VPN Bypass: a tray or menu-bar icon plus service checkboxes.
 | Path | What it is |
 |---|---|
 | `catalog/services/*.json` | Service catalog: IP ranges, domains, sources. One file per service; the file name must equal `<id>.json`. |
-| `cmd/leakguard` | The CLI: `services`, `interfaces`, `enable`, `disable`, `status`, `test`, `apply`. `main` is a thin wrapper over a testable `run` with an injected `Env`. |
+| `cmd/leakguard` | The CLI: `services`, `interfaces`, `enable`, `disable`, `status`, `test`, `apply`, `serve` (the daemon). `main` is a thin wrapper over a testable `run` with an injected `Env`. |
+| `internal/ipc` | Socket protocol between the root daemon and the apps: one JSON request and response per connection, strict decoding, peer check (root or group `admin` only). |
 | `internal/catalog` | Loads and validates the catalog, embedded in the binary. The CLI and the future tray app reuse it. |
 | `internal/config` | The user's VPN interface and services; load, save, validate, VPN interface candidates. |
 | `internal/pf` | macOS `pf` backend: renders, applies, flushes and verifies the `com.apple/250.leakguard` anchor. |
-| `internal/daemon` | macOS LaunchDaemon `dev.leakguard`: root-owned binary copy, plist, `launchctl`. |
+| `internal/daemon` | macOS LaunchDaemon `dev.leakguard` (runs `leakguard serve`, KeepAlive): root-owned binary copy, plist, `launchctl`. |
 | `internal/probe` | `leakguard test`: connects to protected addresses outside the VPN and expects a refusal. |
 | `internal/readme`, `tools/readmegen` | Generate the README landing sections. |
 | `prototypes/macos-pf` | Working macOS `pf` prototype. Reference only; do not extend it. |

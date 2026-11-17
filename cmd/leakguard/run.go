@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"strings"
 	"time"
 
@@ -44,6 +46,20 @@ type Env struct {
 	Dial             probe.Dialer
 	DefaultInterface func() (string, error)
 	Now              func() time.Time // nil means time.Now
+
+	// Socket is the daemon socket: "serve" listens on it and "status"
+	// without root asks it. Empty means there is no daemon to ask.
+	Socket string
+	// ChownSocket gives the socket to root:admin. Nil means os.Chown.
+	ChownSocket func(path string, uid, gid int) error
+	// Authorize checks a peer of the socket. Nil means the ipc peer check.
+	Authorize func(net.Conn) error
+	// ApplyEvery is how often "serve" re-applies the rules. Zero means
+	// applyInterval.
+	ApplyEvery time.Duration
+	// ServeContext returns the context that stops "serve". Nil means
+	// SIGINT or SIGTERM.
+	ServeContext func() (context.Context, context.CancelFunc)
 }
 
 const usage = `leakguard keeps the services you choose off your real connection:
@@ -62,16 +78,22 @@ Usage:
   sudo leakguard disable
       Turn the protection off. Your choices are kept for the next enable.
   leakguard status
-      Show what is protected and the last background run. With sudo it
-      also verifies that pf is enabled and the firewall rules are loaded.
+      Show what is protected and the last background run. Without sudo
+      it asks the background service, which verifies as root that pf is
+      enabled and the firewall rules are loaded; with sudo, or when the
+      service does not answer, it reads the saved settings itself.
   leakguard test [--via IFACE]
       Prove that protected services are blocked outside the VPN by
       connecting through your real connection: IFACE, or the interface of
       the default route, or, when the default route is the VPN, the only
       other connected interface. Every connection must fail.
   sudo leakguard apply
-      Re-apply the saved rules. The background service runs this and
-      logs each run to /Library/Logs/leakguard.log.
+      Re-apply the saved rules now, without the background service.
+  sudo leakguard serve
+      Run the background service that enable installs: it re-applies the
+      saved rules at start and every 30 seconds, logs each run to
+      /Library/Logs/leakguard.log, and answers the menu-bar app on
+      /var/run/leakguard.sock. Only administrators can talk to it.
   leakguard help
       Show this help.
 
@@ -110,6 +132,7 @@ var commands = []command{
 	{"apply", (*cli).apply},
 	{"status", (*cli).status},
 	{"test", (*cli).test},
+	{"serve", (*cli).serve},
 }
 
 type cli struct {

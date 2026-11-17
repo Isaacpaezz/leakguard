@@ -73,14 +73,20 @@ func TestPlist(t *testing.T) {
 	got := Plist("/usr/local/libexec/leakguard/leakguard")
 	for _, want := range []string{
 		"<key>Label</key>\n\t<string>dev.leakguard</string>",
-		"<array>\n\t\t<string>/usr/local/libexec/leakguard/leakguard</string>\n\t\t<string>apply</string>\n\t</array>",
+		"<array>\n\t\t<string>/usr/local/libexec/leakguard/leakguard</string>\n\t\t<string>serve</string>\n\t</array>",
 		"<key>RunAtLoad</key>\n\t<true/>",
-		"<key>StartInterval</key>\n\t<integer>60</integer>",
+		"<key>KeepAlive</key>\n\t<true/>",
 		"<key>StandardOutPath</key>\n\t<string>/Library/Logs/leakguard.log</string>",
 		"<key>StandardErrorPath</key>\n\t<string>/Library/Logs/leakguard.log</string>",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("Plist() is missing %q:\n%s", want, got)
+		}
+	}
+	// serve runs for good and re-applies the rules itself.
+	for _, gone := range []string{"StartInterval", "<string>apply</string>"} {
+		if strings.Contains(got, gone) {
+			t.Errorf("Plist() still has %q:\n%s", gone, got)
 		}
 	}
 }
