@@ -28,8 +28,8 @@ import (
 
 const (
 	pollEvery = 3 * time.Second
-	// lineLength bounds the status and error lines, in characters.
-	lineLength = 70
+	// lineLength bounds the status and error lines, in runes.
+	lineLength = menubar.MenuLineLength
 )
 
 func main() {

@@ -3,6 +3,7 @@ package menubar
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // S4: the Mac's first preferred language decides.
@@ -66,6 +67,20 @@ func TestList(t *testing.T) {
 	for _, tc := range tests {
 		if got := tc.l.list(tc.names); got != tc.want {
 			t.Errorf("%s list(%v) = %q, want %q", tc.l, tc.names, got, tc.want)
+		}
+	}
+}
+
+// The menu cuts its status line at MenuLineLength runes, so no status may be
+// longer (S5: the status must read in full, in both languages).
+func TestStatusFitsMenuLine(t *testing.T) {
+	statuses := []Msg{msgStatusChecking, msgStatusNotSetUp, msgStatusUpdate, msgStatusProtected,
+		msgStatusProtectedOffline, msgStatusOffline, msgStatusPaused, msgStatusNotProtected}
+	for _, l := range []Lang{Spanish, English} {
+		for _, m := range statuses {
+			if s := l.Text(m); utf8.RuneCountInString(s) > MenuLineLength {
+				t.Errorf("%v status %q has %d runes, more than %d", l, s, utf8.RuneCountInString(s), MenuLineLength)
+			}
 		}
 	}
 }

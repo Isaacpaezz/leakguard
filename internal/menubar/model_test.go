@@ -116,8 +116,8 @@ func TestBuild(t *testing.T) {
 			lang: Spanish,
 			want: Menu{
 				State:     StateProtected,
-				Status:    "Protegido: tu VPN está desconectada, así que estos servicios no se conectan",
-				Tooltip:   "leakguard: Protegido: tu VPN está desconectada, así que estos servicios no se conectan · VPN: ipsec0",
+				Status:    "Protegido: tu VPN está desconectada y estos servicios no conectan",
+				Tooltip:   "leakguard: Protegido: tu VPN está desconectada y estos servicios no conectan · VPN: ipsec0",
 				Services:  services(Spanish, "anthropic"),
 				ChangeVPN: true,
 				Toggle:    pauseES,

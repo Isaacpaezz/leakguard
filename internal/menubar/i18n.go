@@ -117,6 +117,9 @@ type text struct{ es, en string }
 
 // messages holds every string in both languages; a test checks that none is
 // missing or empty.
+// MenuLineLength bounds the status and error lines of the menu, in runes.
+const MenuLineLength = 70
+
 var messages = [msgCount]text{
 	MsgMenuSetUp:          {"Configurar leakguard (3 pasos)…", "Set up leakguard (3 steps)…"},
 	MsgMenuSetUpTip:       {"Te guía en 3 pasos: qué proteger, tu VPN y activar la protección", "Guides you in 3 steps: what to protect, your VPN, and turning the protection on"},
@@ -137,7 +140,7 @@ var messages = [msgCount]text{
 	msgStatusNotSetUp:         {"leakguard todavía no está configurado", "leakguard is not set up yet"},
 	msgStatusUpdate:           {"Hay que actualizar leakguard: toca Configurar", "leakguard needs an update: click Set up"},
 	msgStatusProtected:        {"Protegido", "Protected"},
-	msgStatusProtectedOffline: {"Protegido: tu VPN está desconectada, así que estos servicios no se conectan", "Protected: your VPN is disconnected, so these services are offline"},
+	msgStatusProtectedOffline: {"Protegido: tu VPN está desconectada y estos servicios no conectan", "Protected: your VPN is disconnected, so these services are offline"},
 	msgStatusOffline:          {"Sin protección: tu VPN está desconectada", "Not protected: your VPN is disconnected"},
 	msgStatusPaused:           {"En pausa", "Paused"},
 	msgStatusNotProtected:     {"Sin protección: leakguard no pudo comprobar sus reglas", "Not protected: leakguard could not verify its rules"},
