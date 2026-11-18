@@ -75,6 +75,9 @@ const (
 	msgCLINotRootOwned
 	msgCLIUpdate
 	msgCLIMissing
+	msgErrUnsafeCLIPath
+	msgErrInvalidChoice
+	msgErrUnexpectedAnswer
 
 	msgStepTitle
 	msgChangeVPNTitle
@@ -86,6 +89,7 @@ const (
 	msgButtonList
 	msgButtonOK
 	msgButtonUseVPN
+	msgButtonChooseAnother
 	msgStep1
 	msgStep1ComingSoon
 	msgStep1NoServices
@@ -104,6 +108,7 @@ const (
 	msgChangeVPNDone
 	msgActivateFailed
 	msgChangeVPNFailed
+	msgWizardFailed
 	msgAnd
 	msgKindVPN
 	msgKindIPsec
@@ -115,11 +120,11 @@ const (
 
 type text struct{ es, en string }
 
-// messages holds every string in both languages; a test checks that none is
-// missing or empty.
 // MenuLineLength bounds the status and error lines of the menu, in runes.
 const MenuLineLength = 70
 
+// messages holds every string in both languages; a test checks that none is
+// missing or empty.
 var messages = [msgCount]text{
 	MsgMenuSetUp:          {"Configurar leakguard (3 pasos)…", "Set up leakguard (3 steps)…"},
 	MsgMenuSetUpTip:       {"Te guía en 3 pasos: qué proteger, tu VPN y activar la protección", "Guides you in 3 steps: what to protect, your VPN, and turning the protection on"},
@@ -159,6 +164,9 @@ var messages = [msgCount]text{
 	msgCLINotRootOwned:      {"El leakguard instalado no pertenece a root. Reinstálalo con: sudo leakguard enable", "The installed leakguard is not owned by root. Reinstall it with: sudo leakguard enable"},
 	msgCLIUpdate:            {"Para actualizar leakguard, pon el nuevo comando leakguard junto a esta app o ejecuta: sudo leakguard enable", "To update leakguard, put the new leakguard command next to this app, or run: sudo leakguard enable"},
 	msgCLIMissing:           {"Pon el comando leakguard junto a esta app e inténtalo de nuevo", "Put the leakguard command next to this app, then try again"},
+	msgErrUnsafeCLIPath:     {"No se puede usar el comando leakguard que está junto a esta app: su ubicación no es válida", "The leakguard command next to this app cannot be used: its location is not valid"},
+	msgErrInvalidChoice:     {"La VPN o los servicios elegidos no son válidos; vuelve a configurar leakguard", "The chosen VPN or services are not valid; set up leakguard again"},
+	msgErrUnexpectedAnswer:  {"La ventana respondió algo inesperado", "The dialog gave an unexpected answer"},
 	msgStepTitle:            {"Paso %d de 3", "Step %d of 3"},
 	msgChangeVPNTitle:       {"Cambiar de VPN", "Change VPN"},
 	msgAppTitle:             {"leakguard", "leakguard"},
@@ -169,12 +177,13 @@ var messages = [msgCount]text{
 	msgButtonList:           {"Elegir de una lista", "Choose from a list"},
 	msgButtonOK:             {"Aceptar", "OK"},
 	msgButtonUseVPN:         {"Usar esta VPN", "Use this VPN"},
+	msgButtonChooseAnother:  {"Elegir otra", "Choose another"},
 	msgStep1:                {"Elige qué quieres proteger.\n\nEstos servicios solo podrán usar tu VPN: si tu VPN se cae, dejan de conectarse hasta que vuelva.", "Choose what to protect.\n\nThese services may only use your VPN: if your VPN drops, they stop connecting until it is back."},
 	msgStep1ComingSoon:      {"Próximamente: %s.", "Coming soon: %s."},
 	msgStep1NoServices:      {"Todavía no hay servicios que se puedan proteger.", "There are no services that can be protected yet."},
 	msgStep2Disconnect:      {"Ahora vamos a encontrar tu VPN.\n\nDesconecta tu VPN y toca Siguiente.", "Now let's find your VPN.\n\nDisconnect your VPN, then click Next."},
 	msgStep2Connect:         {"Ahora conéctala y toca Siguiente.", "Now connect it again, then click Next."},
-	msgStep2Found:           {"¡Encontramos tu VPN!", "We found your VPN!"},
+	msgStep2Found:           {"¡Encontramos tu VPN!\n\nLa que conectaste aparece como: %s.\n\nSi no es la tuya, toca Elegir otra.", "We found your VPN!\n\nThe one you connected shows up as: %s.\n\nIf it is not yours, click Choose another."},
 	msgStep2None:            {"No vimos aparecer una VPN nueva.\n\nDesconecta tu VPN cuando te lo pidamos y conéctala en el paso siguiente; luego toca Reintentar. También puedes elegirla de una lista.", "We didn't see a new VPN appear.\n\nDisconnect your VPN when we ask, and connect it again in the next dialog; then click Retry. You can also choose it from a list."},
 	msgStep2NoneConnected:   {"No hay ninguna VPN conectada.\n\nConecta tu VPN y toca Reintentar.", "No VPN is connected.\n\nConnect your VPN, then click Retry."},
 	msgStep2List:            {"¿Cuál es tu VPN? Elige la que conectaste.", "Which one is your VPN? Choose the one you connected."},
@@ -185,8 +194,9 @@ var messages = [msgCount]text{
 	msgDoneMany:             {"Listo: %s están protegidos. Si tu VPN se cae, dejan de conectarse hasta que vuelva.", "Done: %s are protected. If your VPN drops, they stop connecting until it is back."},
 	msgDoneShield:           {"El escudo lleno en la barra de menú significa que estás protegido.", "A filled shield in the menu bar means you are protected."},
 	msgChangeVPNDone:        {"Listo: leakguard ahora usa esta VPN.", "Done: leakguard now uses this VPN."},
-	msgActivateFailed:       {"No se pudo activar la protección.\n\n%s", "Could not turn on the protection.\n\n%s"},
-	msgChangeVPNFailed:      {"No se pudo cambiar de VPN.\n\n%s", "Could not change the VPN.\n\n%s"},
+	msgActivateFailed:       {"No se pudo activar la protección: %s\n\nPuedes intentarlo de nuevo desde el menú.", "Could not turn on the protection: %s\n\nYou can try again from the menu."},
+	msgChangeVPNFailed:      {"No se pudo cambiar de VPN: %s\n\nPuedes intentarlo de nuevo desde el menú.", "Could not change the VPN: %s\n\nYou can try again from the menu."},
+	msgWizardFailed:         {"Algo salió mal: %s\n\nPuedes intentarlo de nuevo desde el menú.", "Something went wrong: %s\n\nYou can try again from the menu."},
 	msgAnd:                  {"y", "and"},
 	msgKindVPN:              {"VPN", "VPN"},
 	msgKindIPsec:            {"VPN IPsec", "IPsec VPN"},

@@ -434,6 +434,37 @@ func TestExplain(t *testing.T) {
 	}
 }
 
+// R3-002: the setup opens by itself only on the first poll of a launch, and
+// only when leakguard is not installed or an older install needs updating;
+// a daemon that restarts later never opens it.
+func TestShouldAutoOpen(t *testing.T) {
+	down := fmt.Errorf("%w (dial)", ipc.ErrDaemonUnavailable)
+	slow := fmt.Errorf("read: %w", os.ErrDeadlineExceeded)
+	tests := []struct {
+		name            string
+		first, answered bool
+		err             error
+		inst            Install
+		want            bool
+	}{
+		{"first poll, nothing installed", true, false, down, InstallNone, true},
+		{"first poll, older install needs updating", true, false, down, InstallOld, true},
+		{"first poll, installed service still starting", true, false, down, InstallCurrent, false},
+		{"first poll, daemon answers", true, false, nil, InstallCurrent, false},
+		{"first poll, daemon refuses", true, false, ipc.ErrNotAuthorized, InstallNone, false},
+		{"first poll, daemon slow", true, false, slow, InstallNone, false},
+		{"later poll, daemon restarting after it answered", false, true, down, InstallNone, false},
+		{"later poll, daemon restarting, current install", false, true, down, InstallCurrent, false},
+		{"later poll, never answered", false, false, down, InstallNone, false},
+		{"daemon answered before", true, true, down, InstallNone, false},
+	}
+	for _, tc := range tests {
+		if got := ShouldAutoOpen(tc.first, tc.answered, tc.err, tc.inst); got != tc.want {
+			t.Errorf("%s: ShouldAutoOpen = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestSetupNeeded(t *testing.T) {
 	tests := []struct {
 		name string

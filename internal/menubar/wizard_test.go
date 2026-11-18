@@ -2,10 +2,14 @@ package menubar
 
 import (
 	"errors"
+	"fmt"
+	"os"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/Isaacpaezz/leakguard/internal/ipc"
 )
 
 // answer is the scripted reaction to one dialog: a button for Ask, the picked
@@ -105,7 +109,7 @@ func runWizard(t *testing.T, l Lang, password bool, activateErr error, snaps [][
 func TestWizardHappyPathOneService(t *testing.T) {
 	r := runWizard(t, Spanish, true, nil,
 		[][]string{{}, {"ipsec0"}},
-		pick(0), click(1), click(1), click(1), click(1), click(0))
+		pick(0), click(1), click(1), click(2), click(1), click(0))
 	if r.err != nil {
 		t.Fatalf("Run() = %v", r.err)
 	}
@@ -116,7 +120,7 @@ func TestWizardHappyPathOneService(t *testing.T) {
 		"list: Paso 1 de 3|Elige qué quieres proteger.\n\nEstos servicios solo podrán usar tu VPN: si tu VPN se cae, dejan de conectarse hasta que vuelva.\n\nPróximamente: OpenAI.|Anthropic (Claude),Mistral",
 		"ask: Paso 2 de 3|Ahora vamos a encontrar tu VPN.\n\nDesconecta tu VPN y toca Siguiente.|Cancelar,Siguiente",
 		"ask: Paso 2 de 3|Ahora conéctala y toca Siguiente.|Cancelar,Siguiente",
-		"ask: Paso 2 de 3|¡Encontramos tu VPN!|Cancelar,Siguiente",
+		"ask: Paso 2 de 3|¡Encontramos tu VPN!\n\nLa que conectaste aparece como: VPN IPsec.\n\nSi no es la tuya, toca Elegir otra.|Cancelar,Elegir otra,Siguiente",
 		"ask: Paso 3 de 3|Activar la protección.\n\nTu Mac te va a pedir tu contraseña: es la misma que usas para entrar a la Mac. La necesitamos una sola vez, para instalar el servicio que bloquea Anthropic (Claude) si tu VPN se cae.|Cancelar,Activar",
 		"ask: leakguard|Listo: Anthropic (Claude) está protegido. Si tu VPN se cae, Anthropic (Claude) deja de conectarse hasta que vuelva.\n\nEl escudo lleno en la barra de menú significa que estás protegido.|Aceptar",
 	}
@@ -146,7 +150,7 @@ func TestWizardHappyPathOneService(t *testing.T) {
 func TestWizardSeveralServicesInEnglish(t *testing.T) {
 	r := runWizard(t, English, true, nil,
 		[][]string{{"utun3"}, {"utun3", "ipsec0"}},
-		pick(1, 0), click(1), click(1), click(1), click(1), click(0))
+		pick(1, 0), click(1), click(1), click(2), click(1), click(0))
 	if r.err != nil {
 		t.Fatalf("Run() = %v", r.err)
 	}
@@ -162,6 +166,9 @@ func TestWizardSeveralServicesInEnglish(t *testing.T) {
 	}
 	if got, want := asks[4].Text, "Done: Anthropic (Claude) and Mistral are protected. If your VPN drops, they stop connecting until it is back.\n\nA filled shield in the menu bar means you are protected."; got != want {
 		t.Errorf("done = %q\nwant  %q", got, want)
+	}
+	if got, want := shown(asks[2]), "Step 2 of 3|We found your VPN!\n\nThe one you connected shows up as: IPsec VPN.\n\nIf it is not yours, click Choose another.|Cancel,Choose another,Next"; got != want {
+		t.Errorf("found = %q\nwant    %q", got, want)
 	}
 	if got := r.dialogs.lists[0].Text; !strings.HasSuffix(got, "\n\nComing soon: OpenAI.") {
 		t.Errorf("step 1 text = %q, want the coming-soon line", got)
@@ -179,7 +186,7 @@ func TestWizardWithoutPassword(t *testing.T) {
 	} {
 		r := runWizard(t, tc.l, false, nil,
 			[][]string{{}, {"wg0"}},
-			pick(1), click(1), click(1), click(1), click(1), click(0))
+			pick(1), click(1), click(1), click(2), click(1), click(0))
 		if r.err != nil || len(r.activated) != 1 || r.activated[0].VPNInterface != "wg0" {
 			t.Fatalf("%s: Run() = %v, activated %+v", tc.l, r.err, r.activated)
 		}
@@ -206,8 +213,9 @@ func TestWizardCancelAtEachStep(t *testing.T) {
 		{"connect", found[:1], []answer{pick(0), click(1), cancelAsk()}, 3},
 		{"found", found, []answer{pick(0), click(1), click(1), cancelAsk()}, 4},
 		{"found, cancel button", found, []answer{pick(0), click(1), click(1), click(0)}, 4},
-		{"step 3", found, []answer{pick(0), click(1), click(1), click(1), cancelAsk()}, 5},
-		{"step 3, cancel button", found, []answer{pick(0), click(1), click(1), click(1), click(0)}, 5},
+		{"list after choose another", found, []answer{pick(0), click(1), click(1), click(1), cancelChoose()}, 5},
+		{"step 3", found, []answer{pick(0), click(1), click(1), click(2), cancelAsk()}, 5},
+		{"step 3, cancel button", found, []answer{pick(0), click(1), click(1), click(2), click(0)}, 5},
 		{"no new VPN", none[:2], []answer{pick(0), click(1), click(1), click(0)}, 4},
 		{"list after no new VPN", none, []answer{pick(0), click(1), click(1), click(1), cancelChoose()}, 5},
 		{"list of several new VPNs", several, []answer{pick(0), click(1), click(1), cancelChoose()}, 4},
@@ -229,22 +237,135 @@ func TestWizardCancelAtEachStep(t *testing.T) {
 }
 
 // S3, S6: cancelling the administrator prompt shows nothing more; a failure
-// is explained.
+// is explained in the user's language.
 func TestWizardActivateFails(t *testing.T) {
 	r := runWizard(t, Spanish, true, ErrCancelled, [][]string{{}, {"ipsec0"}},
-		pick(0), click(1), click(1), click(1), click(1))
+		pick(0), click(1), click(1), click(2), click(1))
 	if !errors.Is(r.err, ErrCancelled) || len(r.activated) != 1 {
 		t.Errorf("admin prompt cancelled: Run() = %v, activated %d", r.err, len(r.activated))
 	}
-	boom := errors.New("Set up failed: boom")
-	r = runWizard(t, Spanish, true, boom, [][]string{{}, {"ipsec0"}},
-		pick(0), click(1), click(1), click(1), click(1), click(0))
-	if !errors.Is(r.err, boom) {
-		t.Errorf("Run() = %v, want %v", r.err, boom)
+	if got := WizardMessage(Spanish, r.err); got != "" {
+		t.Errorf("WizardMessage(cancel) = %q, want nothing", got)
 	}
-	last := r.dialogs.asks[len(r.dialogs.asks)-1]
-	if want := "leakguard|No se pudo activar la protección.\n\nSet up failed: boom|Aceptar"; shown(last) != want {
-		t.Errorf("error dialog = %q, want %q", shown(last), want)
+	tests := []struct {
+		l    Lang
+		err  error
+		want string
+	}{
+		{Spanish, errors.New("Set up failed: boom"), "leakguard|No se pudo activar la protección: Set up failed: boom\n\nPuedes intentarlo de nuevo desde el menú.|Aceptar"},
+		{English, ErrNoCLI, "leakguard|Could not turn on the protection: Put the leakguard command next to this app, then try again\n\nYou can try again from the menu.|OK"},
+		{Spanish, ipc.ErrNotAuthorized, "leakguard|No se pudo activar la protección: Solo un administrador de la Mac puede cambiar leakguard\n\nPuedes intentarlo de nuevo desde el menú.|Aceptar"},
+	}
+	for _, tc := range tests {
+		r = runWizard(t, tc.l, true, tc.err, [][]string{{}, {"ipsec0"}},
+			pick(0), click(1), click(1), click(2), click(1), click(0))
+		if !errors.Is(r.err, tc.err) {
+			t.Errorf("Run() = %v, want %v", r.err, tc.err)
+		}
+		last := r.dialogs.asks[len(r.dialogs.asks)-1]
+		if shown(last) != tc.want {
+			t.Errorf("error dialog = %q\nwant           %q", shown(last), tc.want)
+		}
+		if got, want := WizardMessage(tc.l, r.err), strings.Split(tc.want, "|")[1]; got != want {
+			t.Errorf("WizardMessage = %q, want %q", got, want)
+		}
+	}
+}
+
+// R3-001: a failing dialog or an unexpected answer is never silent: the
+// wizard says so in a dialog, and WizardMessage gives the menu its line.
+func TestWizardShowsErrors(t *testing.T) {
+	broken := errors.New("osascript broke")
+	_, odd := ParseButton("Otro\n", Dialog{Buttons: []string{"Cancelar", "Siguiente"}})
+	tests := []struct {
+		name    string
+		l       Lang
+		snaps   [][]string
+		answers []answer
+		err     error
+		want    string
+	}{
+		{
+			name:    "step 1 list fails",
+			l:       Spanish,
+			answers: []answer{{choose: true, err: broken}, click(0)},
+			err:     broken,
+			want:    "leakguard|Algo salió mal: osascript broke\n\nPuedes intentarlo de nuevo desde el menú.|Aceptar",
+		},
+		{
+			name:    "unexpected answer in step 2",
+			l:       Spanish,
+			answers: []answer{pick(0), {err: odd}, click(0)},
+			err:     odd,
+			want:    "leakguard|Algo salió mal: La ventana respondió algo inesperado\n\nPuedes intentarlo de nuevo desde el menú.|Aceptar",
+		},
+		{
+			name:    "unexpected answer in English",
+			l:       English,
+			snaps:   [][]string{{}},
+			answers: []answer{pick(0), click(1), {err: odd}, click(0)},
+			err:     odd,
+			want:    "leakguard|Something went wrong: The dialog gave an unexpected answer\n\nYou can try again from the menu.|OK",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := runWizard(t, tc.l, true, nil, tc.snaps, tc.answers...)
+			if !errors.Is(r.err, tc.err) || len(r.activated) != 0 {
+				t.Fatalf("Run() = %v, activated %+v; want %v and nothing sent", r.err, r.activated, tc.err)
+			}
+			if len(r.dialogs.asks) == 0 {
+				t.Fatalf("no error dialog shown, want %q", tc.want)
+			}
+			last := r.dialogs.asks[len(r.dialogs.asks)-1]
+			if shown(last) != tc.want {
+				t.Errorf("error dialog = %q\nwant           %q", shown(last), tc.want)
+			}
+			if got, want := WizardMessage(tc.l, r.err), strings.Split(tc.want, "|")[1]; got != want {
+				t.Errorf("WizardMessage = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// R3-001: the message for the menu and the dialog; a cancel says nothing.
+func TestWizardMessage(t *testing.T) {
+	tests := []struct {
+		l    Lang
+		err  error
+		want string
+	}{
+		{Spanish, nil, ""},
+		{Spanish, ErrCancelled, ""},
+		{English, fmt.Errorf("admin prompt: %w", ErrCancelled), ""},
+		{Spanish, errors.New("osascript broke\nmore"), "Algo salió mal: osascript broke\n\nPuedes intentarlo de nuevo desde el menú."},
+		{English, errors.New("osascript broke"), "Something went wrong: osascript broke\n\nYou can try again from the menu."},
+		{Spanish, fmt.Errorf("read: %w", os.ErrDeadlineExceeded), "Algo salió mal: El servicio de leakguard no respondió; inténtalo de nuevo\n\nPuedes intentarlo de nuevo desde el menú."},
+		{English, ipc.ErrNotAuthorized, "Something went wrong: Only administrators can change leakguard\n\nYou can try again from the menu."},
+	}
+	for _, tc := range tests {
+		if got := WizardMessage(tc.l, tc.err); got != tc.want {
+			t.Errorf("WizardMessage(%s, %v) = %q, want %q", tc.l, tc.err, got, tc.want)
+		}
+	}
+}
+
+// S1, S6: the found VPN is named by its kind only, and the user may still
+// choose another one from the list of connected VPNs.
+func TestWizardFoundChooseAnother(t *testing.T) {
+	r := runWizard(t, Spanish, true, nil, [][]string{{"utun4"}, {"utun4", "ipsec0"}},
+		pick(0), click(1), click(1), click(1), pick(0), click(1), click(0))
+	if r.err != nil {
+		t.Fatalf("Run() = %v", r.err)
+	}
+	if want := []Draft{{VPNInterface: "utun4", Services: []string{"anthropic"}}}; !reflect.DeepEqual(r.activated, want) {
+		t.Fatalf("activated %+v, want %+v", r.activated, want)
+	}
+	if got, want := listed(r.dialogs.lists[1]), "Paso 2 de 3|¿Cuál es tu VPN? Elige la que conectaste.|VPN (utun4),VPN IPsec (ipsec0)"; got != want {
+		t.Errorf("list = %q, want %q", got, want)
+	}
+	if r.dialogs.lists[1].Multiple {
+		t.Errorf("the VPN list allows several choices")
 	}
 }
 
@@ -260,7 +381,7 @@ func TestWizardDetection(t *testing.T) {
 		{
 			name:    "none, retry, found",
 			snaps:   [][]string{{"ipsec0"}, {"ipsec0"}, {}, {"ipsec0"}},
-			answers: []answer{click(2), click(1), click(1), click(1)},
+			answers: []answer{click(2), click(1), click(1), click(2)},
 			want:    "ipsec0",
 		},
 		{
@@ -273,7 +394,7 @@ func TestWizardDetection(t *testing.T) {
 		{
 			name:    "none, list empty, retry, found",
 			snaps:   [][]string{{}, {}, {}, {}, {"utun4"}},
-			answers: []answer{click(1), click(1), click(1), click(1), click(1)},
+			answers: []answer{click(1), click(1), click(1), click(1), click(2)},
 			want:    "utun4",
 		},
 		{
@@ -286,7 +407,7 @@ func TestWizardDetection(t *testing.T) {
 		{
 			name:    "real connections and unsafe names are never VPNs",
 			snaps:   [][]string{{}, {"en0", "utun4; id", "lo0"}, {}, {"utun4", "utun4"}},
-			answers: []answer{click(2), click(1), click(1), click(1)},
+			answers: []answer{click(2), click(1), click(1), click(2)},
 			want:    "utun4",
 		},
 	}
@@ -334,7 +455,7 @@ func TestVPNLabels(t *testing.T) {
 // S5: "Change VPN" runs step 2 only and saves without a password.
 func TestWizardChangeVPN(t *testing.T) {
 	var saved []string
-	f := &fakeDialogs{t: t, answers: []answer{click(1), click(1), click(1), click(0)}}
+	f := &fakeDialogs{t: t, answers: []answer{click(1), click(1), click(2), click(0)}}
 	w := Wizard{Lang: Spanish, Dialogs: f, Catalog: fullCatalog, ConnectedVPNs: snapshots(t, []string{}, []string{"utun4"})}
 	err := w.ChangeVPN(func(vpn string) error { saved = append(saved, vpn); return nil })
 	if err != nil || !reflect.DeepEqual(saved, []string{"utun4"}) {
@@ -343,7 +464,7 @@ func TestWizardChangeVPN(t *testing.T) {
 	want := []string{
 		"ask: Cambiar de VPN|Ahora vamos a encontrar tu VPN.\n\nDesconecta tu VPN y toca Siguiente.|Cancelar,Siguiente",
 		"ask: Cambiar de VPN|Ahora conéctala y toca Siguiente.|Cancelar,Siguiente",
-		"ask: Cambiar de VPN|¡Encontramos tu VPN!|Cancelar,Usar esta VPN",
+		"ask: Cambiar de VPN|¡Encontramos tu VPN!\n\nLa que conectaste aparece como: VPN.\n\nSi no es la tuya, toca Elegir otra.|Cancelar,Elegir otra,Usar esta VPN",
 		"ask: leakguard|Listo: leakguard ahora usa esta VPN.|Aceptar",
 	}
 	if !reflect.DeepEqual(f.all(), want) {
@@ -357,13 +478,30 @@ func TestWizardChangeVPN(t *testing.T) {
 		t.Errorf("cancelled ChangeVPN() = %v, saved %v; want ErrCancelled and nothing saved", err, saved)
 	}
 
-	boom := errors.New("Solo un administrador de la Mac puede cambiar leakguard")
-	f = &fakeDialogs{t: t, answers: []answer{click(1), click(1), click(1), click(0)}}
+	boom := fmt.Errorf("set: %w", ipc.ErrNotAuthorized)
+	f = &fakeDialogs{t: t, answers: []answer{click(1), click(1), click(2), click(0)}}
 	w = Wizard{Lang: English, Dialogs: f, Catalog: fullCatalog, ConnectedVPNs: snapshots(t, []string{}, []string{"utun4"})}
-	if err := w.ChangeVPN(func(string) error { return boom }); !errors.Is(err, boom) {
+	err = w.ChangeVPN(func(string) error { return boom })
+	if !errors.Is(err, boom) {
 		t.Errorf("ChangeVPN() = %v, want %v", err, boom)
 	}
-	if got, want := shown(f.asks[3]), "leakguard|Could not change the VPN.\n\n"+boom.Error()+"|OK"; got != want {
+	want0 := "Could not change the VPN: Only administrators can change leakguard\n\nYou can try again from the menu."
+	if got, want := shown(f.asks[3]), "leakguard|"+want0+"|OK"; got != want {
+		t.Errorf("error dialog = %q, want %q", got, want)
+	}
+	if got := WizardMessage(English, err); got != want0 {
+		t.Errorf("WizardMessage = %q, want %q", got, want0)
+	}
+
+	// R3-001: a failing dialog is said, not swallowed.
+	broken := errors.New("osascript broke")
+	f = &fakeDialogs{t: t, answers: []answer{{err: broken}, click(0)}}
+	w = Wizard{Lang: Spanish, Dialogs: f, Catalog: fullCatalog, ConnectedVPNs: snapshots(t)}
+	err = w.ChangeVPN(func(string) error { t.Fatal("save called"); return nil })
+	if !errors.Is(err, broken) {
+		t.Errorf("ChangeVPN() = %v, want %v", err, broken)
+	}
+	if got, want := shown(f.asks[1]), "leakguard|Algo salió mal: osascript broke\n\nPuedes intentarlo de nuevo desde el menú.|Aceptar"; got != want {
 		t.Errorf("error dialog = %q, want %q", got, want)
 	}
 }
@@ -379,5 +517,8 @@ func TestWizardNoSupportedServices(t *testing.T) {
 	}
 	if want := []string{"ask: leakguard|There are no services that can be protected yet.\n\nComing soon: OpenAI.|OK"}; !reflect.DeepEqual(f.all(), want) {
 		t.Errorf("dialogs = %q, want %q", f.all(), want)
+	}
+	if got, want := WizardMessage(English, err), "There are no services that can be protected yet."; got != want {
+		t.Errorf("WizardMessage = %q, want %q", got, want)
 	}
 }

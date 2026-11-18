@@ -55,13 +55,21 @@ set AppleScript's text item delimiters to ","
 return out as text`
 }
 
+// ErrUnexpectedAnswer is wrapped by ParseButton and ParseChoice when
+// osascript printed something the dialog could not have answered.
+var ErrUnexpectedAnswer = errors.New("unexpected answer")
+
+func unexpected(format string, arg string) error {
+	return kindError{ErrUnexpectedAnswer, fmt.Errorf(format, arg)}
+}
+
 // ParseButton returns the index of the button whose name DialogScript printed.
 func ParseButton(out string, d Dialog) (int, error) {
 	name := strings.TrimSuffix(out, "\n")
 	if i := slices.Index(d.Buttons, name); i >= 0 {
 		return i, nil
 	}
-	return 0, fmt.Errorf("unexpected dialog answer %q", name)
+	return 0, unexpected("unexpected dialog answer %q", name)
 }
 
 // ParseChoice returns the 0-based indexes of the items ListScript printed,
@@ -70,18 +78,18 @@ func ParseButton(out string, d Dialog) (int, error) {
 func ParseChoice(out string, l List) ([]int, error) {
 	out = strings.TrimSpace(out)
 	if out == "" {
-		return nil, errors.New("nothing was chosen")
+		return nil, kindError{ErrUnexpectedAnswer, errors.New("nothing was chosen")}
 	}
 	var picks []int
 	for _, f := range strings.Split(out, ",") {
 		n, err := strconv.Atoi(f)
 		if err != nil || n < 1 || n > len(l.Items) || slices.Contains(picks, n-1) {
-			return nil, fmt.Errorf("unexpected list answer %q", out)
+			return nil, unexpected("unexpected list answer %q", out)
 		}
 		picks = append(picks, n-1)
 	}
 	if !l.Multiple && len(picks) != 1 {
-		return nil, fmt.Errorf("unexpected list answer %q", out)
+		return nil, unexpected("unexpected list answer %q", out)
 	}
 	return picks, nil
 }

@@ -144,10 +144,17 @@ vulnerability reporting, create labels `status:needs-triage`,
    `internal/menubar/wizard.go`, driven by a `Dialogs` interface (osascript
    `display dialog` / `choose from list` in the app, a fake in tests). Step 2
    snapshots the connected VPN candidates with the VPN disconnected and then
-   connected; exactly one new interface is the VPN, otherwise the user
-   retries or chooses from a list with friendly labels ("VPN IPsec (ipsec0)").
-   It never guesses and never sends a partial choice; cancelling returns
-   `ErrCancelled` before anything is sent. Step 3 warns about the password
+   connected; exactly one new interface is the VPN, named only by its kind
+   ("VPN IPsec") with a "Choose another" button to the list; otherwise the
+   user retries or chooses from a list with friendly labels ("VPN IPsec
+   (ipsec0)"). It never guesses and never sends a partial choice; cancelling
+   returns `ErrCancelled` before anything is sent. Any other failure is shown
+   in a dialog and on the menu's error line through `menubar.WizardMessage`;
+   SetupScript, choice and dialog-driver errors wrap sentinels
+   (`ErrUnsafeCLIPath`, `ErrInvalidChoice`, `ErrUnexpectedAnswer`) that
+   `Explain` translates. The setup opens by itself only on the app's first
+   poll when the daemon is unavailable and no current install exists
+   (`menubar.ShouldAutoOpen`), so a daemon restart never reopens it. Step 3 warns about the password
    and the administrator prompt uses `with prompt`. Every user-facing string
    is in `internal/menubar/i18n.go` in Spanish and English, chosen from
    `defaults read -g AppleLanguages`. Every AppleScript string escapes

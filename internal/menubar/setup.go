@@ -22,6 +22,16 @@ var (
 	ErrNoCLI           = errors.New("Put the leakguard command next to this app, then try again")
 )
 
+// Errors SetupScript and the choice checks wrap, keeping the original text;
+// Explain says them in the user's language.
+var (
+	// ErrUnsafeCLIPath: the path of the leakguard command cannot be quoted
+	// safely for the administrator prompt.
+	ErrUnsafeCLIPath = errors.New("unsafe leakguard command path")
+	// ErrInvalidChoice: config refused the VPN or the services.
+	ErrInvalidChoice = errors.New("invalid VPN or services")
+)
+
 // FindCLI returns the leakguard CLI to run as root for "Set up leakguard…".
 //
 // The installed copy (InstalledCLI) is used only when the installed
@@ -99,17 +109,18 @@ func appleScriptString(s string) string {
 // against the catalog all; anything else is refused before quoting. Every
 // argument is quoted for the shell, then the command for AppleScript.
 func SetupScript(cli string, d Draft, all []catalog.Service, prompt string) (string, error) {
+	unsafe := func(msg string) error { return kindError{ErrUnsafeCLIPath, errors.New(msg)} }
 	if !filepath.IsAbs(cli) {
-		return "", errors.New("the leakguard command needs an absolute path")
+		return "", unsafe("the leakguard command needs an absolute path")
 	}
 	if !utf8.ValidString(cli) {
-		return "", errors.New("the path of the leakguard command is not valid UTF-8")
+		return "", unsafe("the path of the leakguard command is not valid UTF-8")
 	}
 	if strings.ContainsFunc(cli, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
-		return "", errors.New("the path of the leakguard command contains control characters")
+		return "", unsafe("the path of the leakguard command contains control characters")
 	}
 	if err := (config.Config{VPNInterface: d.VPNInterface, Services: d.Services}).Validate(all); err != nil {
-		return "", err
+		return "", invalidChoice(err)
 	}
 	words := []string{ShellQuote(cli), "enable", ShellQuote("--vpn"), ShellQuote(d.VPNInterface)}
 	for _, id := range d.Services {

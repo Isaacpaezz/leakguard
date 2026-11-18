@@ -58,9 +58,12 @@ const (
 	actWizardDone
 )
 
+// action is a click, or the end of the wizard. service is the clicked
+// service's ID; err is what the wizard returned (nil, a cancel or a failure).
 type action struct {
-	kind actionKind
-	arg  string
+	kind    actionKind
+	service string
+	err     error
 }
 
 // app keeps the state; only its loop goroutine reads or changes it.
@@ -81,8 +84,10 @@ type app struct {
 	// wizardOpen is set while the setup or "Change VPN" dialogs run in
 	// their own goroutine: one at a time, and polling goes on meanwhile.
 	wizardOpen bool
-	// autoOpened is set once the setup opened by itself on this launch.
-	autoOpened bool
+	// polled is set after the first status poll of this launch; answered
+	// once the daemon answered any poll. Both decide whether the setup opens
+	// by itself (menubar.ShouldAutoOpen).
+	polled, answered bool
 
 	catalog    []catalog.Service
 	catalogErr error
@@ -130,10 +135,16 @@ func (a *app) poll() {
 	a.errLine = menubar.ErrorLineAfterPoll(a.errLine, a.errFresh, err)
 	a.errFresh = false
 	a.draw()
-	// The first time leakguard is found not set up (or an older install
-	// needs updating), the setup opens by itself, once per launch.
-	if !a.autoOpened && a.menu.SetUp && a.catalogErr == nil {
-		a.autoOpened = true
+	// Only the first poll of this launch may open the setup by itself, and
+	// only when leakguard is not installed or needs updating; a daemon that
+	// restarts later just shows its status.
+	first, answeredBefore := !a.polled, a.answered
+	a.polled = true
+	if err == nil {
+		a.answered = true
+	}
+	if first && a.catalogErr == nil &&
+		menubar.ShouldAutoOpen(first, answeredBefore, err, menubar.InstalledState("")) {
 		a.startSetUp()
 	}
 }
@@ -148,8 +159,10 @@ func (a *app) handle(act action) {
 		a.startChangeVPN()
 		return
 	case actWizardDone:
+		// The wizard already showed a failure in a dialog; the menu keeps
+		// its first line. A cancel clears the line.
 		a.wizardOpen = false
-		a.errLine = act.arg
+		a.errLine = menubar.WizardMessage(a.lang, act.err)
 		return
 	}
 	if a.st == nil {
@@ -163,7 +176,7 @@ func (a *app) handle(act action) {
 	var err error
 	switch act.kind {
 	case actService:
-		req, err = menubar.ToggleService(a.lang, *a.st, act.arg)
+		req, err = menubar.ToggleService(a.lang, *a.st, act.service)
 	case actToggle:
 		if a.menu.Toggle.Resume {
 			req, err = menubar.ResumeRequest(a.lang, *a.st)
@@ -186,7 +199,9 @@ func (a *app) handle(act action) {
 	}
 }
 
-func (a *app) notSetUp() bool {
+// daemonUnavailable reports whether the last poll found no daemon: then the
+// setup installs it with the administrator prompt.
+func (a *app) daemonUnavailable() bool {
 	return errors.Is(a.stErr, ipc.ErrDaemonUnavailable)
 }
 
@@ -208,16 +223,16 @@ func (a *app) startSetUp() {
 		return
 	}
 	a.wizardOpen = true
-	w := a.wizard(a.notSetUp())
+	w := a.wizard(a.daemonUnavailable())
 	client, lang, all := a.client, a.lang, a.catalog
 	go func() {
-		w.Run(func(d menubar.Draft) error {
+		err := w.Run(func(d menubar.Draft) error {
 			if w.NeedsPassword {
 				return install(client, lang, all, d)
 			}
-			return save(client, lang, d)
+			return save(client, d)
 		})
-		a.actions <- action{kind: actWizardDone}
+		a.actions <- action{kind: actWizardDone, err: err}
 	}()
 }
 
@@ -230,36 +245,36 @@ func (a *app) startChangeVPN() {
 	w := a.wizard(false)
 	client, lang := a.client, a.lang
 	go func() {
-		w.ChangeVPN(func(vpn string) error {
+		err := w.ChangeVPN(func(vpn string) error {
 			st, err := client.Status()
 			if err != nil {
-				return errors.New(menubar.Explain(lang, err))
+				return err
 			}
 			req, err := menubar.ChangeVPNRequest(lang, st, vpn)
 			if err != nil {
 				return err
 			}
-			return save(client, lang, menubar.Draft{VPNInterface: req.VPNInterface, Services: req.Services})
+			return save(client, menubar.Draft{VPNInterface: req.VPNInterface, Services: req.Services})
 		})
-		a.actions <- action{kind: actWizardDone}
+		a.actions <- action{kind: actWizardDone, err: err}
 	}()
 }
 
-// save sends d to the running daemon, which needs no password.
-func save(client ipc.Client, lang menubar.Lang, d menubar.Draft) error {
-	if _, err := client.Set(d.VPNInterface, d.Services); err != nil {
-		return errors.New(menubar.Explain(lang, err))
-	}
-	return nil
+// save sends d to the running daemon, which needs no password. Its errors
+// stay as they are: the wizard says them in the user's language.
+func save(client ipc.Client, d menubar.Draft) error {
+	_, err := client.Set(d.VPNInterface, d.Services)
+	return err
 }
 
 // install runs "leakguard enable" for d once with administrator rights.
+// Its errors stay as they are: the wizard says them in the user's language.
 func install(client ipc.Client, lang menubar.Lang, all []catalog.Service, d menubar.Draft) error {
 	// The daemon may have come up since the wizard opened: then it saves the
 	// choice and no password is needed.
 	_, err := client.Status()
 	if !menubar.SetupNeeded(err) {
-		return save(client, lang, d)
+		return save(client, d)
 	}
 	exe, err := os.Executable()
 	if err == nil {
@@ -270,7 +285,7 @@ func install(client ipc.Client, lang menubar.Lang, all []catalog.Service, d menu
 	}
 	cli, err := menubar.FindCLI(exe, menubar.InstalledState(""), isExecutable, menubar.CheckInstalledCLI)
 	if err != nil {
-		return errors.New(menubar.Explain(lang, err))
+		return err
 	}
 	script, err := menubar.SetupScript(cli, d, all, menubar.AdminPrompt(lang))
 	if err != nil {
@@ -346,7 +361,7 @@ func connectedVPNCandidates() []string {
 
 func (a *app) draw() {
 	setup := menubar.Setup{Catalog: a.catalog, Lang: a.lang}
-	if a.notSetUp() {
+	if a.daemonUnavailable() {
 		setup.Update = menubar.InstalledState("") == menubar.InstallOld
 	}
 	m := menubar.Build(a.st, a.stErr, setup)
@@ -443,7 +458,7 @@ func (a *app) rebuild(m menubar.Menu) {
 		for _, s := range m.Services {
 			item := systray.AddMenuItemCheckbox(s.Label, l.Text(menubar.MsgMenuServiceTip), s.Checked)
 			it.services[s.ID] = item
-			a.forward(item, action{kind: actService, arg: s.ID})
+			a.forward(item, action{kind: actService, service: s.ID})
 		}
 	}
 	if m.ChangeVPN || m.Toggle.Visible {

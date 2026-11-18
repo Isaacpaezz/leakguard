@@ -14,6 +14,39 @@ import (
 // prompt. It is never shown as an error.
 var ErrCancelled = errors.New("cancelled")
 
+// errNoServices: the catalog has nothing to protect yet; step 1 already
+// said so.
+var errNoServices = errors.New("no supported services in the catalog")
+
+// stepError is a failure the wizard names with msg ("Could not turn on the
+// protection: %s") instead of the general "Something went wrong: %s".
+type stepError struct {
+	msg Msg
+	err error
+}
+
+func (e stepError) Error() string { return e.err.Error() }
+func (e stepError) Unwrap() error { return e.err }
+
+// WizardMessage is what the user reads after the wizard returned err: the
+// failure in plain words in language l, ending with "You can try again from
+// the menu.". Its first line fits the menu's error line. A cancel, or no
+// error, says nothing.
+func WizardMessage(l Lang, err error) string {
+	if err == nil || errors.Is(err, ErrCancelled) {
+		return ""
+	}
+	if errors.Is(err, errNoServices) {
+		return l.Text(msgStep1NoServices)
+	}
+	msg := msgWizardFailed
+	var se stepError
+	if errors.As(err, &se) {
+		msg, err = se.msg, se.err
+	}
+	return l.Text(msg, explainDetail(l, err))
+}
+
 // Dialog is a message with buttons. Default is the index of the button that
 // Return clicks; Cancel is the index of the button that cancels (Escape), or
 // -1 for none.
@@ -61,8 +94,14 @@ type Wizard struct {
 // Run walks the user through the three steps and then calls activate once
 // with a complete, validated choice. Cancelling any step returns
 // ErrCancelled before activate is called: nothing partial is ever sent.
-// After activate it says, in plain words, whether it worked.
+// After activate it says, in plain words, whether it worked; any other
+// failure (a dialog that fails, an unexpected answer, a refused choice) is
+// said too, with WizardMessage.
 func (w Wizard) Run(activate func(Draft) error) error {
+	return w.report(w.run(activate))
+}
+
+func (w Wizard) run(activate func(Draft) error) error {
 	services, err := w.chooseServices()
 	if err != nil {
 		return err
@@ -73,7 +112,7 @@ func (w Wizard) Run(activate func(Draft) error) error {
 	}
 	d := Draft{VPNInterface: vpn, Services: services}
 	if err := (config.Config{VPNInterface: d.VPNInterface, Services: d.Services}).Validate(w.Catalog); err != nil {
-		return err
+		return invalidChoice(err)
 	}
 	names := w.Lang.list(w.names(services))
 	step3 := msgStep3NoPassword
@@ -84,10 +123,7 @@ func (w Wizard) Run(activate func(Draft) error) error {
 		return err
 	}
 	if err := activate(d); err != nil {
-		if !errors.Is(err, ErrCancelled) {
-			w.tell(w.Lang.Text(msgActivateFailed, err.Error()))
-		}
-		return err
+		return stepError{msgActivateFailed, err}
 	}
 	done := w.Lang.Text(msgDoneMany, names)
 	if len(services) == 1 {
@@ -98,18 +134,29 @@ func (w Wizard) Run(activate func(Draft) error) error {
 }
 
 // ChangeVPN runs step 2 only and calls save with the VPN found. Cancelling
-// returns ErrCancelled without calling save.
+// returns ErrCancelled without calling save; any failure is said with
+// WizardMessage.
 func (w Wizard) ChangeVPN(save func(vpn string) error) error {
 	vpn, err := w.findVPN(w.Lang.Text(msgChangeVPNTitle), msgButtonUseVPN)
 	if err != nil {
-		return err
+		return w.report(err)
 	}
 	if err := save(vpn); err != nil {
-		w.tell(w.Lang.Text(msgChangeVPNFailed, err.Error()))
-		return err
+		return w.report(stepError{msgChangeVPNFailed, err})
 	}
 	w.tell(w.Lang.Text(msgChangeVPNDone))
 	return nil
+}
+
+// report shows err in plain words, unless it is a cancel or was already
+// said, and returns it.
+func (w Wizard) report(err error) error {
+	if !errors.Is(err, errNoServices) {
+		if msg := WizardMessage(w.Lang, err); msg != "" {
+			w.tell(msg)
+		}
+	}
+	return err
 }
 
 // AdminPrompt is the short reason the macOS password dialog shows.
@@ -138,7 +185,7 @@ func (w Wizard) chooseServices() ([]string, error) {
 	}
 	if len(supported) == 0 {
 		w.tell(w.Lang.Text(msgStep1NoServices) + soon)
-		return nil, errors.New("no supported services in the catalog")
+		return nil, errNoServices
 	}
 	items := make([]string, len(supported))
 	for i, s := range supported {
@@ -168,9 +215,10 @@ func (w Wizard) chooseServices() ([]string, error) {
 }
 
 // findVPN is step 2: the VPN is the one interface that appears between a
-// snapshot with the VPN disconnected and one with it connected. With none,
-// the user may retry or choose from the connected VPNs; with several, the
-// user chooses. It never guesses.
+// snapshot with the VPN disconnected and one with it connected. The user
+// sees its kind ("VPN IPsec") and may choose another from the connected
+// VPNs. With none, the user may retry or choose from the connected VPNs;
+// with several, the user chooses. It never guesses.
 func (w Wizard) findVPN(title string, accept Msg) (string, error) {
 	for {
 		if err := w.next(title, w.Lang.Text(msgStep2Disconnect), msgButtonNext); err != nil {
@@ -180,18 +228,31 @@ func (w Wizard) findVPN(title string, accept Msg) (string, error) {
 		if err := w.next(title, w.Lang.Text(msgStep2Connect), msgButtonNext); err != nil {
 			return "", err
 		}
+		after := vpnNames(w.ConnectedVPNs())
 		var fresh []string
-		for _, n := range vpnNames(w.ConnectedVPNs()) {
+		for _, n := range after {
 			if !slices.Contains(before, n) {
 				fresh = append(fresh, n)
 			}
 		}
 		switch len(fresh) {
 		case 1:
-			if err := w.next(title, w.Lang.Text(msgStep2Found), accept); err != nil {
+			b, err := w.Dialogs.Ask(Dialog{
+				Title:   title,
+				Text:    w.Lang.Text(msgStep2Found, w.Lang.Text(vpnKind(fresh[0]))),
+				Buttons: []string{w.Lang.Text(msgButtonCancel), w.Lang.Text(msgButtonChooseAnother), w.Lang.Text(accept)},
+				Default: 2,
+				Cancel:  0,
+			})
+			switch {
+			case err != nil:
 				return "", err
+			case b == 2:
+				return fresh[0], nil
+			case b == 1:
+				return w.pickVPN(title, after)
 			}
-			return fresh[0], nil
+			return "", ErrCancelled
 		case 0:
 			b, err := w.Dialogs.Ask(Dialog{
 				Title:   title,

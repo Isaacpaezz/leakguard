@@ -190,7 +190,7 @@ func ChangeVPNRequest(l Lang, st ipc.Status, vpn string) (Request, error) {
 		return Request{}, errors.New(l.Text(msgErrNotSetUp))
 	}
 	if err := config.CheckVPNInterface(vpn); err != nil {
-		return Request{}, err
+		return Request{}, invalidChoice(err)
 	}
 	return Request{VPNInterface: vpn, Services: slices.Clone(st.Services)}, nil
 }
@@ -240,29 +240,82 @@ func SetupNeeded(err error) bool {
 	return errors.Is(err, ipc.ErrDaemonUnavailable)
 }
 
-// Explain turns an error from the daemon, the socket or FindCLI into a short
-// sentence for the user, in language l.
+// Explain turns an error from the daemon, the socket, FindCLI, SetupScript,
+// a choice check or the dialog driver into a short sentence for the user, in
+// language l.
 func Explain(l Lang, err error) string {
-	switch {
-	case err == nil:
+	if err == nil {
 		return ""
-	case errors.Is(err, ipc.ErrDaemonUnavailable):
-		return l.Text(msgExplainNotSetUp)
-	case errors.Is(err, ipc.ErrNotAuthorized), errors.Is(err, fs.ErrPermission):
-		return l.Text(msgExplainNotAuthorized)
-	case errors.Is(err, os.ErrDeadlineExceeded):
-		return l.Text(msgExplainTimeout)
-	case errors.Is(err, ErrCLINotRootOwned):
-		return l.Text(msgCLINotRootOwned)
-	case errors.Is(err, ErrCLIUpdate):
-		return l.Text(msgCLIUpdate)
-	case errors.Is(err, ErrNoCLI):
-		return l.Text(msgCLIMissing)
+	}
+	if s, ok := explainKnown(l, err); ok {
+		return s
 	}
 	return l.Text(msgExplainOther, firstLine(err.Error()))
+}
+
+// explainDetail is Explain without the "Could not change leakguard" prefix
+// for an error it does not know: the caller's message says what failed.
+func explainDetail(l Lang, err error) string {
+	if s, ok := explainKnown(l, err); ok {
+		return s
+	}
+	return firstLine(err.Error())
+}
+
+func explainKnown(l Lang, err error) (string, bool) {
+	var m Msg
+	switch {
+	case errors.Is(err, ipc.ErrDaemonUnavailable):
+		m = msgExplainNotSetUp
+	case errors.Is(err, ipc.ErrNotAuthorized), errors.Is(err, fs.ErrPermission):
+		m = msgExplainNotAuthorized
+	case errors.Is(err, os.ErrDeadlineExceeded):
+		m = msgExplainTimeout
+	case errors.Is(err, ErrCLINotRootOwned):
+		m = msgCLINotRootOwned
+	case errors.Is(err, ErrCLIUpdate):
+		m = msgCLIUpdate
+	case errors.Is(err, ErrNoCLI):
+		m = msgCLIMissing
+	case errors.Is(err, ErrUnsafeCLIPath):
+		m = msgErrUnsafeCLIPath
+	case errors.Is(err, ErrInvalidChoice):
+		m = msgErrInvalidChoice
+	case errors.Is(err, ErrUnexpectedAnswer):
+		m = msgErrUnexpectedAnswer
+	default:
+		return "", false
+	}
+	return l.Text(m), true
 }
 
 func firstLine(s string) string {
 	s, _, _ = strings.Cut(strings.TrimSpace(s), "\n")
 	return s
+}
+
+// ShouldAutoOpen reports whether the setup opens by itself after a status
+// poll that returned err. It does only on the first poll of this launch
+// (firstPoll), when the daemon never answered (everAnswered), is
+// unavailable, and no current install exists (inst is InstallNone, or
+// InstallOld, which needs updating). A daemon that restarts later, or one
+// that is installed but still starting, never opens it: the menu only shows
+// the status.
+func ShouldAutoOpen(firstPoll, everAnswered bool, err error, inst Install) bool {
+	return firstPoll && !everAnswered && errors.Is(err, ipc.ErrDaemonUnavailable) && inst != InstallCurrent
+}
+
+// kindError keeps err's text for the logs and tests and adds kind, a
+// sentinel Explain recognises, so the user reads it in their language.
+type kindError struct{ kind, err error }
+
+func (e kindError) Error() string   { return e.err.Error() }
+func (e kindError) Unwrap() []error { return []error{e.kind, e.err} }
+
+// invalidChoice marks a VPN or service choice that config refused.
+func invalidChoice(err error) error {
+	if err == nil {
+		return nil
+	}
+	return kindError{ErrInvalidChoice, err}
 }

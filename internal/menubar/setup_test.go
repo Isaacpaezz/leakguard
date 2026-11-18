@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/Isaacpaezz/leakguard/internal/ipc"
 )
 
 var trickyPaths = []string{
@@ -171,6 +173,54 @@ func TestSetupScriptRejects(t *testing.T) {
 				t.Errorf("script with an error = %q, want none", s)
 			}
 		})
+	}
+}
+
+// R2-untranslated-setup-error: what SetupScript, the choice checks and the
+// dialog driver refuse reaches the user in the user's language, while the
+// error text itself stays for the logs and the tests above.
+func TestExplainSetupErrors(t *testing.T) {
+	errOf := func(_ any, err error) error { return err }
+	pathErr := errOf(SetupScript("relative/leakguard", oneService, fullCatalog, ""))
+	ctrlErr := errOf(SetupScript("/tmp/a\nb", oneService, fullCatalog, ""))
+	choiceErr := errOf(SetupScript("/x/leakguard", Draft{VPNInterface: "en0", Services: []string{"anthropic"}}, fullCatalog, ""))
+	serviceErr := errOf(SetupScript("/x/leakguard", Draft{VPNInterface: "ipsec0", Services: []string{"openai"}}, fullCatalog, ""))
+	vpnErr := errOf(ChangeVPNRequest(English, ipc.Status{Services: []string{"anthropic"}}, "en0"))
+	buttonErr := errOf(ParseButton("Otro\n", Dialog{Buttons: []string{"OK"}}))
+	listErr := errOf(ParseChoice("9\n", List{Items: []string{"a"}}))
+	const (
+		pathES   = "No se puede usar el comando leakguard que está junto a esta app: su ubicación no es válida"
+		pathEN   = "The leakguard command next to this app cannot be used: its location is not valid"
+		choiceES = "La VPN o los servicios elegidos no son válidos; vuelve a configurar leakguard"
+		choiceEN = "The chosen VPN or services are not valid; set up leakguard again"
+		dialogES = "La ventana respondió algo inesperado"
+		dialogEN = "The dialog gave an unexpected answer"
+	)
+	tests := []struct {
+		name     string
+		err      error
+		es, en   string
+		wantText string
+	}{
+		{"relative path", pathErr, pathES, pathEN, "the leakguard command needs an absolute path"},
+		{"control characters", ctrlErr, pathES, pathEN, "the path of the leakguard command contains control characters"},
+		{"real connection", choiceErr, choiceES, choiceEN, `"en0" is not a VPN interface; it carries your real connection`},
+		{"planned service", serviceErr, choiceES, choiceEN, `service "openai" is not supported yet`},
+		{"change VPN to a real connection", vpnErr, choiceES, choiceEN, `"en0" is not a VPN interface; it carries your real connection`},
+		{"unexpected button", buttonErr, dialogES, dialogEN, `unexpected dialog answer "Otro"`},
+		{"unexpected list answer", listErr, dialogES, dialogEN, `unexpected list answer "9"`},
+	}
+	for _, tc := range tests {
+		if tc.err == nil || tc.err.Error() != tc.wantText {
+			t.Errorf("%s: error %v, want %q", tc.name, tc.err, tc.wantText)
+			continue
+		}
+		if got := Explain(Spanish, tc.err); got != tc.es {
+			t.Errorf("%s: Explain(es) = %q, want %q", tc.name, got, tc.es)
+		}
+		if got := Explain(English, tc.err); got != tc.en {
+			t.Errorf("%s: Explain(en) = %q, want %q", tc.name, got, tc.en)
+		}
 	}
 }
 
