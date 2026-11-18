@@ -139,6 +139,21 @@ vulnerability reporting, create labels `status:needs-triage`,
    which is otherwise used only for the first install. Before running setup
    the app polls the daemon once more and drops the draft if it now answers.
    Pending: a live check by the owner.
+   Setup wizard (`feat/setup-wizard`, `odd/tasks/setup-wizard.md`): the menu
+   draft and the VPN interface submenu are replaced by a 3-step wizard in
+   `internal/menubar/wizard.go`, driven by a `Dialogs` interface (osascript
+   `display dialog` / `choose from list` in the app, a fake in tests). Step 2
+   snapshots the connected VPN candidates with the VPN disconnected and then
+   connected; exactly one new interface is the VPN, otherwise the user
+   retries or chooses from a list with friendly labels ("VPN IPsec (ipsec0)").
+   It never guesses and never sends a partial choice; cancelling returns
+   `ErrCancelled` before anything is sent. Step 3 warns about the password
+   and the administrator prompt uses `with prompt`. Every user-facing string
+   is in `internal/menubar/i18n.go` in Spanish and English, chosen from
+   `defaults read -g AppleLanguages`. Every AppleScript string escapes
+   backslashes, quotes and line breaks; tests round-trip them through
+   `osascript -e 'return ...'` and compile the scripts with `osacompile`,
+   never running a dialog or administrator rights.
 3. Linux `nftables` backend and tray app.
 4. Windows backend and tray app.
 5. Self-updating catalog: a scheduled workflow refreshes ranges from their

@@ -4,7 +4,6 @@ import (
 	"errors"
 	"io/fs"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -15,11 +14,12 @@ import (
 // InstalledCLI is the root-owned copy of the CLI that the daemon runs.
 const InstalledCLI = "/usr/local/libexec/leakguard/leakguard"
 
-// Messages FindCLI returns when it finds nothing safe to run.
-const (
-	errNotRootOwned = "the installed leakguard is not owned by root; reinstall with sudo leakguard enable"
-	errUpdate       = "Update leakguard: put the new leakguard next to this app, or run: sudo leakguard enable"
-	errNoCLI        = "Put the leakguard command next to this app, then try again"
+// Errors FindCLI returns when it finds nothing safe to run; Explain says
+// them in the user's language.
+var (
+	ErrCLINotRootOwned = errors.New("the installed leakguard is not owned by root; reinstall with sudo leakguard enable")
+	ErrCLIUpdate       = errors.New("Update leakguard: put the new leakguard next to this app, or run: sudo leakguard enable")
+	ErrNoCLI           = errors.New("Put the leakguard command next to this app, then try again")
 )
 
 // FindCLI returns the leakguard CLI to run as root for "Set up leakguard…".
@@ -43,7 +43,7 @@ func FindCLI(exe string, inst Install, isExecutable func(path string) bool, chec
 		case err == nil:
 			return InstalledCLI, nil
 		case !errors.Is(err, fs.ErrNotExist):
-			return "", errors.New(errNotRootOwned)
+			return "", ErrCLINotRootOwned
 		}
 	}
 	if exe != "" {
@@ -52,9 +52,9 @@ func FindCLI(exe string, inst Install, isExecutable func(path string) bool, chec
 		}
 	}
 	if inst == InstallOld {
-		return "", errors.New(errUpdate)
+		return "", ErrCLIUpdate
 	}
-	return "", errors.New(errNoCLI)
+	return "", ErrNoCLI
 }
 
 // ShellQuote quotes s as one POSIX shell word: inside single quotes nothing
@@ -64,17 +64,41 @@ func ShellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// appleScriptString escapes s for the inside of an AppleScript string literal.
+// appleScriptString escapes s for the inside of an AppleScript string
+// literal: backslashes and quotes are escaped, line breaks and tabs become
+// their escapes, any other control character becomes a space, and invalid
+// UTF-8 becomes U+FFFD.
 func appleScriptString(s string) string {
-	return strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s)
+	s = strings.ToValidUTF8(s, "\uFFFD")
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r == '\\':
+			b.WriteString(`\\`)
+		case r == '"':
+			b.WriteString(`\"`)
+		case r == '\n':
+			b.WriteString(`\n`)
+		case r == '\r':
+			b.WriteString(`\r`)
+		case r == '\t':
+			b.WriteString(`\t`)
+		case r < 0x20 || r == 0x7f:
+			b.WriteByte(' ')
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // SetupScript is the AppleScript that runs "cli enable --vpn IFACE
-// SERVICE..." once with administrator rights. cli must be an absolute path
+// SERVICE..." once with administrator rights. A non-empty prompt is the
+// reason the macOS password dialog shows (see AdminPrompt). cli must be an absolute path
 // without control characters, and the draft must pass config.Validate
 // against the catalog all; anything else is refused before quoting. Every
 // argument is quoted for the shell, then the command for AppleScript.
-func SetupScript(cli string, d Draft, all []catalog.Service) (string, error) {
+func SetupScript(cli string, d Draft, all []catalog.Service, prompt string) (string, error) {
 	if !filepath.IsAbs(cli) {
 		return "", errors.New("the leakguard command needs an absolute path")
 	}
@@ -92,33 +116,11 @@ func SetupScript(cli string, d Draft, all []catalog.Service) (string, error) {
 		words = append(words, ShellQuote(id))
 	}
 	cmd := strings.Join(words, " ")
-	return `do shell script "` + appleScriptString(cmd) + `" with administrator privileges`, nil
-}
-
-// SetupFailure explains a failed osascript run of SetupScript from its
-// output, such as "0:95: execution error: User canceled. (-128)". Without
-// any output, it reports err, the error from running osascript.
-func SetupFailure(output string, err error) string {
-	if strings.TrimSpace(output) == "" && err != nil {
-		return "Set up failed: " + firstLine(err.Error())
+	script := `do shell script "` + appleScriptString(cmd) + `"`
+	if prompt != "" {
+		script += ` with prompt "` + appleScriptString(prompt) + `"`
 	}
-	lines := strings.Split(strings.TrimSpace(output), "\n")
-	last := strings.TrimSpace(lines[len(lines)-1])
-	if _, msg, ok := strings.Cut(last, "execution error: "); ok {
-		last = msg
-	}
-	if strings.HasSuffix(last, "(-128)") {
-		return "Set up canceled"
-	}
-	if i := strings.LastIndex(last, " ("); i > 0 && strings.HasSuffix(last, ")") {
-		if _, err := strconv.Atoi(last[i+2 : len(last)-1]); err == nil {
-			last = last[:i]
-		}
-	}
-	if last == "" {
-		return "Set up failed"
-	}
-	return "Set up failed: " + last
+	return script + ` with administrator privileges`, nil
 }
 
 // Short keeps the first line of s and cuts it to at most max characters,
