@@ -2,7 +2,10 @@ package menubar
 
 import (
 	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 )
 
 // A DMG downloaded with a browser marks every file in it with the
@@ -31,7 +34,13 @@ func QuarantineError(err error) error {
 // quarantined. The installed root-owned copy, another bundle's command and
 // development builds are never touched.
 func ShouldClearQuarantine(exe, cli string, quarantined bool) bool {
-	if !quarantined || !filepath.IsAbs(cli) || filepath.Clean(cli) != cli {
+	return quarantined && isBundledCLI(exe, cli)
+}
+
+// isBundledCLI reports whether cli is the leakguard command inside the
+// bundle of the app executable exe, by its path alone.
+func isBundledCLI(exe, cli string) bool {
+	if !filepath.IsAbs(cli) || filepath.Clean(cli) != cli {
 		return false
 	}
 	bundle, ok := AppBundle(exe)
@@ -39,18 +48,61 @@ func ShouldClearQuarantine(exe, cli string, quarantined bool) bool {
 }
 
 // ClearQuarantineArgs are the arguments to /usr/bin/xattr that clear the
-// mark on exactly path: no -r, no shell.
+// mark on exactly path: no -r, no shell, and -s so a symlink is never
+// followed.
 func ClearQuarantineArgs(path string) []string {
-	return []string{"-d", QuarantineAttr, path}
+	return []string{"-s", "-d", QuarantineAttr, path}
 }
 
-// PrepareCLI clears the quarantine mark on cli when ShouldClearQuarantine
-// says so. quarantined reads the mark; when it cannot, cli runs as it is and
-// any refusal shows when it runs. A failure to clear it is ErrQuarantined,
-// never silent.
+// ReadQuarantineArgs are the arguments to /usr/bin/xattr that print the
+// mark on exactly path, without following a symlink.
+func ReadQuarantineArgs(path string) []string {
+	return []string{"-s", "-p", QuarantineAttr, path}
+}
+
+// QuarantineCheck reads the answer of xattr run with ReadQuarantineArgs:
+// its standard error and the error it ended with. The mark is there when it
+// succeeded and missing when xattr said the attribute does not exist; any
+// other failure is ErrQuarantined, since the app cannot tell whether macOS
+// will refuse the command.
+func QuarantineCheck(stderr string, err error) (bool, error) {
+	if err == nil {
+		return true, nil
+	}
+	if strings.Contains(stderr, "No such xattr: "+QuarantineAttr) {
+		return false, nil
+	}
+	if msg := strings.TrimSpace(stderr); msg != "" {
+		return false, QuarantineError(fmt.Errorf("%s: %w", firstLine(msg), err))
+	}
+	return false, QuarantineError(err)
+}
+
+// PrepareCLI clears the quarantine mark on cli when it is the leakguard
+// command inside the bundle of the app executable exe and carries the mark;
+// any other command is left alone. The bundled command must be a regular
+// file, never a symlink or anything else, or the mark is not touched and
+// the answer is ErrQuarantined. quarantined reads the mark and clear removes
+// it; a failure of either is ErrQuarantined, never silent.
 func PrepareCLI(exe, cli string, quarantined func(string) (bool, error), clear func(string) error) error {
+	if !isBundledCLI(exe, cli) {
+		return nil
+	}
+	info, err := os.Lstat(cli)
+	if err != nil {
+		return QuarantineError(err)
+	}
+	if !info.Mode().IsRegular() {
+		return QuarantineError(fmt.Errorf("%s is not a regular file", cli))
+	}
 	q, err := quarantined(cli)
-	if err != nil || !ShouldClearQuarantine(exe, cli, q) {
+	if err != nil {
+		if errors.Is(err, ErrQuarantined) {
+			return err
+		}
+		return QuarantineError(err)
+	}
+	if !q {
 		return nil
 	}
 	if err := clear(cli); err != nil {

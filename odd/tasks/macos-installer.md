@@ -25,9 +25,9 @@ Branch `feat/macos-installer`; delivered as one PR to `main`. Publishing a relea
 
 | ID | Task | Specs | Route | Commit |
 |---|---|---|---|---|
-| T1 | Version injection, bundle + icon + DMG build script, release workflow | S1, S2 | worker | |
-| T2 | Login item (LaunchAgent) with menu toggle; uninstall flow; quarantine handling | S3, S5, S6 | worker | |
-| T3 | Docs (README install section es/en with the Open Anyway steps, guide in the DMG, CHANGELOG, HANDOFF, roadmap) | S2, S4 | worker | |
+| T1 | Version injection, bundle + icon + DMG build script, release workflow | S1, S2 | worker | c27a10f |
+| T2 | Login item (LaunchAgent) with menu toggle; uninstall flow; quarantine handling | S3, S5, S6 | worker | cfbc8c1 + fix |
+| T3 | Docs (README install section es/en with the Open Anyway steps, guide in the DMG, CHANGELOG, HANDOFF, roadmap) | S2, S4 | worker | c5cb602 |
 | T4 | Verification (release workflow = delivery risk; root uninstall), local DMG build, owner live install from the DMG | all | parent | |
 
 ## Log
@@ -35,3 +35,4 @@ Branch `feat/macos-installer`; delivered as one PR to `main`. Publishing a relea
 - L1 (owner, 2026-11-19): "si" to starting the macOS installer, then chose "Sin firma por ahora (Recomendado)" and "DMG en GitHub Releases (Recomendado)".
 - L2 (evidence): the owner's Mac runs macOS 26 (Darwin 25); since macOS 15 the right-click > Open bypass for unsigned apps is gone, replaced by System Settings > Privacy & Security > Open Anyway.
 - L3 (parent decisions): LaunchAgent instead of SMAppService (works without a Developer ID); universal binaries; uninstall in the menu; no tag is pushed by agents.
+- L4 (verification, escalated items 5 and 2): no blockers. Release workflow scope, permissions, tag quoting, --verify-tag and the version guard in the build script held; a clean build produced a valid universal ad-hoc signed app and DMG. Fixed in the next commit with RED->GREEN: quarantine clearing followed symlinks (now Lstat + regular file inside the own bundle, `xattr -s`); the login item was written when the app ran from the DMG or App Translocation (now skipped there, with a "Move leakguard to Applications" hint); preference and agent reads blocked on a FIFO; unreadable quarantine state is explained. Notes kept: actions pinned by tag not SHA; 0.x releases are prereleases.

@@ -2,6 +2,7 @@ package menubar
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +12,30 @@ import (
 )
 
 const bundledExe = "/Applications/leakguard.app/Contents/MacOS/leakguard-menubar"
+
+const (
+	dmgExe         = "/Volumes/leakguard/leakguard.app/Contents/MacOS/leakguard-menubar"
+	translocated   = "/private/var/folders/ab/xyz/T/AppTranslocation/1A2B3C4D-0000-1111-2222-333344445555/d/leakguard.app/Contents/MacOS/leakguard-menubar"
+	externalExe    = "/Volumes/Extern/Apps/leakguard.app/Contents/MacOS/leakguard-menubar"
+	devExe         = "/Users/me/src/leakguard-menubar"
+	dmgBundle      = "/Volumes/leakguard/leakguard.app"
+	externalBundle = "/Volumes/Extern/Apps/leakguard.app"
+)
+
+// writable says every volume is writable.
+func writable(string) (bool, error) { return false, nil }
+
+// readOnlyAt says only the volume holding the bundles in ro is read-only.
+func readOnlyAt(ro ...string) ReadOnlyFunc {
+	return func(path string) (bool, error) {
+		for _, p := range ro {
+			if path == p {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+}
 
 func TestAppBundle(t *testing.T) {
 	tests := []struct {
@@ -144,7 +169,7 @@ func TestSyncLoginItem(t *testing.T) {
 	}
 
 	// A development build writes nothing.
-	on, err := SyncLoginItem(home, "/Users/me/src/leakguard-menubar")
+	on, err := SyncLoginItem(home, "/Users/me/src/leakguard-menubar", writable)
 	if err != nil || !on {
 		t.Fatalf("dev SyncLoginItem = %v, %v; want true, nil", on, err)
 	}
@@ -153,7 +178,7 @@ func TestSyncLoginItem(t *testing.T) {
 	}
 
 	// First launch from the bundle: on by default, written.
-	on, err = SyncLoginItem(home, bundledExe)
+	on, err = SyncLoginItem(home, bundledExe, writable)
 	if err != nil || !on {
 		t.Fatalf("SyncLoginItem = %v, %v; want true, nil", on, err)
 	}
@@ -167,7 +192,7 @@ func TestSyncLoginItem(t *testing.T) {
 
 	// The app moved: rewritten with the new path.
 	movedExe := "/Users/me/Applications/leakguard.app/Contents/MacOS/leakguard-menubar"
-	if on, err = SyncLoginItem(home, movedExe); err != nil || !on {
+	if on, err = SyncLoginItem(home, movedExe, writable); err != nil || !on {
 		t.Fatalf("moved SyncLoginItem = %v, %v", on, err)
 	}
 	if args, _ := programArguments(readOrNil(t, agent)); len(args) != 1 || args[0] != movedExe {
@@ -175,7 +200,7 @@ func TestSyncLoginItem(t *testing.T) {
 	}
 
 	// Turned off from the menu: removed and remembered.
-	if err := SetOpenAtLogin(home, movedExe, false); err != nil {
+	if err := SetOpenAtLogin(home, movedExe, false, writable); err != nil {
 		t.Fatal(err)
 	}
 	if readOrNil(t, agent) != nil {
@@ -184,7 +209,7 @@ func TestSyncLoginItem(t *testing.T) {
 	if got := strings.TrimSpace(string(readOrNil(t, PrefsPath(home)))); got != `{"open_at_login":false}` {
 		t.Errorf("menubar.json = %s", got)
 	}
-	if on, err = SyncLoginItem(home, movedExe); err != nil || on {
+	if on, err = SyncLoginItem(home, movedExe, writable); err != nil || on {
 		t.Fatalf("SyncLoginItem after off = %v, %v; want false, nil", on, err)
 	}
 	if readOrNil(t, agent) != nil {
@@ -192,7 +217,7 @@ func TestSyncLoginItem(t *testing.T) {
 	}
 
 	// Turned on again: written at once.
-	if err := SetOpenAtLogin(home, movedExe, true); err != nil {
+	if err := SetOpenAtLogin(home, movedExe, true, writable); err != nil {
 		t.Fatal(err)
 	}
 	if readOrNil(t, agent) == nil || LoadPrefs(home).OpenAtLogin != true {
@@ -232,7 +257,7 @@ func TestLoadPrefsDefaults(t *testing.T) {
 // agent.
 func TestSetOpenAtLoginOutsideBundle(t *testing.T) {
 	home := t.TempDir()
-	if err := SetOpenAtLogin(home, "/Users/me/src/leakguard-menubar", true); err != nil {
+	if err := SetOpenAtLogin(home, "/Users/me/src/leakguard-menubar", true, writable); err != nil {
 		t.Fatal(err)
 	}
 	if readOrNil(t, LoginItemPath(home)) != nil {
@@ -245,10 +270,10 @@ func TestSetOpenAtLoginOutsideBundle(t *testing.T) {
 func TestLoginItemNeedsAbsoluteHome(t *testing.T) {
 	t.Chdir(t.TempDir())
 	for _, home := range []string{"", "relative"} {
-		if _, err := SyncLoginItem(home, bundledExe); err == nil {
+		if _, err := SyncLoginItem(home, bundledExe, writable); err == nil {
 			t.Errorf("SyncLoginItem(%q) = nil error", home)
 		}
-		if err := SetOpenAtLogin(home, bundledExe, true); err == nil {
+		if err := SetOpenAtLogin(home, bundledExe, true, writable); err == nil {
 			t.Errorf("SetOpenAtLogin(%q) = nil error", home)
 		}
 		if err := RemoveLoginItem(home); err == nil {
@@ -257,5 +282,85 @@ func TestLoginItemNeedsAbsoluteHome(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir("."); len(entries) != 0 {
 		t.Errorf("wrote %d entries in the current folder", len(entries))
+	}
+}
+
+// S3: the login item is offered only where it survives a restart: a .app
+// bundle that is neither translocated nor on a read-only volume such as the
+// DMG. There the menu shows a hint instead; a development build shows
+// nothing.
+func TestLoginMenu(t *testing.T) {
+	failing := func(string) (bool, error) { return false, errors.New("statfs: no such file or directory") }
+	tests := []struct {
+		name     string
+		exe      string
+		readOnly ReadOnlyFunc
+		want     LoginMenuItem
+	}{
+		{"Applications", bundledExe, writable, LoginItemToggle},
+		{"writable external disk", externalExe, readOnlyAt(dmgBundle), LoginItemToggle},
+		{"read-only DMG", dmgExe, readOnlyAt(dmgBundle), LoginItemMoveHint},
+		{"translocated", translocated, writable, LoginItemMoveHint},
+		{"volume unknown", bundledExe, failing, LoginItemMoveHint},
+		{"development build", devExe, writable, LoginItemHidden},
+	}
+	for _, tc := range tests {
+		if got := LoginMenu(tc.exe, tc.readOnly); got != tc.want {
+			t.Errorf("%s: LoginMenu = %v, want %v", tc.name, got, tc.want)
+		}
+		if got := CanOpenAtLogin(tc.exe, tc.readOnly); got != (tc.want == LoginItemToggle) {
+			t.Errorf("%s: CanOpenAtLogin = %v", tc.name, got)
+		}
+	}
+	// The volume checked is the bundle's.
+	var asked []string
+	LoginMenu(externalExe, func(p string) (bool, error) { asked = append(asked, p); return false, nil })
+	if len(asked) != 1 || asked[0] != externalBundle {
+		t.Errorf("readOnly asked about %q, want [%q]", asked, externalBundle)
+	}
+}
+
+// S3: running from the DMG or translocated never writes, rewrites or
+// removes the login item, so an agent for the copy in Applications stays.
+func TestSyncLoginItemNeverFromDMG(t *testing.T) {
+	ro := readOnlyAt(dmgBundle)
+	for _, exe := range []string{dmgExe, translocated} {
+		home := t.TempDir()
+		on, err := SyncLoginItem(home, exe, ro)
+		if err != nil || !on {
+			t.Fatalf("%s: SyncLoginItem = %v, %v; want true, nil", exe, on, err)
+		}
+		if readOrNil(t, LoginItemPath(home)) != nil {
+			t.Fatalf("%s: wrote the login item", exe)
+		}
+		if err := SetOpenAtLogin(home, exe, true, ro); err != nil {
+			t.Fatal(err)
+		}
+		if readOrNil(t, LoginItemPath(home)) != nil {
+			t.Fatalf("%s: SetOpenAtLogin wrote the login item", exe)
+		}
+
+		// The copy in Applications wrote its agent; the DMG copy keeps it.
+		if _, err := SyncLoginItem(home, bundledExe, ro); err != nil {
+			t.Fatal(err)
+		}
+		want := readOrNil(t, LoginItemPath(home))
+		if _, err := SyncLoginItem(home, exe, ro); err != nil {
+			t.Fatal(err)
+		}
+		if err := SetOpenAtLogin(home, exe, false, ro); err != nil {
+			t.Fatal(err)
+		}
+		if got := readOrNil(t, LoginItemPath(home)); want == nil || !bytes.Equal(got, want) {
+			t.Errorf("%s: agent changed to:\n%s\nwant:\n%s", exe, got, want)
+		}
+	}
+	// A writable external disk is fine.
+	home := t.TempDir()
+	if _, err := SyncLoginItem(home, externalExe, ro); err != nil {
+		t.Fatal(err)
+	}
+	if args, _ := programArguments(readOrNil(t, LoginItemPath(home))); len(args) != 1 || args[0] != externalExe {
+		t.Errorf("external disk: ProgramArguments = %q, want [%q]", args, externalExe)
 	}
 }

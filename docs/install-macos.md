@@ -22,6 +22,8 @@ y una cuenta de administrador de la Mac.
    aparece al lado.
 3. Expulsa el disco "leakguard" (botón ⏏ en el Finder).
 
+Abre leakguard desde Aplicaciones, no desde la imagen de disco.
+
 ## 3. Ábrela la primera vez
 
 leakguard todavía no está firmada con un certificado de Apple, así que macOS
@@ -30,19 +32,19 @@ software malicioso. Es normal: solo tienes que darle permiso una vez.
 
 **macOS 15 Sequoia o más nuevo:**
 
-1. Abre leakguard desde Aplicaciones. macOS muestra un aviso: toca **Listo**
+1. Abre leakguard desde Aplicaciones. macOS muestra un aviso: haz clic en **Listo**
    (no la muevas a la Papelera).
 2. Abre **Configuración del Sistema > Privacidad y seguridad**.
-3. Baja hasta "Seguridad". Verás un mensaje sobre leakguard: toca
-   **Abrir igualmente**.
-4. Escribe tu contraseña de la Mac si te la pide, y toca **Abrir igualmente**
-   otra vez.
+3. Baja hasta "Seguridad". Verás un mensaje sobre leakguard: haz clic
+   en **Abrir igualmente**.
+4. Escribe tu contraseña de la Mac si te la pide, y haz clic en **Abrir
+   igualmente** otra vez.
 
 **macOS 13 Ventura o 14 Sonoma:**
 
 1. En Aplicaciones, haz clic derecho (o Control + clic) sobre leakguard y
    elige **Abrir**.
-2. En el aviso, toca **Abrir**.
+2. En el aviso, haz clic en **Abrir**.
 
 Después de esto, leakguard abre normalmente.
 
@@ -52,8 +54,8 @@ Al abrirla aparece un escudo en la barra de menú (arriba a la derecha) y una
 guía en 3 pasos:
 
 1. Elige qué quieres proteger (por ejemplo, Claude).
-2. Encuentra tu VPN: desconéctala y toca Siguiente; luego conéctala y toca
-   Siguiente.
+2. Encuentra tu VPN: desconéctala y haz clic en Siguiente; luego conéctala
+   y haz clic en Siguiente.
 3. Activa la protección. Tu Mac te pide tu contraseña una sola vez, para
    instalar el servicio que bloquea esos servicios si tu VPN se cae.
 
@@ -61,7 +63,9 @@ Listo. El escudo lleno significa que estás protegido. No necesitas la
 Terminal.
 
 leakguard se abre sola cada vez que entras a tu Mac. Si no lo quieres, quita
-la marca de **Abrir al iniciar sesión** en el menú del escudo. La protección
+la marca de **Abrir al iniciar sesión** en el menú del escudo. Si el menú dice
+"Mueve leakguard a Aplicaciones para que se abra al iniciar sesión", la abriste
+desde la imagen de disco: arrástrala a Aplicaciones y ábrela desde ahí. La protección
 sigue activa aunque cierres el menú.
 
 Si leakguard dice que macOS no deja usar el comando que viene dentro de la
@@ -100,6 +104,8 @@ administrator account on the Mac.
 2. Drag **leakguard** onto the **Applications** folder next to it.
 3. Eject the "leakguard" disk (the ⏏ button in Finder).
 
+Open leakguard from Applications, not from the disk image.
+
 ## 3. Open it the first time
 
 leakguard is not signed with an Apple certificate yet, so macOS blocks it the
@@ -136,7 +142,9 @@ A shield appears in the menu bar (top right), with a 3-step guide:
 Done. A filled shield means you are protected. You never need Terminal.
 
 leakguard opens by itself every time you log in. If you do not want that,
-untick **Open at login** in the shield menu. The protection keeps running
+untick **Open at login** in the shield menu. If the menu says "Move leakguard
+to Applications so it opens at login", you opened it from the disk image: drag
+it to Applications and open it from there. The protection keeps running
 even if you quit the menu.
 
 If leakguard says macOS does not let it use the command inside the app, go

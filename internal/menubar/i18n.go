@@ -52,6 +52,7 @@ const (
 	MsgCatalogError
 	MsgMenuOpenAtLogin
 	MsgMenuOpenAtLoginTip
+	MsgMenuMoveToApplications
 	MsgMenuUninstall
 	MsgMenuUninstallTip
 	MsgLoginItemFailed
@@ -152,24 +153,25 @@ const MenuLineLength = 70
 // messages holds every string in both languages; a test checks that none is
 // missing or empty.
 var messages = [msgCount]text{
-	MsgMenuSetUp:          {"Configurar leakguard (3 pasos)…", "Set up leakguard (3 steps)…"},
-	MsgMenuSetUpTip:       {"Te guía en 3 pasos: qué proteger, tu VPN y activar la protección", "Guides you in 3 steps: what to protect, your VPN, and turning the protection on"},
-	MsgMenuChangeVPN:      {"Cambiar de VPN…", "Change VPN…"},
-	MsgMenuChangeVPNTip:   {"Vuelve a buscar tu VPN; no pide contraseña", "Finds your VPN again; no password needed"},
-	MsgMenuPause:          {"Pausar la protección", "Pause protection"},
-	MsgMenuResume:         {"Reanudar la protección", "Resume protection"},
-	MsgMenuToggleTip:      {"En pausa, los servicios usan tu conexión normal hasta que reanudes", "While paused, the services use your normal connection until you resume"},
-	MsgMenuQuit:           {"Salir", "Quit"},
-	MsgMenuQuitTip:        {"Cierra solo este menú; la protección sigue activa", "Closes this menu only; the protection keeps running"},
-	MsgMenuServicesHeader: {"Proteger estos servicios:", "Protect these services:"},
-	MsgMenuServiceTip:     {"Este servicio solo podrá usar tu VPN", "This service may only use your VPN"},
-	MsgMenuErrorTip:       {"El último cambio no funcionó", "The last change did not work"},
-	MsgCatalogError:       {"No se pudo leer la lista de servicios: %s", "Could not read the service list: %s"},
-	MsgMenuOpenAtLogin:    {"Abrir al iniciar sesión", "Open at login"},
-	MsgMenuOpenAtLoginTip: {"Abre este menú cada vez que entras a tu Mac; no pide contraseña", "Opens this menu every time you log in to your Mac; no password needed"},
-	MsgMenuUninstall:      {"Desinstalar leakguard…", "Uninstall leakguard…"},
-	MsgMenuUninstallTip:   {"Quita la protección, el servicio de fondo y la apertura al iniciar sesión", "Removes the protection, the background service and the login item"},
-	MsgLoginItemFailed:    {"No se pudo cambiar la apertura al iniciar sesión: %s", "Could not change the login item: %s"},
+	MsgMenuSetUp:              {"Configurar leakguard (3 pasos)…", "Set up leakguard (3 steps)…"},
+	MsgMenuSetUpTip:           {"Te guía en 3 pasos: qué proteger, tu VPN y activar la protección", "Guides you in 3 steps: what to protect, your VPN, and turning the protection on"},
+	MsgMenuChangeVPN:          {"Cambiar de VPN…", "Change VPN…"},
+	MsgMenuChangeVPNTip:       {"Vuelve a buscar tu VPN; no pide contraseña", "Finds your VPN again; no password needed"},
+	MsgMenuPause:              {"Pausar la protección", "Pause protection"},
+	MsgMenuResume:             {"Reanudar la protección", "Resume protection"},
+	MsgMenuToggleTip:          {"En pausa, los servicios usan tu conexión normal hasta que reanudes", "While paused, the services use your normal connection until you resume"},
+	MsgMenuQuit:               {"Salir", "Quit"},
+	MsgMenuQuitTip:            {"Cierra solo este menú; la protección sigue activa", "Closes this menu only; the protection keeps running"},
+	MsgMenuServicesHeader:     {"Proteger estos servicios:", "Protect these services:"},
+	MsgMenuServiceTip:         {"Este servicio solo podrá usar tu VPN", "This service may only use your VPN"},
+	MsgMenuErrorTip:           {"El último cambio no funcionó", "The last change did not work"},
+	MsgCatalogError:           {"No se pudo leer la lista de servicios: %s", "Could not read the service list: %s"},
+	MsgMenuOpenAtLogin:        {"Abrir al iniciar sesión", "Open at login"},
+	MsgMenuOpenAtLoginTip:     {"Abre este menú cada vez que entras a tu Mac; no pide contraseña", "Opens this menu every time you log in to your Mac; no password needed"},
+	MsgMenuMoveToApplications: {"Mueve leakguard a Aplicaciones para que se abra al iniciar sesión", "Move leakguard to Applications so it opens at login"},
+	MsgMenuUninstall:          {"Desinstalar leakguard…", "Uninstall leakguard…"},
+	MsgMenuUninstallTip:       {"Quita la protección, el servicio de fondo y la apertura al iniciar sesión", "Removes the protection, the background service and the login item"},
+	MsgLoginItemFailed:        {"No se pudo cambiar la apertura al iniciar sesión: %s", "Could not change the login item: %s"},
 
 	msgComingSoonItem:         {"%s (próximamente)", "%s (coming soon)"},
 	msgStatusChecking:         {"Comprobando…", "Checking…"},

@@ -16,6 +16,7 @@ func TestNewMenuItems(t *testing.T) {
 	}{
 		{MsgMenuOpenAtLogin, "Abrir al iniciar sesión", "Open at login"},
 		{MsgMenuUninstall, "Desinstalar leakguard…", "Uninstall leakguard…"},
+		{MsgMenuMoveToApplications, "Mueve leakguard a Aplicaciones para que se abra al iniciar sesión", "Move leakguard to Applications so it opens at login"},
 	}
 	for _, tc := range tests {
 		if got := Spanish.Text(tc.m); got != tc.es {
@@ -23,6 +24,12 @@ func TestNewMenuItems(t *testing.T) {
 		}
 		if got := English.Text(tc.m); got != tc.en {
 			t.Errorf("en = %q, want %q", got, tc.en)
+		}
+	}
+	// The hint is a menu line: it reads in full.
+	for _, l := range []Lang{Spanish, English} {
+		if s := l.Text(MsgMenuMoveToApplications); s == "" || utf8.RuneCountInString(s) > MenuLineLength {
+			t.Errorf("%v hint %q: empty or longer than %d runes", l, s, MenuLineLength)
 		}
 	}
 	for _, m := range []Msg{MsgMenuOpenAtLoginTip, MsgMenuUninstallTip} {

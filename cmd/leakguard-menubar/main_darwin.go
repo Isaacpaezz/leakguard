@@ -42,12 +42,14 @@ func main() {
 	a.catalog, a.catalogErr = catalog.Embedded()
 	a.exe = executable()
 	a.home, _ = os.UserHomeDir()
-	_, inBundle := menubar.AppBundle(a.exe)
-	a.loginItem = inBundle && filepath.IsAbs(a.home)
-	if a.loginItem {
+	a.loginMenu = menubar.LoginMenu(a.exe, menubar.ReadOnlyVolume)
+	if !filepath.IsAbs(a.home) {
+		a.loginMenu = menubar.LoginItemHidden
+	}
+	if a.loginMenu == menubar.LoginItemToggle {
 		// Written, never loaded: launchd opens the app at the next login,
 		// and no second copy starts now.
-		on, err := menubar.SyncLoginItem(a.home, a.exe)
+		on, err := menubar.SyncLoginItem(a.home, a.exe, menubar.ReadOnlyVolume)
 		a.openAtLogin = on
 		if err != nil {
 			a.errLine = a.lang.Text(menubar.MsgLoginItemFailed, err.Error())
@@ -125,10 +127,12 @@ type app struct {
 
 	// exe is this app's executable and home the user's home folder.
 	exe, home string
-	// loginItem is set when the app runs from a .app bundle, so it may open
-	// at login (development builds never write the LaunchAgent);
-	// openAtLogin is the user's choice.
-	loginItem, openAtLogin bool
+	// loginMenu is what the menu offers for opening at login: the toggle
+	// when the app runs from a .app bundle that survives a restart, a hint
+	// to move it to Applications when it runs from the DMG or translocated,
+	// nothing for a development build. openAtLogin is the user's choice.
+	loginMenu   menubar.LoginMenuItem
+	openAtLogin bool
 
 	layout string
 	done   chan struct{}
@@ -207,7 +211,7 @@ func (a *app) handle(act action) {
 	case actOpenAtLogin:
 		a.errLine = ""
 		on := !a.openAtLogin
-		if err := menubar.SetOpenAtLogin(a.home, a.exe, on); err != nil {
+		if err := menubar.SetOpenAtLogin(a.home, a.exe, on, menubar.ReadOnlyVolume); err != nil {
 			a.errLine = a.lang.Text(menubar.MsgLoginItemFailed, err.Error())
 			return
 		}
@@ -363,18 +367,15 @@ func adminCLI() (string, error) {
 	return cli, nil
 }
 
-// quarantined reports whether path has the quarantine mark.
+// quarantined reports whether path has the quarantine mark. Any failure
+// other than "no such attribute" is menubar.ErrQuarantined, explained in
+// plain words (see menubar.QuarantineCheck).
 func quarantined(path string) (bool, error) {
-	err := exec.Command("/usr/bin/xattr", "-p", menubar.QuarantineAttr, path).Run()
-	var exit *exec.ExitError
-	switch {
-	case err == nil:
-		return true, nil
-	case errors.As(err, &exit):
-		// xattr exits 1 when the attribute is not there.
-		return false, nil
-	}
-	return false, err
+	var stderr bytes.Buffer
+	cmd := exec.Command("/usr/bin/xattr", menubar.ReadQuarantineArgs(path)...)
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	return menubar.QuarantineCheck(stderr.String(), err)
 }
 
 // clearQuarantine removes the quarantine mark from exactly path.
@@ -605,9 +606,13 @@ func (a *app) rebuild(m menubar.Menu) {
 		a.forward(it.toggle, action{kind: actToggle})
 	}
 	systray.AddSeparator()
-	if a.loginItem {
+	switch a.loginMenu {
+	case menubar.LoginItemToggle:
 		it.openAtLogin = systray.AddMenuItemCheckbox(l.Text(menubar.MsgMenuOpenAtLogin), l.Text(menubar.MsgMenuOpenAtLoginTip), a.openAtLogin)
 		a.forward(it.openAtLogin, action{kind: actOpenAtLogin})
+	case menubar.LoginItemMoveHint:
+		hint := systray.AddMenuItem(l.Text(menubar.MsgMenuMoveToApplications), "")
+		hint.Disable()
 	}
 	it.uninstall = systray.AddMenuItem(l.Text(menubar.MsgMenuUninstall), l.Text(menubar.MsgMenuUninstallTip))
 	a.forward(it.uninstall, action{kind: actUninstall})

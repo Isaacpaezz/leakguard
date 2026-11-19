@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"errors"
+	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"unicode/utf8"
 )
 
@@ -139,15 +142,19 @@ type prefsFile struct {
 	OpenAtLogin *bool `json:"open_at_login,omitempty"`
 }
 
-// maxPrefs bounds how much of menubar.json is read.
-const maxPrefs = 16 << 10
+// maxPrefs bounds how much of menubar.json is read, and maxLoginItem how
+// much of the LaunchAgent.
+const (
+	maxPrefs     = 16 << 10
+	maxLoginItem = 16 << 10
+)
 
-// LoadPrefs reads the choices in home. A missing or damaged file reads as
-// the defaults.
+// LoadPrefs reads the choices in home. A missing or damaged file, or
+// anything that is not a regular file, reads as the defaults.
 func LoadPrefs(home string) Prefs {
 	p := Prefs{OpenAtLogin: true}
-	data, err := os.ReadFile(PrefsPath(home))
-	if err != nil || len(data) > maxPrefs {
+	data, err := readRegular(PrefsPath(home), maxPrefs)
+	if err != nil {
 		return p
 	}
 	var f prefsFile
@@ -175,17 +182,24 @@ func SavePrefs(home string, p Prefs) error {
 
 // SyncLoginItem makes the LaunchAgent in home match the user's choice for
 // the app executable exe (see DecideLoginItem) and returns that choice.
-func SyncLoginItem(home, exe string) (bool, error) {
+// When the app runs from where a login item would not survive a restart
+// (see LoginMenu), the LaunchAgent is left as it is: it may open the copy
+// in Applications.
+func SyncLoginItem(home, exe string, readOnly ReadOnlyFunc) (bool, error) {
 	if err := checkHome(home); err != nil {
 		return true, err
 	}
 	on := LoadPrefs(home).OpenAtLogin
+	if !CanOpenAtLogin(exe, readOnly) {
+		return on, nil
+	}
 	path := LoginItemPath(home)
-	data, err := os.ReadFile(path)
+	data, err := readRegular(path, maxLoginItem)
 	exists := err == nil
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		// Unreadable: rewrite it when it should be there.
-		exists = true
+		// Unreadable, too big or not a regular file: replace it when it
+		// should be there.
+		data, exists = nil, true
 	}
 	switch DecideLoginItem(exe, on, data, exists) {
 	case LoginWrite:
@@ -206,8 +220,9 @@ func SyncLoginItem(home, exe string) (bool, error) {
 }
 
 // SetOpenAtLogin remembers the user's choice from the menu and applies it
-// at once. No password is needed: everything is in the user's home folder.
-func SetOpenAtLogin(home, exe string, on bool) error {
+// at once (see SyncLoginItem). No password is needed: everything is in the
+// user's home folder.
+func SetOpenAtLogin(home, exe string, on bool, readOnly ReadOnlyFunc) error {
 	if err := checkHome(home); err != nil {
 		return err
 	}
@@ -216,7 +231,7 @@ func SetOpenAtLogin(home, exe string, on bool) error {
 	if err := SavePrefs(home, p); err != nil {
 		return err
 	}
-	_, err := SyncLoginItem(home, exe)
+	_, err := SyncLoginItem(home, exe, readOnly)
 	return err
 }
 
@@ -266,4 +281,85 @@ func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
 		return err
 	}
 	return os.Rename(tmp.Name(), path)
+}
+
+// ReadOnlyFunc reports whether path is on a read-only volume.
+// ReadOnlyVolume is the real one.
+type ReadOnlyFunc func(path string) (bool, error)
+
+// LoginMenuItem is what the menu shows for opening at login.
+type LoginMenuItem int
+
+const (
+	// LoginItemHidden: nothing, for a development build outside a bundle.
+	LoginItemHidden LoginMenuItem = iota
+	// LoginItemToggle: the "Open at login" checkbox.
+	LoginItemToggle
+	// LoginItemMoveHint: a disabled line asking the user to move the app
+	// to Applications, because it runs from somewhere that a restart does
+	// not keep (the DMG, or a translocated copy).
+	LoginItemMoveHint
+)
+
+func (m LoginMenuItem) String() string {
+	switch m {
+	case LoginItemToggle:
+		return "toggle"
+	case LoginItemMoveHint:
+		return "move hint"
+	}
+	return "hidden"
+}
+
+// LoginMenu says what the menu shows for opening the app executable exe at
+// login. A login item only makes sense for a bundle that is still there
+// after a restart: never one that macOS translocated (it runs from a random
+// read-only copy) or one on a read-only volume such as the mounted DMG.
+// When readOnly cannot tell, the answer is the hint: a login item that
+// points nowhere would only hide the icon after a restart. Writable
+// external disks are fine.
+func LoginMenu(exe string, readOnly ReadOnlyFunc) LoginMenuItem {
+	bundle, ok := AppBundle(exe)
+	if !ok {
+		return LoginItemHidden
+	}
+	if strings.Contains(bundle, "/AppTranslocation/") {
+		return LoginItemMoveHint
+	}
+	if ro, err := readOnly(bundle); err != nil || ro {
+		return LoginItemMoveHint
+	}
+	return LoginItemToggle
+}
+
+// CanOpenAtLogin reports whether the LaunchAgent may be written, removed or
+// rewritten for the app executable exe (see LoginMenu).
+func CanOpenAtLogin(exe string, readOnly ReadOnlyFunc) bool {
+	return LoginMenu(exe, readOnly) == LoginItemToggle
+}
+
+// readRegular reads path when it is a regular file of at most max bytes.
+// The non-blocking open returns at once even for a FIFO without a writer,
+// which is then refused, so a launch never hangs on it.
+func readRegular(path string, max int64) ([]byte, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file", path)
+	}
+	data, err := io.ReadAll(io.LimitReader(f, max+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > max {
+		return nil, fmt.Errorf("%s is larger than %d bytes", path, max)
+	}
+	return data, nil
 }

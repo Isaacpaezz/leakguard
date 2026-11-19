@@ -216,15 +216,24 @@ vulnerability reporting, create labels `status:needs-triage`,
    SMAppService) written by the app on launch only when it runs from a
    `.app` bundle, rewritten when the app moved, never loaded with launchctl
    (RunAtLoad at the next login; no second copy now). The user's choice
-   lives in `~/Library/Application Support/leakguard/menubar.json`.
+   lives in `~/Library/Application Support/leakguard/menubar.json`. Never
+   written, rewritten or removed when the bundle path contains
+   `/AppTranslocation/` or the bundle's volume is read-only (`statfs`
+   `MNT_RDONLY`, `menubar.LoginMenu`): an agent pointing at the DMG would
+   hide the icon after a restart; the menu shows "Move leakguard to
+   Applications so it opens at login" instead. `menubar.json` and the agent
+   are read with a non-blocking open and only when they are regular files.
    Uninstall: `menubar.Uninstaller` (confirm with Cancel as default, then
    `<cli> disable` through the same administrator script builder with its
    own prompt, then remove the LaunchAgent and `menubar.json`, then quit);
    cancelling or a failed disable changes nothing else and says so.
    Quarantine: before running the CLI as administrator, the app clears
    `com.apple.quarantine` with `xattr -d` on exactly its own bundled CLI when
-   it carries the mark (`menubar.PrepareCLI`); a failure is
-   `ErrQuarantined`, explained in plain words with a link to the guide.
+   it carries the mark (`menubar.PrepareCLI`), only when `Lstat` shows a
+   regular file (a symlink or anything else is `ErrQuarantined`, nothing is
+   cleared) and with `xattr -s` so links are never followed; a failure to
+   read or clear the mark is `ErrQuarantined`, explained in plain words with
+   a link to the guide.
    Pending (T4): verify the release workflow, a live install from the DMG by
    the owner, whether a quarantined CLI runs from the administrator prompt
    at all, and the root uninstall.
