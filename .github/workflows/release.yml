@@ -1,0 +1,48 @@
+name: Release
+
+# Builds the macOS DMG and publishes it on GitHub Releases. Only the
+# maintainer pushes v* tags; agents never do (AGENTS.md rule 10).
+on:
+  push:
+    tags: ['v*']
+
+permissions: {}
+
+jobs:
+  macos:
+    name: macOS DMG
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - run: go test ./...
+      - name: Release notes from CHANGELOG.md
+        run: go run ./tools/releasenotes -version "${TAG#v}" > "$RUNNER_TEMP/notes.md"
+      - name: Build leakguard.app and the DMG
+        run: scripts/build-macos.sh "${TAG#v}"
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${TAG#v}"
+          prerelease=()
+          # Versions below 1.0 and pre-releases (1.2.3-rc.1) are marked as pre-releases.
+          case "$version" in
+            0.*|*-*) prerelease=(--prerelease) ;;
+          esac
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "leakguard $version" \
+            --notes-file "$RUNNER_TEMP/notes.md" \
+            "${prerelease[@]}" \
+            "dist/leakguard-$version-macos.dmg" \
+            "dist/leakguard-$version-macos.dmg.sha256"

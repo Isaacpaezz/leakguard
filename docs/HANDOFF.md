@@ -196,7 +196,56 @@ vulnerability reporting, create labels `status:needs-triage`,
 5. Self-updating catalog: a scheduled workflow refreshes ranges from their
    sources (ASN prefixes) and opens a PR; the app downloads a signed catalog.
    Domain-aware blocking for CDN-hosted services (OpenAI).
-6. Release pipeline (GoReleaser, Homebrew tap, winget, installers).
+6. 🚧 In review (macOS part, `feat/macos-installer`,
+   `odd/tasks/macos-installer.md`): `leakguard.app` in a DMG on GitHub
+   Releases. `scripts/build-macos.sh VERSION` builds both binaries for arm64
+   and amd64 with `-X internal/version.Version`, merges them with `lipo`,
+   writes `Contents/Info.plist` (`tools/infoplist`: bundle id
+   `dev.leakguard.menubar`, `LSUIElement`, minimum macOS 13; a pre-release
+   keeps only its numbers in the bundle versions), draws `AppIcon.icns`
+   (`tools/genappicon` + `iconutil`), signs ad-hoc (`codesign --deep -s -`;
+   no Developer ID yet, owner choice, so users click "Open Anyway" once) and
+   makes a UDZO DMG with an Applications link and `docs/install-macos.md` as
+   "Cómo abrir leakguard.txt", plus a `.sha256`. The release workflow runs on
+   `v*` tags (pushed only by the maintainer) with `contents: write` at job
+   level, refuses a tag whose version is not the newest CHANGELOG section
+   (`tools/releasenotes`), and marks versions below 1.0 as pre-releases. CI
+   builds the DMG on every pull request. The CLI ships inside the bundle next
+   to the menu-bar binary, where `FindCLI` already looks on first run.
+   Login item: a per-user LaunchAgent (works without a Developer ID, unlike
+   SMAppService) written by the app on launch only when it runs from a
+   `.app` bundle, rewritten when the app moved, never loaded with launchctl
+   (RunAtLoad at the next login; no second copy now). The user's choice
+   lives in `~/Library/Application Support/leakguard/menubar.json`. Never
+   written, rewritten or removed when the bundle path contains
+   `/AppTranslocation/` or the bundle's volume is read-only (`statfs`
+   `MNT_RDONLY`, `menubar.LoginMenu`): an agent pointing at the DMG would
+   hide the icon after a restart; the menu shows "Move leakguard to
+   Applications so it opens at login" instead. `menubar.json` and the agent
+   are read with a non-blocking open and only when they are regular files.
+   From the DMG or translocated (`menubar.MustMoveToApplications`), setup
+   and uninstall show only "Primero mueve leakguard a Aplicaciones…" and do
+   nothing else, so `ErrQuarantined` means a real quarantine failure in
+   Applications. `SetOpenAtLogin` changes the LaunchAgent first and saves
+   the choice only when that worked (and restores the agent if saving
+   fails); the uninstall failure says the app still opens at login only
+   when the LaunchAgent exists.
+   Uninstall: `menubar.Uninstaller` (confirm with Cancel as default, then
+   `<cli> disable` through the same administrator script builder with its
+   own prompt, then remove the LaunchAgent and `menubar.json`, then quit);
+   cancelling or a failed disable changes nothing else and says so.
+   Quarantine: before running the CLI as administrator, the app clears
+   `com.apple.quarantine` with `xattr -d` on exactly its own bundled CLI when
+   it carries the mark (`menubar.PrepareCLI`), only when `Lstat` shows a
+   regular file (a symlink or anything else is `ErrQuarantined`, nothing is
+   cleared) and with `xattr -s` so links are never followed; a failure to
+   read or clear the mark is `ErrQuarantined`, explained in plain words with
+   a link to the guide.
+   Pending (T4): verify the release workflow, a live install from the DMG by
+   the owner, whether a quarantined CLI runs from the administrator prompt
+   at all, and the root uninstall.
+   Later: Homebrew tap, winget, Linux packages, Developer ID signing and
+   notarization (the bundle layout stays the same).
 
 ## Resume prompt
 

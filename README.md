@@ -11,6 +11,7 @@
 </p>
 
 <p align="center">
+  <a href="#install-on-macos">Install</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="#supported-services">Services</a> ·
   <a href="#whats-new">What's new</a> ·
@@ -99,6 +100,12 @@ Missing a service? [Request it](https://github.com/Isaacpaezz/leakguard/issues/n
 - `leakguard status` without `sudo` asks the background service, which verifies the rules as root, so it reports PROTECTED or NOT PROTECTED without a password.
 - Session stats: the menu shows how long the VPN has been connected ("VPN conectada hace 2 h 15 min") or disconnected, and today's blocks and VPN drops ("Hoy: 14 bloqueos · la VPN se cayó 2 veces"); the icon's tooltip adds today's time on the VPN. `leakguard status` prints the same. A block is one packet rejected by leakguard's rule, an approximate count of blocked connection attempts. "Today" starts at local midnight; the numbers are kept in `/Library/Application Support/leakguard/stats.json` and survive restarts. With no blocks or no drops today, `leakguard status` says "no blocks" and "VPN never dropped". The stats never delay the protection: the rules load before the stats file is read, a stats file that is not a regular file is ignored, and the file is saved in the background.
 
+- macOS installer: `leakguard-VERSION-macos.dmg` on GitHub Releases with `leakguard.app` (universal for Apple silicon and Intel, macOS 13 or newer), an Applications shortcut and the guide "Cómo abrir leakguard" ([docs/install-macos.md](docs/install-macos.md)), plus a SHA-256 checksum file. Drag the app to Applications, allow it once ("Open Anyway"; it is not signed with an Apple certificate yet) and the 3-step setup does the rest, with no terminal. Releases are built by a workflow when the maintainer pushes a `v*` tag; `scripts/build-macos.sh VERSION` builds the same DMG locally.
+- The menu-bar app opens at login when it runs from `leakguard.app` (a per-user LaunchAgent, no password), and "Open at login" in the menu turns that off. Opened from the disk image (or from a copy macOS moved aside), it never writes the login item and the menu says "Move leakguard to Applications so it opens at login" instead; setup and uninstall only ask you to move the app to Applications first. Turning "Open at login" on or off either fully works or changes nothing and says why.
+- "Uninstall leakguard…" in the menu: one password prompt removes the protection rules and the background service, then the login item; cancelling changes nothing. Then drag the app to the Trash.
+- `leakguard version`; the menu's tooltip shows the version too.
+- If macOS keeps the download quarantine mark on the `leakguard` command inside the app, the app clears it from that one file before running it (only when it is a regular file inside the app, never through a symlink), or explains what to do; so does any failure to read the mark.
+
 **Changed**
 - The background service checks the rules every 30 seconds and loads them again only when the check fails or the saved choice changed, instead of reloading them every time, so the firewall keeps its block counters.
 - Menu-bar app: the first setup is a guided 3-step setup in native macOS dialogs, in the Mac's language (Spanish or English): choose the services, find your VPN by disconnecting and reconnecting it (no interface names: the app names its kind, such as "IPsec VPN", and you can choose another), and turn the protection on after a warning that the Mac will ask for your password once. Cancelling any step changes nothing; any other failure is explained in plain words in a dialog and on the menu. The setup opens by itself only when the app starts and leakguard is not set up or needs an update, never when the background service restarts later. Once set up, the menu shows a plain status, the services, "Change VPN…", pause or resume, and quit; the VPN interface submenu is gone.
@@ -115,9 +122,29 @@ Missing a service? [Request it](https://github.com/Isaacpaezz/leakguard/issues/n
 
 Full history: [CHANGELOG.md](CHANGELOG.md).
 
-## Try it today (macOS)
+## Install on macOS
 
-> ⚠️ Early stage. macOS only. Needs [Go](https://go.dev/dl/) 1.25 or newer.
+> ⚠️ Early stage. macOS 13 or newer, Apple silicon or Intel.
+
+1. Download `leakguard-VERSION-macos.dmg` from
+   [Releases](https://github.com/Isaacpaezz/leakguard/releases).
+2. Open it and drag **leakguard** to **Applications**.
+3. Open leakguard. The app is not signed with an Apple certificate yet, so
+   macOS blocks it once: on macOS 15 or newer open **System Settings >
+   Privacy & Security** and click **Open Anyway**; on macOS 13 or 14
+   right-click the app and choose **Open**.
+4. Follow the 3-step setup that opens by itself. Your Mac asks for your
+   password once. No terminal needed.
+
+The app opens at every login (untick "Open at login" in its menu to stop
+that), and "Uninstall leakguard…" in its menu removes everything but the app,
+which you then drag to the Trash. Step-by-step guide in Spanish and English,
+also inside the DMG: [docs/install-macos.md](docs/install-macos.md).
+
+## Build from source (contributors)
+
+> Needs [Go](https://go.dev/dl/) 1.25 or newer. To build the same DMG as a
+> release, see [CONTRIBUTING.md](CONTRIBUTING.md#build-the-macos-app).
 
 ```sh
 go install github.com/Isaacpaezz/leakguard/cmd/leakguard@latest
@@ -152,8 +179,9 @@ is kept as a legacy reference. If you installed it, remove it with
 
 ## Menu-bar app (macOS)
 
-> ⚠️ Early stage. Build it from a clone of this repository; it needs the
-> Xcode command line tools (`xcode-select --install`).
+> ⚠️ Early stage. Most people should [install the app](#install-on-macos).
+> To build it from a clone of this repository you need the Xcode command
+> line tools (`xcode-select --install`).
 
 ```sh
 go build -o leakguard ./cmd/leakguard
@@ -230,6 +258,19 @@ first install or to update an older one.
 "Quit" closes only the menu-bar app; the protection keeps running in the
 background. To turn it off, use "Pause protection" or `sudo leakguard disable`.
 
+When the app runs from `leakguard.app`, it opens at login: it writes
+`~/Library/LaunchAgents/dev.leakguard.menubar.plist` (no password) and
+rewrites it if you move the app. "Open at login" in the menu turns that off
+and the app remembers it in
+`~/Library/Application Support/leakguard/menubar.json`. Builds run from a
+clone never write it. "Uninstall leakguard…" explains what it removes, runs
+`leakguard disable` once with your password (cancelling changes nothing),
+removes the login item and quits; then drag the app to the Trash. If the
+`leakguard` command inside a downloaded app still carries macOS's quarantine
+mark, the app removes that mark from its own command, and only that one,
+before running it; if it cannot, it says so and points to the install guide.
+`leakguard version` and the icon's tooltip show the version.
+
 ## Roadmap
 
 | # | Milestone | Status |
@@ -240,7 +281,8 @@ background. To turn it off, use "Pause protection" or `sudo leakguard disable`.
 | 3 | Linux backend (`nftables`) and tray app | 🗓️ Planned |
 | 4 | Windows backend and tray app | 🗓️ Planned |
 | 5 | Self-updating IP catalog and domain-aware blocking for CDN-hosted services | 🗓️ Planned |
-| 6 | Installers and releases (Homebrew, winget, packages) | 🗓️ Planned |
+| 6 | Installers and releases: macOS DMG on GitHub Releases | 🚧 In review |
+| 6b | More installers (Homebrew, winget, Linux packages) | 🗓️ Planned |
 
 Design notes and lessons learned: [docs/HANDOFF.md](docs/HANDOFF.md).
 
@@ -273,8 +315,21 @@ restringidos y se usan a través de una VPN con *split tunneling* (por ejemplo,
 VPN Bypass). La meta es que sea igual de sencillo: un ícono en la barra de
 estado que te dice si estás protegido y una lista de servicios para marcar.
 
-El proyecto está en una etapa temprana. Hoy existe una herramienta de línea
-de comandos para macOS (ver "Try it today"). ¿Quieres colaborar? Lee [CONTRIBUTING.md](CONTRIBUTING.md); puedes
+El proyecto está en una etapa temprana. En macOS ya hay una app para la
+barra de menú.
+
+### Instalar en macOS
+
+Descarga `leakguard-VERSIÓN-macos.dmg` desde
+[Releases](https://github.com/Isaacpaezz/leakguard/releases), ábrelo y
+arrastra leakguard a Aplicaciones. La primera vez macOS la bloquea porque
+todavía no está firmada: en macOS 15 o más nuevo ve a **Configuración del
+Sistema > Privacidad y seguridad** y toca **Abrir igualmente**; en macOS 13
+o 14 haz clic derecho sobre la app y elige **Abrir**. Luego sigue los 3
+pasos que aparecen solos. La guía completa está en
+[docs/install-macos.md](docs/install-macos.md) y dentro del DMG.
+
+¿Quieres colaborar? Lee [CONTRIBUTING.md](CONTRIBUTING.md); puedes
 abrir issues en español.
 
 ## License

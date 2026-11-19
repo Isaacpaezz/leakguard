@@ -43,6 +43,25 @@ go run ./tools/readmegen         # regenerate the README landing sections
 go run ./tools/readmegen -check  # what CI runs
 ```
 
+## Build the macOS app
+
+On macOS with Go and the Xcode command line tools (`xcode-select --install`):
+
+```sh
+scripts/build-macos.sh 0.0.0-local
+```
+
+It builds `dist/leakguard.app` (universal for Apple silicon and Intel,
+ad-hoc signed) and `dist/leakguard-0.0.0-local-macos.dmg` with its `.sha256`
+file. `dist/` is ignored by git; never commit it. CI runs the same script on
+every pull request without uploading anything.
+
+Releases: only the maintainer pushes `v*` tags. Before tagging `vX.Y.Z`, the
+newest section of `CHANGELOG.md` must be `## [X.Y.Z] - DATE`; the release
+workflow (`.github/workflows/release.yml`) then tests, builds the DMG and
+creates the GitHub Release with that section as notes (versions below 1.0
+are marked as pre-releases). Contributors and AI agents never push tags.
+
 ## The README updates itself
 
 The landing page has generated sections between

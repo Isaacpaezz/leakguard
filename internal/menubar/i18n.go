@@ -50,6 +50,12 @@ const (
 	MsgMenuServiceTip
 	MsgMenuErrorTip
 	MsgCatalogError
+	MsgMenuOpenAtLogin
+	MsgMenuOpenAtLoginTip
+	MsgMenuMoveToApplications
+	MsgMenuUninstall
+	MsgMenuUninstallTip
+	MsgLoginItemFailed
 
 	msgComingSoonItem
 	msgStatusChecking
@@ -87,6 +93,7 @@ const (
 	msgErrUnsafeCLIPath
 	msgErrInvalidChoice
 	msgErrUnexpectedAnswer
+	msgErrQuarantined
 
 	msgStepTitle
 	msgChangeVPNTitle
@@ -123,6 +130,19 @@ const (
 	msgKindIPsec
 	msgKindWireGuard
 	msgKindPPP
+	msgTooltipVersion
+
+	msgUninstallTitle
+	msgUninstallConfirm
+	msgButtonUninstall
+	msgUninstallPrompt
+	msgUninstallCancelled
+	msgUninstallFailed
+	msgUninstallFailedNoLoginItem
+	msgMoveToApplicationsFirst
+	msgButtonUnderstood
+	msgUninstallCleanupFailed
+	msgUninstallDone
 
 	msgCount
 )
@@ -136,19 +156,25 @@ const MenuLineLength = 70
 // messages holds every string in both languages; a test checks that none is
 // missing or empty.
 var messages = [msgCount]text{
-	MsgMenuSetUp:          {"Configurar leakguard (3 pasos)…", "Set up leakguard (3 steps)…"},
-	MsgMenuSetUpTip:       {"Te guía en 3 pasos: qué proteger, tu VPN y activar la protección", "Guides you in 3 steps: what to protect, your VPN, and turning the protection on"},
-	MsgMenuChangeVPN:      {"Cambiar de VPN…", "Change VPN…"},
-	MsgMenuChangeVPNTip:   {"Vuelve a buscar tu VPN; no pide contraseña", "Finds your VPN again; no password needed"},
-	MsgMenuPause:          {"Pausar la protección", "Pause protection"},
-	MsgMenuResume:         {"Reanudar la protección", "Resume protection"},
-	MsgMenuToggleTip:      {"En pausa, los servicios usan tu conexión normal hasta que reanudes", "While paused, the services use your normal connection until you resume"},
-	MsgMenuQuit:           {"Salir", "Quit"},
-	MsgMenuQuitTip:        {"Cierra solo este menú; la protección sigue activa", "Closes this menu only; the protection keeps running"},
-	MsgMenuServicesHeader: {"Proteger estos servicios:", "Protect these services:"},
-	MsgMenuServiceTip:     {"Este servicio solo podrá usar tu VPN", "This service may only use your VPN"},
-	MsgMenuErrorTip:       {"El último cambio no funcionó", "The last change did not work"},
-	MsgCatalogError:       {"No se pudo leer la lista de servicios: %s", "Could not read the service list: %s"},
+	MsgMenuSetUp:              {"Configurar leakguard (3 pasos)…", "Set up leakguard (3 steps)…"},
+	MsgMenuSetUpTip:           {"Te guía en 3 pasos: qué proteger, tu VPN y activar la protección", "Guides you in 3 steps: what to protect, your VPN, and turning the protection on"},
+	MsgMenuChangeVPN:          {"Cambiar de VPN…", "Change VPN…"},
+	MsgMenuChangeVPNTip:       {"Vuelve a buscar tu VPN; no pide contraseña", "Finds your VPN again; no password needed"},
+	MsgMenuPause:              {"Pausar la protección", "Pause protection"},
+	MsgMenuResume:             {"Reanudar la protección", "Resume protection"},
+	MsgMenuToggleTip:          {"En pausa, los servicios usan tu conexión normal hasta que reanudes", "While paused, the services use your normal connection until you resume"},
+	MsgMenuQuit:               {"Salir", "Quit"},
+	MsgMenuQuitTip:            {"Cierra solo este menú; la protección sigue activa", "Closes this menu only; the protection keeps running"},
+	MsgMenuServicesHeader:     {"Proteger estos servicios:", "Protect these services:"},
+	MsgMenuServiceTip:         {"Este servicio solo podrá usar tu VPN", "This service may only use your VPN"},
+	MsgMenuErrorTip:           {"El último cambio no funcionó", "The last change did not work"},
+	MsgCatalogError:           {"No se pudo leer la lista de servicios: %s", "Could not read the service list: %s"},
+	MsgMenuOpenAtLogin:        {"Abrir al iniciar sesión", "Open at login"},
+	MsgMenuOpenAtLoginTip:     {"Abre este menú cada vez que entras a tu Mac; no pide contraseña", "Opens this menu every time you log in to your Mac; no password needed"},
+	MsgMenuMoveToApplications: {"Mueve leakguard a Aplicaciones para que se abra al iniciar sesión", "Move leakguard to Applications so it opens at login"},
+	MsgMenuUninstall:          {"Desinstalar leakguard…", "Uninstall leakguard…"},
+	MsgMenuUninstallTip:       {"Quita la protección, el servicio de fondo y la apertura al iniciar sesión", "Removes the protection, the background service and the login item"},
+	MsgLoginItemFailed:        {"No se pudo cambiar la apertura al iniciar sesión: %s", "Could not change the login item: %s"},
 
 	msgComingSoonItem:         {"%s (próximamente)", "%s (coming soon)"},
 	msgStatusChecking:         {"Comprobando…", "Checking…"},
@@ -186,6 +212,7 @@ var messages = [msgCount]text{
 	msgErrUnsafeCLIPath:     {"No se puede usar el comando leakguard que está junto a esta app: su ubicación no es válida", "The leakguard command next to this app cannot be used: its location is not valid"},
 	msgErrInvalidChoice:     {"La VPN o los servicios elegidos no son válidos; vuelve a configurar leakguard", "The chosen VPN or services are not valid; set up leakguard again"},
 	msgErrUnexpectedAnswer:  {"La ventana respondió algo inesperado", "The dialog gave an unexpected answer"},
+	msgErrQuarantined:       {"macOS no deja usar el comando leakguard que viene dentro de la app. Sigue la guía «Cómo abrir leakguard» del disco de instalación o https://github.com/Isaacpaezz/leakguard/blob/main/docs/install-macos.md", "macOS does not let the app use the leakguard command inside it. Follow the guide «Cómo abrir leakguard» on the install disk or https://github.com/Isaacpaezz/leakguard/blob/main/docs/install-macos.md"},
 	msgStepTitle:            {"Paso %d de 3", "Step %d of 3"},
 	msgChangeVPNTitle:       {"Cambiar de VPN", "Change VPN"},
 	msgAppTitle:             {"leakguard", "leakguard"},
@@ -221,6 +248,19 @@ var messages = [msgCount]text{
 	msgKindIPsec:            {"VPN IPsec", "IPsec VPN"},
 	msgKindWireGuard:        {"WireGuard", "WireGuard"},
 	msgKindPPP:              {"VPN PPP", "PPP VPN"},
+	msgTooltipVersion:       {"%s · versión %s", "%s · version %s"},
+
+	msgUninstallTitle:             {"Desinstalar leakguard", "Uninstall leakguard"},
+	msgUninstallConfirm:           {"¿Quieres desinstalar leakguard?\n\nSe quitarán las reglas de protección, el servicio de fondo y la apertura al iniciar sesión. Los servicios que protegías volverán a usar tu conexión normal.\n\nLa app se queda en Aplicaciones: después puedes arrastrarla a la Papelera. Tu Mac te va a pedir tu contraseña.", "Do you want to uninstall leakguard?\n\nThis removes the protection rules, the background service and the login item. The services you protected will use your normal connection again.\n\nThe app stays in Applications: afterwards you can drag it to the Trash. Your Mac will ask for your password."},
+	msgButtonUninstall:            {"Desinstalar", "Uninstall"},
+	msgUninstallPrompt:            {"leakguard necesita tu contraseña para quitar la protección y el servicio de fondo.", "leakguard needs your password to remove the protection and the background service."},
+	msgUninstallCancelled:         {"No se desinstaló nada: leakguard sigue igual que antes.", "Nothing was uninstalled: leakguard keeps working as before."},
+	msgUninstallFailed:            {"No se pudo desinstalar leakguard: %s\n\nLa app sigue abriéndose al iniciar sesión. Puedes intentarlo de nuevo desde el menú.", "Could not uninstall leakguard: %s\n\nThe app still opens at login. You can try again from the menu."},
+	msgUninstallFailedNoLoginItem: {"No se pudo desinstalar leakguard: %s\n\nPuedes intentarlo de nuevo desde el menú.", "Could not uninstall leakguard: %s\n\nYou can try again from the menu."},
+	msgMoveToApplicationsFirst:    {"Primero mueve leakguard a Aplicaciones: arrastra el ícono de leakguard a la carpeta Aplicaciones, ábrelo desde ahí y vuelve a intentarlo.", "First move leakguard to Applications: drag the leakguard icon to the Applications folder, open it from there and try again."},
+	msgButtonUnderstood:           {"Entendido", "OK"},
+	msgUninstallCleanupFailed:     {"leakguard se desinstaló, pero no se pudo quitar la apertura al iniciar sesión: %s\n\nPuedes arrastrar la app a la Papelera.", "leakguard was uninstalled, but the login item could not be removed: %s\n\nYou can drag the app to the Trash."},
+	msgUninstallDone:              {"leakguard se desinstaló. Puedes arrastrar la app a la Papelera.", "leakguard was uninstalled. You can drag the app to the Trash."},
 }
 
 // Text returns message m in language l, formatted with args when given.
