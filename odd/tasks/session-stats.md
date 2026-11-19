@@ -23,9 +23,9 @@ Branch `feat/session-stats`; delivered as one PR to `main`.
 
 | ID | Task | Specs | Route | Commit |
 |---|---|---|---|---|
-| T1 | `internal/stats` tracker + persistence; `internal/pf` block counter parsing | S2, S3, S5 | worker | |
-| T2 | Daemon: 5 s VPN sampling, verify-then-reload loop, counter read before reload/flush, stats in `ipc.Status`, `leakguard status` output | S1-S5 | worker | |
-| T3 | Menu lines and tooltip in es/en; docs | S1, S3, S6 | worker | |
+| T1 | `internal/stats` tracker + persistence; `internal/pf` block counter parsing | S2, S3, S5 | worker | 4e0cd27 |
+| T2 | Daemon: 5 s VPN sampling, verify-then-reload loop, counter read before reload/flush, stats in `ipc.Status`, `leakguard status` output | S1-S5 | worker | b28388a + fix |
+| T3 | Menu lines and tooltip in es/en; docs | S1, S3, S6 | worker | f86e405 |
 | T4 | Verification (protection loop changed), review, PR | all | parent | |
 
 ## Log
@@ -34,3 +34,4 @@ Branch `feat/session-stats`; delivered as one PR to `main`.
 - L2 (owner, 2026-11-18): "si perfecto" also approved the setup wizard; PR #11 merged.
 - L3 (parent decisions): "session" = since the saved VPN last connected; daily totals reset at local midnight; blocks counted from pf's block-rule packet counter (approximate, documented); stats live in the daemon so they keep counting when the menu app is closed.
 - L4 (evidence): `cmd/leakguard/serve.go` `applySaved` calls `pf.Firewall.Apply` (anchor reload) every 30 s, which would reset pf counters every 30 s.
+- L5 (verification, escalated item 4): no blockers; lock order, shutdown and reload-on-failed-verification hold (20x race runs). Should-fix F1 (a stats file that blocks on read delayed the forced load), F2 (fsync on the tick goroutine) and F3 (blocks lost between `set` and the load) fixed in the next commit with RED->GREEN, plus the verifier's eight probes as regression tests. Known limit: a reload that fails after pf loaded the anchor can undercount (never overcount).

@@ -171,9 +171,15 @@ vulnerability reporting, create labels `status:needs-triage`,
    owns the numbers (`internal/stats`, pure, fed with timestamped samples):
    it samples the saved VPN every 5 s, reads the packet counter of the
    `block return` rule (`pf.Firewall.BlockCount`, `pfctl -a ANCHOR -s rules
-   -v`) on each 30 s tick and before every reload, `set` and pause flush,
-   and saves `/Library/Application Support/leakguard/stats.json` at most
-   once a minute and at shutdown. pf resets rule counters on every anchor
+   -v`) on each 30 s tick and right before every reload, `set` load and
+   pause flush (after the config is saved, so blocks meanwhile count), and
+   saves `/Library/Application Support/leakguard/stats.json` at most once a
+   minute and at shutdown, from its own goroutine so a slow disk never
+   delays a verify (shutdown waits for a save in flight). At start the
+   daemon loads the rules first and reads the stats file after, replaying
+   the start reading on it; `stats.Load` opens without blocking and refuses
+   anything but a regular file of at most 64 KiB, so a FIFO or a hung file
+   at that path never keeps the rules from loading. pf resets rule counters on every anchor
    load, so the loop no longer reloads every 30 s: it loads at start, then
    verifies (pf enabled and `State.Verify`) and reloads only when the check
    fails or the saved choice differs from the one it loaded. Counting rule
@@ -181,7 +187,8 @@ vulnerability reporting, create labels `status:needs-triage`,
    means a reset, so the reading itself is new; the daemon's own loads and
    flushes set the baseline to zero; a tracker without a saved file takes
    its first reading as a baseline; after a restart the saved reading is
-   the baseline. VPN gaps over 2 min (sleep, daemon down) add no time and
+   the baseline. A reload that fails after pf loaded the anchor resets the
+   counter unseen: blocks may be lost then, never counted twice. VPN gaps over 2 min (sleep, daemon down) add no time and
    no drop. "Today" resets at local midnight, also across DST. Stats
    errors are logged once and never change protection.
 3. Linux `nftables` backend and tray app.

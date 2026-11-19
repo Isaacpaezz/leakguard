@@ -342,3 +342,19 @@ func TestFormatDuration(t *testing.T) {
 		}
 	}
 }
+
+// Load reads at most MaxFileSize bytes: a bigger file is refused, never read
+// whole.
+func TestLoadRefusesAHugeFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "stats.json")
+	if err := os.WriteFile(path, make([]byte, MaxFileSize+1), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tr, err := Load(path, time.UTC)
+	if err == nil || err.Error() != path+": larger than 65536 bytes" {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if tr == nil || tr.State() != (State{}) {
+		t.Fatalf("Load() tracker = %+v, want a fresh one", tr)
+	}
+}

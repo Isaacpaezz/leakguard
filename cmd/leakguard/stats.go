@@ -27,8 +27,11 @@ type daemonStats struct {
 	c    *cli
 	path string
 
-	mu      sync.Mutex // guards everything below and the tracker
+	mu sync.Mutex // guards everything below and the tracker
+	// t is nil until load; what happens before is kept in pending, in
+	// order, and replayed on the loaded tracker.
 	t       *stats.Tracker
+	pending []func(*stats.Tracker)
 	dirty   bool
 	saved   time.Time
 	readErr string // the last counter error logged, to log each one once
@@ -48,14 +51,37 @@ func (c *cli) location() *time.Location {
 
 func (c *cli) statsPath() string { return filepath.Join(c.env.Root, stats.DefaultPath) }
 
-// loadStats reads the saved stats; a missing or corrupt file starts fresh.
-func (c *cli) loadStats() *daemonStats {
-	t, err := stats.Load(c.statsPath(), c.location())
-	d := &daemonStats{c: c, path: c.statsPath(), t: t}
+// newStats returns the stats of "serve", not loaded yet: the daemon loads
+// its rules first and the saved stats after, so stats file I/O never delays
+// protection.
+func (c *cli) newStats() *daemonStats {
+	return &daemonStats{c: c, path: c.statsPath()}
+}
+
+// load reads the saved stats, then replays what happened before; a missing
+// or corrupt file starts fresh.
+func (d *daemonStats) load() {
+	t, err := stats.Load(d.path, d.c.location())
 	if err != nil {
 		d.logf("could not read the session stats: %v", err)
 	}
-	return d
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, op := range d.pending {
+		op(t)
+	}
+	d.t, d.pending = t, nil
+}
+
+// record applies op to the tracker, or keeps it for load. The caller holds
+// d.mu.
+func (d *daemonStats) record(op func(*stats.Tracker)) {
+	d.dirty = true
+	if d.t == nil {
+		d.pending = append(d.pending, op)
+		return
+	}
+	op(d.t)
 }
 
 func (d *daemonStats) logf(format string, a ...any) {
@@ -63,7 +89,8 @@ func (d *daemonStats) logf(format string, a ...any) {
 }
 
 // countBlocks reads pf's block counter into the tracker. The caller holds the
-// service lock, so the reading always comes before a reload or flush.
+// service lock and calls it right before a reload or flush, so no block is
+// lost.
 func (d *daemonStats) countBlocks(fw pf.Firewall) {
 	n, err := fw.BlockCount()
 	d.mu.Lock()
@@ -78,8 +105,8 @@ func (d *daemonStats) countBlocks(fw pf.Firewall) {
 		}
 	default:
 		d.readErr = ""
-		d.t.ObserveBlocks(d.c.now(), n)
-		d.dirty = true
+		now := d.c.now()
+		d.record(func(t *stats.Tracker) { t.ObserveBlocks(now, n) })
 	}
 }
 
@@ -87,8 +114,7 @@ func (d *daemonStats) countBlocks(fw pf.Firewall) {
 func (d *daemonStats) counterReset() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.t.CounterReset()
-	d.dirty = true
+	d.record((*stats.Tracker).CounterReset)
 }
 
 // sampleVPN records whether the saved VPN is connected. Without a saved VPN,
@@ -108,9 +134,9 @@ func (d *daemonStats) sampleVPN() {
 			connected = i.Connected()
 		}
 	}
+	now := d.c.now()
 	d.mu.Lock()
-	d.t.ObserveVPN(d.c.now(), connected)
-	d.dirty = true
+	d.record(func(t *stats.Tracker) { t.ObserveVPN(now, connected) })
 	d.mu.Unlock()
 }
 
@@ -121,7 +147,7 @@ func (d *daemonStats) save(force bool) {
 	defer d.saveMu.Unlock()
 	d.mu.Lock()
 	now := d.c.now()
-	if !d.dirty || (!force && !d.saved.IsZero() && now.Sub(d.saved) < statsSaveInterval) {
+	if d.t == nil || !d.dirty || (!force && !d.saved.IsZero() && now.Sub(d.saved) < statsSaveInterval) {
 		d.mu.Unlock()
 		return
 	}
@@ -129,7 +155,11 @@ func (d *daemonStats) save(force bool) {
 	d.dirty, d.saved = false, now
 	d.mu.Unlock()
 
-	err := stats.Save(d.path, st)
+	save := stats.Save
+	if d.c.env.SaveStats != nil {
+		save = d.c.env.SaveStats
+	}
+	err := save(d.path, st)
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if err == nil {
@@ -143,11 +173,14 @@ func (d *daemonStats) save(force bool) {
 	}
 }
 
-// ipc returns the stats for the status answer, or nil before the first VPN
-// sample.
+// ipc returns the stats for the status answer, or nil before the load or
+// the first VPN sample.
 func (d *daemonStats) ipc() *ipc.Stats {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if d.t == nil {
+		return nil
+	}
 	return ipcStats(d.t.Summary(d.c.now()))
 }
 
@@ -182,8 +215,14 @@ func printStats(w io.Writer, st *ipc.Stats, now time.Time) {
 		}
 		fmt.Fprintf(w, "Session:\tVPN %s for %s\n", state, stats.FormatDuration(now.Sub(since)))
 	}
-	fmt.Fprintf(w, "Today:\t%s · VPN dropped %s · %s on the VPN\n",
-		plural(st.TodayBlocks, "block", "blocks"), plural(uint64(max(st.TodayDrops, 0)), "time", "times"),
+	blocks, drops := "no blocks", "VPN never dropped"
+	if st.TodayBlocks > 0 {
+		blocks = plural(st.TodayBlocks, "block", "blocks")
+	}
+	if st.TodayDrops > 0 {
+		drops = "VPN dropped " + plural(uint64(st.TodayDrops), "time", "times")
+	}
+	fmt.Fprintf(w, "Today:\t%s · %s · %s on the VPN\n", blocks, drops,
 		stats.FormatDuration(time.Duration(st.TodayVPNSeconds)*time.Second))
 }
 

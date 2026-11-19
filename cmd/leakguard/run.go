@@ -13,6 +13,7 @@ import (
 	"github.com/Isaacpaezz/leakguard/internal/daemon"
 	"github.com/Isaacpaezz/leakguard/internal/pf"
 	"github.com/Isaacpaezz/leakguard/internal/probe"
+	"github.com/Isaacpaezz/leakguard/internal/stats"
 )
 
 // Exit codes.
@@ -61,6 +62,8 @@ type Env struct {
 	// SampleEvery is how often "serve" checks whether the VPN is
 	// connected, for the session stats. Zero means sampleInterval.
 	SampleEvery time.Duration
+	// SaveStats writes the session stats file. Nil means stats.Save.
+	SaveStats func(path string, s stats.State) error
 	// ServeContext returns the context that stops "serve". Nil means
 	// SIGINT or SIGTERM.
 	ServeContext func() (context.Context, context.CancelFunc)

@@ -34,6 +34,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 )
 
@@ -47,6 +48,9 @@ const DefaultPath = "/Library/Application Support/leakguard/stats.json"
 const MaxGap = 2 * time.Minute
 
 const dayFormat = "2006-01-02"
+
+// MaxFileSize bounds how much of the stats file Load reads.
+const MaxFileSize = 64 << 10
 
 // State is what the tracker saves. Field names are the file format.
 type State struct {
@@ -98,10 +102,12 @@ func New(loc *time.Location) *Tracker {
 
 // Load reads the state at path. It always returns a usable tracker: a
 // missing file starts fresh without an error; an unreadable or corrupt one
-// starts fresh and returns the error, for the log.
+// starts fresh and returns the error, for the log. It never blocks on a file
+// that is not a regular file (a FIFO, a device) and reads at most
+// MaxFileSize bytes, so the stats never hold up protection.
 func Load(path string, loc *time.Location) (*Tracker, error) {
 	t := New(loc)
-	data, err := os.ReadFile(path)
+	data, err := readFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return t, nil
 	}
@@ -122,6 +128,32 @@ func Load(path string, loc *time.Location) (*Tracker, error) {
 	}
 	t.s = s
 	return t, nil
+}
+
+// readFile reads a regular file of at most MaxFileSize bytes. The
+// non-blocking open returns at once even for a FIFO without a writer, which
+// is then refused.
+func readFile(path string) ([]byte, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s: not a regular file", path)
+	}
+	data, err := io.ReadAll(io.LimitReader(f, MaxFileSize+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > MaxFileSize {
+		return nil, fmt.Errorf("%s: larger than %d bytes", path, MaxFileSize)
+	}
+	return data, nil
 }
 
 // Save writes s atomically, readable by everyone and writable only by its

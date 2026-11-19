@@ -555,6 +555,14 @@ type statefulPfctl struct {
 	table   []string
 	packets uint64
 	failV   error
+	// disabled is pf turned off; "-E" turns it on.
+	disabled bool
+	// fail makes the calls with these arguments fail.
+	fail map[string]error
+	// afterLoad packets are blocked right after each load.
+	afterLoad uint64
+	// total is every packet ever blocked.
+	total uint64
 }
 
 func (p *statefulPfctl) Run(stdin string, args ...string) (string, error) {
@@ -562,10 +570,19 @@ func (p *statefulPfctl) Run(stdin string, args ...string) (string, error) {
 	defer p.mu.Unlock()
 	key := strings.Join(args, " ")
 	p.calls = append(p.calls, key)
+	if err := p.fail[key]; err != nil {
+		return "", err
+	}
 	switch key {
 	case "-s info":
+		if p.disabled {
+			return "Status: Disabled for 0 days\n", nil
+		}
 		return "Status: Enabled for 1 days\n", nil
+	case "-E":
+		p.disabled = false
 	case loadAnchor:
+		defer func() { p.packets += p.afterLoad; p.total += p.afterLoad }()
 		p.rules, p.table, p.packets = nil, nil, 0
 		for _, l := range strings.Split(stdin, "\n") {
 			switch {
@@ -607,7 +624,28 @@ func (p *statefulPfctl) block(n uint64) {
 	defer p.mu.Unlock()
 	if len(p.rules) > 0 {
 		p.packets += n
+		p.total += n
 	}
+}
+
+// blocked is every packet the block rule ever rejected.
+func (p *statefulPfctl) blocked() uint64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.total
+}
+
+// set changes the fake under its lock.
+func (p *statefulPfctl) set(f func(p *statefulPfctl)) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	f(p)
+}
+
+func (p *statefulPfctl) loadedRules() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.rules) > 0
 }
 
 // unload empties the anchor behind the daemon's back.
@@ -867,7 +905,7 @@ func TestStatusShowsTheStatsFromTheDaemon(t *testing.T) {
 		{ipc.Stats{SessionSince: "2026-11-16T14:57:00Z", TodayVPNSeconds: 45, TodayBlocks: 1, TodayDrops: 1, Day: "2026-11-16"},
 			[]string{"Session:             VPN disconnected for 3 min\n", "Today:               1 block · VPN dropped 1 time · 45 s on the VPN\n"}},
 		{ipc.Stats{Day: "2026-11-16"},
-			[]string{"Today:               0 blocks · VPN dropped 0 times · 0 s on the VPN\n"}},
+			[]string{"Today:               no blocks · VPN never dropped · 0 s on the VPN\n"}},
 	} {
 		h := newHarness(t, false)
 		st := tc.stats
@@ -898,7 +936,7 @@ func TestStatusWithRootReadsTheSavedStats(t *testing.T) {
 	code, out, errOut := h.run("status")
 	expect(t, code, out, errOut, 0, []string{
 		"Session:            VPN connected for 1 min\n",
-		"Today:              7 blocks · VPN dropped 0 times · 1 min on the VPN\n",
+		"Today:              7 blocks · VPN never dropped · 1 min on the VPN\n",
 		"Firewall:           PROTECTED\n",
 	}, nil)
 	// Without saved stats, there are no stats lines.
