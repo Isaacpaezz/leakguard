@@ -28,7 +28,7 @@ import (
 
 const (
 	pollEvery = 3 * time.Second
-	// lineLength bounds the status and error lines, in runes.
+	// lineLength bounds the status, session, today and error lines, in runes.
 	lineLength = menubar.MenuLineLength
 )
 
@@ -98,8 +98,9 @@ type app struct {
 }
 
 type items struct {
-	status, errLine, setUp, changeVPN, toggle, quit *systray.MenuItem
-	services                                        map[string]*systray.MenuItem
+	status, session, today, errLine *systray.MenuItem
+	setUp, changeVPN, toggle, quit  *systray.MenuItem
+	services                        map[string]*systray.MenuItem
 }
 
 func (a *app) ready() {
@@ -360,7 +361,7 @@ func connectedVPNCandidates() []string {
 }
 
 func (a *app) draw() {
-	setup := menubar.Setup{Catalog: a.catalog, Lang: a.lang}
+	setup := menubar.Setup{Catalog: a.catalog, Lang: a.lang, Now: time.Now()}
 	if a.daemonUnavailable() {
 		setup.Update = menubar.InstalledState("") == menubar.InstallOld
 	}
@@ -390,6 +391,8 @@ func (a *app) draw() {
 	}
 	it := a.items
 	it.status.SetTitle(menubar.Short(m.Status, lineLength))
+	setInfoLine(it.session, m.Session)
+	setInfoLine(it.today, m.Today)
 	if a.errLine != "" {
 		it.errLine.SetTitle(menubar.Short(a.errLine, lineLength))
 		it.errLine.Show()
@@ -445,6 +448,10 @@ func (a *app) rebuild(m menubar.Menu) {
 	it := items{services: map[string]*systray.MenuItem{}}
 	it.status = systray.AddMenuItem("", "")
 	it.status.Disable()
+	it.session = systray.AddMenuItem("", "")
+	it.session.Disable()
+	it.today = systray.AddMenuItem("", "")
+	it.today.Disable()
 	it.errLine = systray.AddMenuItem("", l.Text(menubar.MsgMenuErrorTip))
 	it.errLine.Disable()
 	systray.AddSeparator()
@@ -502,6 +509,16 @@ func (a *app) forward(item *systray.MenuItem, act action) {
 			}
 		}
 	}()
+}
+
+// setInfoLine shows a disabled, informational line, or hides it when empty.
+func setInfoLine(item *systray.MenuItem, line string) {
+	if line == "" {
+		item.Hide()
+		return
+	}
+	item.SetTitle(menubar.Short(line, lineLength))
+	item.Show()
 }
 
 func setChecked(item *systray.MenuItem, on bool) {

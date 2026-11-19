@@ -10,10 +10,12 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/Isaacpaezz/leakguard/internal/catalog"
 	"github.com/Isaacpaezz/leakguard/internal/config"
 	"github.com/Isaacpaezz/leakguard/internal/ipc"
+	"github.com/Isaacpaezz/leakguard/internal/stats"
 )
 
 // State is what the menu-bar icon shows.
@@ -32,6 +34,10 @@ type Menu struct {
 	State State
 	// Status is the first, informational line of the menu.
 	Status string
+	// Session ("VPN connected for 2 h 15 min") and Today ("Today: 14
+	// blocks · VPN dropped 2 times") are the informational lines under the
+	// status; empty when the daemon sends no stats.
+	Session, Today string
 	// Tooltip is the icon's tooltip, with the technical details.
 	Tooltip  string
 	Services []ServiceItem
@@ -57,6 +63,8 @@ type Setup struct {
 	// service predates the socket, so the wizard updates it.
 	Update bool
 	Lang   Lang
+	// Now is the time the session line counts to; zero hides that line.
+	Now time.Time
 }
 
 // ServiceItem is one catalog service.
@@ -99,7 +107,7 @@ func Build(st *ipc.Status, err error, setup Setup) Menu {
 	case st.VPNInterface == "" || len(st.Services) == 0:
 		m = notSetUp(l, false)
 	default:
-		return configured(l, *st)
+		return configured(l, *st, setup.Now)
 	}
 	m.Tooltip = l.Text(msgTooltip, m.Status)
 	return m
@@ -114,7 +122,7 @@ func notSetUp(l Lang, update bool) Menu {
 }
 
 // configured is the menu once the daemon has a VPN and services.
-func configured(l Lang, st ipc.Status) Menu {
+func configured(l Lang, st ipc.Status, now time.Time) Menu {
 	m := Menu{
 		Services:  serviceItems(l, st),
 		ChangeVPN: true,
@@ -139,6 +147,11 @@ func configured(l Lang, st ipc.Status) Menu {
 	m.Tooltip = l.Text(msgTooltipVPN, l.Text(msgTooltip, m.Status), st.VPNInterface)
 	if reason != "" {
 		m.Tooltip = l.Text(msgTooltipReason, m.Tooltip, reason)
+	}
+	if st.Stats != nil {
+		m.Session = sessionLine(l, *st.Stats, now)
+		m.Today = todayLine(l, *st.Stats)
+		m.Tooltip = l.Text(msgTooltipReason, m.Tooltip, todayVPN(l, *st.Stats))
 	}
 	return m
 }
@@ -318,4 +331,42 @@ func invalidChoice(err error) error {
 		return nil
 	}
 	return kindError{ErrInvalidChoice, err}
+}
+
+// sessionLine is "VPN connected for 2 h 15 min" or "VPN disconnected for
+// 3 min", or empty when the session start or the clock is unknown.
+func sessionLine(l Lang, s ipc.Stats, now time.Time) string {
+	since, err := time.Parse(time.RFC3339, s.SessionSince)
+	if err != nil || now.IsZero() {
+		return ""
+	}
+	m := msgSessionDisconnected
+	if s.Connected {
+		m = msgSessionConnected
+	}
+	return l.Text(m, stats.FormatDuration(now.Sub(since)))
+}
+
+// todayLine is "Today: 14 blocks · VPN dropped 2 times"; without drops only
+// the blocks, and without blocks "Today: no blocks".
+func todayLine(l Lang, s ipc.Stats) string {
+	parts := []string{l.Text(msgNoBlocks)}
+	switch {
+	case s.TodayBlocks == 1:
+		parts[0] = l.Text(msgOneBlock)
+	case s.TodayBlocks > 1:
+		parts[0] = l.Text(msgBlocks, s.TodayBlocks)
+	}
+	switch {
+	case s.TodayDrops == 1:
+		parts = append(parts, l.Text(msgOneDrop))
+	case s.TodayDrops > 1:
+		parts = append(parts, l.Text(msgDrops, s.TodayDrops))
+	}
+	return l.Text(msgToday, strings.Join(parts, " · "))
+}
+
+// todayVPN is the tooltip's "Today: 5 h 20 min on the VPN".
+func todayVPN(l Lang, s ipc.Stats) string {
+	return l.Text(msgTodayVPN, stats.FormatDuration(time.Duration(s.TodayVPNSeconds)*time.Second))
 }

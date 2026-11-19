@@ -63,6 +63,15 @@ const (
 	msgTooltip
 	msgTooltipVPN
 	msgTooltipReason
+	msgSessionConnected
+	msgSessionDisconnected
+	msgToday
+	msgNoBlocks
+	msgOneBlock
+	msgBlocks
+	msgOneDrop
+	msgDrops
+	msgTodayVPN
 
 	msgExplainNotSetUp
 	msgExplainNotAuthorized
@@ -120,7 +129,8 @@ const (
 
 type text struct{ es, en string }
 
-// MenuLineLength bounds the status and error lines of the menu, in runes.
+// MenuLineLength bounds the status, session, today and error lines of the
+// menu, in runes.
 const MenuLineLength = 70
 
 // messages holds every string in both languages; a test checks that none is
@@ -152,6 +162,15 @@ var messages = [msgCount]text{
 	msgTooltip:                {"leakguard: %s", "leakguard: %s"},
 	msgTooltipVPN:             {"%s · VPN: %s", "%s · VPN: %s"},
 	msgTooltipReason:          {"%s · %s", "%s · %s"},
+	msgSessionConnected:       {"VPN conectada hace %s", "VPN connected for %s"},
+	msgSessionDisconnected:    {"VPN desconectada hace %s", "VPN disconnected for %s"},
+	msgToday:                  {"Hoy: %s", "Today: %s"},
+	msgNoBlocks:               {"sin bloqueos", "no blocks"},
+	msgOneBlock:               {"1 bloqueo", "1 block"},
+	msgBlocks:                 {"%d bloqueos", "%d blocks"},
+	msgOneDrop:                {"la VPN se cayó 1 vez", "VPN dropped 1 time"},
+	msgDrops:                  {"la VPN se cayó %d veces", "VPN dropped %d times"},
+	msgTodayVPN:               {"Hoy: %s por la VPN", "Today: %s on the VPN"},
 
 	msgExplainNotSetUp:      {"leakguard no está configurado en esta Mac", "leakguard is not set up on this Mac"},
 	msgExplainNotAuthorized: {"Solo un administrador de la Mac puede cambiar leakguard", "Only administrators can change leakguard"},

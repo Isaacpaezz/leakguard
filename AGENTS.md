@@ -20,10 +20,11 @@ VPN Bypass: a tray or menu-bar icon plus service checkboxes.
 | `internal/ipc` | Socket protocol between the root daemon and the apps: one JSON request and response per connection, strict decoding, peer check (root or group `admin` only). |
 | `internal/catalog` | Loads and validates the catalog, embedded in the binary. The CLI and the future tray app reuse it. |
 | `internal/config` | The user's VPN interface and services; load, save, validate, VPN interface candidates. |
-| `internal/pf` | macOS `pf` backend: renders, applies, flushes and verifies the `com.apple/250.leakguard` anchor. |
-| `cmd/leakguard-menubar` | macOS menu-bar app (`fyne.io/systray`, needs cgo): draws `internal/menubar`, polls the daemon every 3 s, runs the setup wizard with osascript dialogs, embeds the template icons made by `gen_icons.go`. Other systems get a stub that exits 1. The CLI must never import systray. |
+| `internal/pf` | macOS `pf` backend: renders, applies, flushes and verifies the `com.apple/250.leakguard` anchor, and reads its block counter. |
+| `cmd/leakguard-menubar` | macOS menu-bar app (`fyne.io/systray`, needs cgo): draws `internal/menubar` (status, session and today lines), polls the daemon every 3 s, runs the setup wizard with osascript dialogs, embeds the template icons made by `gen_icons.go`. Other systems get a stub that exits 1. The CLI must never import systray. |
 | `internal/menubar` | The menu-bar app's logic without a GUI: status to menu description, clicks to `set`/`pause` requests, the 3-step setup wizard over an injected `Dialogs` driver, the Spanish/English message catalog (`i18n.go`), plain-language errors, the quoted AppleScript for dialogs and for the administrator setup, which CLI is safe to run as root (current install, root-owned without symlinks, else the one next to the app). |
 | `internal/daemon` | macOS LaunchDaemon `dev.leakguard` (runs `leakguard serve`, KeepAlive): root-owned binary copy, plist, `launchctl`. |
+| `internal/stats` | Session stats without I/O beyond its JSON file: VPN session start or end, today's VPN time, drops and blocks (pf block-rule packet deltas, never double counted), reset at local midnight. The daemon feeds it; `status` and the menu show it. |
 | `internal/probe` | `leakguard test`: connects to protected addresses outside the VPN and expects a refusal. |
 | `internal/readme`, `tools/readmegen` | Generate the README landing sections. |
 | `prototypes/macos-pf` | Working macOS `pf` prototype. Reference only; do not extend it. |
