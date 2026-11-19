@@ -5,9 +5,11 @@ package pf
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"net/netip"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"github.com/Isaacpaezz/leakguard/internal/catalog"
@@ -146,7 +148,7 @@ func (f Firewall) Status() (State, error) {
 // Verify checks that the state protects every range of services on vpnInterface.
 func (s State) Verify(vpnInterface string, services []catalog.Service) error {
 	if len(s.Rules) == 0 {
-		return fmt.Errorf("leakguard rules are not loaded")
+		return ErrNotLoaded
 	}
 	target := "to <" + Table + ">"
 	var pass, block bool
@@ -155,7 +157,7 @@ func (s State) Verify(vpnInterface string, services []catalog.Service) error {
 			continue
 		}
 		pass = pass || strings.HasPrefix(r, "pass out quick on "+vpnInterface+" ")
-		block = block || strings.HasPrefix(r, "block return out quick ")
+		block = block || isBlockRule(r)
 	}
 	if !pass {
 		return fmt.Errorf("pass rule for %s is not loaded", vpnInterface)
@@ -202,4 +204,67 @@ func lines(s string) []string {
 		}
 	}
 	return out
+}
+
+// ErrNotLoaded means the anchor has no rules, so there is no counter.
+var ErrNotLoaded = errors.New("leakguard rules are not loaded")
+
+// BlockCount returns how many packets the block rule has rejected since the
+// anchor was last loaded: pf resets the counter on every reload or flush.
+// Any output it cannot read is an error, never a zero: a fake zero would
+// look like a reset and hide or invent blocks.
+func (f Firewall) BlockCount() (uint64, error) {
+	out, err := f.Runner.Run("", "-a", Anchor, "-s", "rules", "-v")
+	if err != nil {
+		return 0, err
+	}
+	return parseBlockCount(out)
+}
+
+// parseBlockCount adds the Packets counters of the block rules in the output
+// of "pfctl -s rules -v", which prints each rule's counters on the next line:
+//
+//	block return out quick from any to <leakguard>
+//	  [ Evaluations: 120       Packets: 14        Bytes: 840         States: 0     ]
+func parseBlockCount(out string) (uint64, error) {
+	ls := lines(out)
+	if len(ls) == 0 {
+		return 0, ErrNotLoaded
+	}
+	var total uint64
+	found := false
+	for i, l := range ls {
+		if !isBlockRule(l) {
+			continue
+		}
+		found = true
+		if i+1 >= len(ls) || !strings.HasPrefix(ls[i+1], "[") {
+			return 0, errors.New("cannot read the block counter: no counters after the block rule")
+		}
+		n, ok := packets(ls[i+1])
+		if !ok {
+			return 0, fmt.Errorf("cannot read the block counter: no packet count in %q", ls[i+1])
+		}
+		total += n
+	}
+	if !found {
+		return 0, errors.New("block rule is not loaded")
+	}
+	return total, nil
+}
+
+func isBlockRule(rule string) bool {
+	return strings.HasPrefix(rule, "block return out quick ") && strings.Contains(rule, "to <"+Table+">")
+}
+
+// packets reads the number after "Packets:" in a counters line.
+func packets(counters string) (uint64, bool) {
+	f := strings.Fields(counters)
+	for i := 0; i+1 < len(f); i++ {
+		if f[i] == "Packets:" {
+			n, err := strconv.ParseUint(f[i+1], 10, 64)
+			return n, err == nil
+		}
+	}
+	return 0, false
 }
