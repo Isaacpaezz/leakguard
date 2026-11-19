@@ -5,13 +5,27 @@
 <p align="center"><strong>When your VPN drops, the services you choose, such as Claude, go offline instead of leaking through your real connection.</strong></p>
 
 <p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/hero-dark.svg">
+    <img src="docs/assets/hero-light.svg" width="880" alt="Animation in three phases. 1: the VPN is connected and Claude's traffic goes through the VPN tunnel. 2: the VPN drops; Claude's traffic tries your real connection, hits the leakguard shield and is blocked, so Claude stays offline, while email, video and banking keep working over the normal connection. 3: the VPN reconnects and Claude works again through the VPN.">
+  </picture>
+</p>
+
+<p align="center">
   <a href="https://github.com/Isaacpaezz/leakguard/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Isaacpaezz/leakguard/ci.yml?branch=main&style=for-the-badge&label=CI" alt="CI status"></a>
+  <a href="https://github.com/Isaacpaezz/leakguard/releases"><img src="https://img.shields.io/github/v/release/Isaacpaezz/leakguard?include_prereleases&style=for-the-badge" alt="Latest release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-2ea44f?style=for-the-badge" alt="MIT license"></a>
-  <img src="https://img.shields.io/badge/macOS%20·%20Linux%20·%20Windows-planned-blue?style=for-the-badge" alt="Platforms">
+  <img src="https://img.shields.io/badge/platform-macOS%2013%2B-555555?style=for-the-badge" alt="Platform: macOS 13 or newer">
+</p>
+
+<p align="center">
+  <a href="https://github.com/Isaacpaezz/leakguard/releases"><strong>⬇️ Download for macOS</strong></a><br>
+  <sub>0.1.0 is the first public version, a pre-release. macOS 13 or newer, Apple silicon or Intel.</sub>
 </p>
 
 <p align="center">
   <a href="#install-on-macos">Install</a> ·
+  <a href="#what-you-see">What you see</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="#supported-services">Services</a> ·
   <a href="#whats-new">What's new</a> ·
@@ -32,26 +46,20 @@ connection (*split tunneling*).
 The risk shows up when the VPN drops. The operating system quietly falls
 back to the real connection, and the service sees your real IP address.
 
-## The idea
-
 leakguard is a **kill switch for the services you choose**, not for the whole
 computer:
 
-- ✅ You pick what to protect: Claude, OpenAI, or several services at once.
+- ✅ You pick what to protect, such as Claude.
 - 🔒 Those services can **only** be reached through the VPN.
-- 📴 If the VPN drops, those services act as if there were no internet. They
-  never try your real connection.
-- 🌐 Everything else (email, YouTube, banking) keeps working normally.
-
-The goal is something as simple as VPN Bypass: an icon in the menu bar or
-system tray that shows whether you are protected, and a list of services you
-can tick on and off.
+- 📴 If the VPN drops, they act as if there were no internet. They never try
+  your real connection.
+- 🌐 Everything else (email, video, banking) keeps working normally.
 
 ## How it works
 
-leakguard does **not** wait to "notice" that the VPN dropped. That approach would
-leave a window where traffic could leak. Instead, the firewall allows packets
-to the protected services **only** on the VPN interface:
+leakguard does **not** wait to "notice" that the VPN dropped; that would leave
+a window where traffic could leak. The firewall allows packets to the
+protected services **only** on the VPN interface:
 
 ```
 pass  out quick on <vpn-interface> to <protected-services> keep state
@@ -59,13 +67,60 @@ block return out quick to <protected-services>
 ```
 
 If the VPN interface is gone, no allowed path is left and the connection fails
-immediately: in about 8 ms in our macOS tests. No detection race, and no leak.
+at once: in about 8 ms in our macOS tests. No detection race, and no leak.
+On macOS this is a `pf` anchor kept by a background service that loads it at
+boot and checks it every 30 seconds.
 
-| OS      | Firewall used                                           | Status       |
-|---------|---------------------------------------------------------|--------------|
-| macOS   | `pf` anchor + LaunchDaemon                              | 🚧 In review |
-| Linux   | `nftables` table: drop to the set when `oifname` ≠ VPN  | 🗓️ Planned   |
-| Windows | Windows Filtering Platform / Windows Firewall rules     | 🗓️ Planned   |
+## What you see
+
+A shield in the menu bar. Its menu says whether you are protected, how your
+VPN session is going, and how many times leakguard blocked a protected
+service today:
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/menu-dark.svg">
+    <img src="docs/assets/menu-light.svg" width="420" alt="The leakguard menu under the shield icon: Protected; VPN connected for 2 h 15 min; Today: 14 blocks · VPN dropped 2 times. Protect these services: Anthropic (Claude) ticked, OpenAI (ChatGPT, Codex) coming soon. Then Change VPN…, Pause protection, Open at login (ticked), Uninstall leakguard… and Quit.">
+  </picture>
+</p>
+
+The first time, a 3-step setup opens by itself, in your Mac's language
+(Spanish or English). You never type interface names such as `utun4` or
+`ipsec0`: leakguard finds your VPN when you disconnect and connect it.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/setup-dark.svg">
+    <img src="docs/assets/setup-light.svg" width="880" alt="Three setup windows, one after another. Step 1 of 3: choose what to protect, with Anthropic (Claude) selected. Step 2 of 3: find your VPN; disconnect it and click Next, connect it again and click Next, and leakguard says it found your VPN. Step 3 of 3: turn on the protection; your Mac asks for your password once.">
+  </picture>
+</p>
+
+A filled shield means protected; an outline means not protected or paused (the
+first line of the menu says why); a shield with a slash means leakguard is not
+set up yet. A **block** is a packet to a protected service that leakguard
+rejected because it tried to leave outside the VPN, so it is an approximate
+count of blocked connection attempts. "Today" starts at local midnight.
+
+## Install on macOS
+
+> 0.1.0 is a pre-release. macOS 13 or newer, Apple silicon or Intel, and an
+> administrator account on the Mac.
+
+1. Download `leakguard-VERSION-macos.dmg` from
+   [Releases](https://github.com/Isaacpaezz/leakguard/releases).
+2. Open it and drag **leakguard** to **Applications**.
+3. Open leakguard from Applications. The app is not signed with an Apple
+   certificate yet, so macOS blocks it once: on macOS 15 or newer open
+   **System Settings > Privacy & Security** and click **Open Anyway**; on
+   macOS 13 or 14 right-click the app and choose **Open**.
+4. Follow the 3-step setup that opens by itself. Your Mac asks for your
+   password once. No terminal needed.
+
+The app opens at every login (untick "Open at login" in its menu to stop
+that). "Quit" closes only the menu; the protection keeps running. To remove
+leakguard, choose "Uninstall leakguard…" in its menu, enter your password,
+then drag the app to the Trash. Step-by-step guide in Spanish and English,
+also inside the DMG: [docs/install-macos.md](docs/install-macos.md).
 
 ## Supported services
 
@@ -85,63 +140,39 @@ Missing a service? [Request it](https://github.com/Isaacpaezz/leakguard/issues/n
 ## What's new
 
 <!-- BEGIN GENERATED: whats-new -->
-**Not released yet** · changes on `main`
+**v0.1.0** · 2026-11-19
+
+The first public version, for macOS (pre-release).
 
 **Added**
-- `leakguard` CLI for macOS: `services`, `interfaces`, `enable`, `disable`, `status`, `test` and `apply`, with services taken from the catalog.
-- `sudo leakguard enable --vpn ipsec0 anthropic` protects the chosen services and installs a LaunchDaemon that loads the rules at boot and verifies them every 30 seconds.
-- `leakguard test` proves the protection: it connects to each protected address through your normal connection and expects a refusal.
-- Service catalog (`catalog/services/*.json`) with Anthropic (Claude) supported and OpenAI planned.
-- Self-updating README: the service table and this section are generated from the catalog and this file, and CI blocks changes that leave it stale.
-- Contributor guide, issue and pull request templates, code owners, security policy and agent rules.
-- macOS `pf` prototype that blocks Claude when the VPN is down.
-- The background service now runs `leakguard serve`: it stays running, verifies the rules every 30 seconds and listens on `/var/run/leakguard.sock` for the menu-bar app. Only administrators can talk to it, and it can pause the protection without uninstalling.
-- macOS menu-bar app (`leakguard-menubar`): a shield shows whether you are protected; tick services, choose the VPN interface, and pause or resume without a password. The first setup happens in the menu too: tick services, choose the VPN, and "Set up leakguard…" installs it with one administrator prompt, and updates an older install the same way.
-- `leakguard status` without `sudo` asks the background service, which verifies the rules as root, so it reports PROTECTED or NOT PROTECTED without a password.
-- Session stats: the menu shows how long the VPN has been connected ("VPN conectada hace 2 h 15 min") or disconnected, and today's blocks and VPN drops ("Hoy: 14 bloqueos · la VPN se cayó 2 veces"); the icon's tooltip adds today's time on the VPN. `leakguard status` prints the same. A block is one packet rejected by leakguard's rule, an approximate count of blocked connection attempts. "Today" starts at local midnight; the numbers are kept in `/Library/Application Support/leakguard/stats.json` and survive restarts. With no blocks or no drops today, `leakguard status` says "no blocks" and "VPN never dropped". The stats never delay the protection: the rules load before the stats file is read, a stats file that is not a regular file is ignored, and the file is saved in the background.
-
-- macOS installer: `leakguard-VERSION-macos.dmg` on GitHub Releases with `leakguard.app` (universal for Apple silicon and Intel, macOS 13 or newer), an Applications shortcut and the guide "Cómo abrir leakguard" ([docs/install-macos.md](docs/install-macos.md)), plus a SHA-256 checksum file. Drag the app to Applications, allow it once ("Open Anyway"; it is not signed with an Apple certificate yet) and the 3-step setup does the rest, with no terminal. Releases are built by a workflow when the maintainer pushes a `v*` tag; `scripts/build-macos.sh VERSION` builds the same DMG locally.
-- The menu-bar app opens at login when it runs from `leakguard.app` (a per-user LaunchAgent, no password), and "Open at login" in the menu turns that off. Opened from the disk image (or from a copy macOS moved aside), it never writes the login item and the menu says "Move leakguard to Applications so it opens at login" instead; setup and uninstall only ask you to move the app to Applications first. Turning "Open at login" on or off either fully works or changes nothing and says why.
-- "Uninstall leakguard…" in the menu: one password prompt removes the protection rules and the background service, then the login item; cancelling changes nothing. Then drag the app to the Trash.
-- `leakguard version`; the menu's tooltip shows the version too.
-- If macOS keeps the download quarantine mark on the `leakguard` command inside the app, the app clears it from that one file before running it (only when it is a regular file inside the app, never through a symlink), or explains what to do; so does any failure to read the mark.
-
-**Changed**
-- The background service checks the rules every 30 seconds and loads them again only when the check fails or the saved choice changed, instead of reloading them every time, so the firewall keeps its block counters.
-- Menu-bar app: the first setup is a guided 3-step setup in native macOS dialogs, in the Mac's language (Spanish or English): choose the services, find your VPN by disconnecting and reconnecting it (no interface names: the app names its kind, such as "IPsec VPN", and you can choose another), and turn the protection on after a warning that the Mac will ask for your password once. Cancelling any step changes nothing; any other failure is explained in plain words in a dialog and on the menu. The setup opens by itself only when the app starts and leakguard is not set up or needs an update, never when the background service restarts later. Once set up, the menu shows a plain status, the services, "Change VPN…", pause or resume, and quit; the VPN interface submenu is gone.
-- Menu-bar app: the VPN interface list shows only connected VPN interfaces, not idle system tunnels.
-- `leakguard test` fails unless every domain of a protected service has a refused address, and reports a resolved address outside the catalog ranges as `NOT COVERED` (pf does not block it).
-- `leakguard test` picks your real connection itself when the default route is the VPN, and stops with a clear message when the `--via` interface is not connected.
-- `sudo leakguard status` reports NOT PROTECTED when pf is disabled, and `status` shows the last background run.
-- The background service logs every run to `/Library/Logs/leakguard.log`, and `enable` waits for the old service to unload before loading the new one, retrying once.
-- `sudo leakguard apply` and `sudo leakguard enable` end a pause from the menu-bar app, so the protection comes back after a reboot.
-- The menu-bar app no longer gets stuck when the background service runs without a choice: choose the VPN interface first and tick a service, or tick a service and the only connected VPN is used.
-- The menu-bar app clears the error line once the background service answers again, and shows why "Set up leakguard…" failed even when the prompt printed nothing.
-- The background service's pause command is now `pause` instead of `disable`, so it never reads like `sudo leakguard disable`, which uninstalls. Apps ignore status fields they do not know, so a newer background service keeps working with an older app.
+- `leakguard.app` for macOS 13 or newer (Apple silicon and Intel) in a DMG on GitHub Releases, with a SHA-256 checksum and an install guide in Spanish and English ([docs/install-macos.md](docs/install-macos.md)). It is not signed with an Apple certificate yet, so macOS asks you to allow it once ("Open Anyway").
+- A shield in the menu bar shows whether you are protected. The menu has one checkbox per service, "Change VPN…", "Pause protection" and "Quit"; changes need no password.
+- A guided 3-step setup in Spanish or English: choose what to protect, find your VPN by disconnecting and connecting it, and turn the protection on with one password prompt. No terminal needed; cancelling any step changes nothing.
+- Protection for Anthropic (Claude), IPv4 and IPv6. When the VPN is down, Claude fails at once instead of using your real connection; the rest of the Mac keeps working. OpenAI is planned.
+- Session stats in the menu and in `leakguard status`: "VPN connected for 2 h 15 min" and "Today: 14 blocks · VPN dropped 2 times".
+- The app opens at login when it runs from Applications ("Open at login" in the menu turns that off), and "Uninstall leakguard…" removes the rules, the background service and the login item with one password prompt.
+- A background service loads the rules at boot, checks them every 30 seconds, loads them again when the check fails, and logs to `/Library/Logs/leakguard.log`.
+- `leakguard` command for macOS: `services`, `interfaces`, `enable`, `disable`, `status`, `test`, `apply` and `version`. `leakguard test` proves that each protected address is refused outside the VPN.
+- Service catalog with sources for every range, a README that updates itself from the catalog and this file, a contributor guide, issue templates, a security policy and agent rules.
 <!-- END GENERATED: whats-new -->
 
 Full history: [CHANGELOG.md](CHANGELOG.md).
 
-## Install on macOS
+## Roadmap
 
-> ⚠️ Early stage. macOS 13 or newer, Apple silicon or Intel.
+| Version | What | Status |
+|---|---|---|
+| 0.1.0 | macOS: menu-bar app, 3-step setup, Claude protection, DMG installer | ✅ First public version (pre-release) |
+| 1.0 | [Milestone 1.0](https://github.com/Isaacpaezz/leakguard/milestone/1): ChatGPT/OpenAI ([#14](https://github.com/Isaacpaezz/leakguard/issues/14)), self-updating IP ranges ([#16](https://github.com/Isaacpaezz/leakguard/issues/16)), signed and notarized app ([#15](https://github.com/Isaacpaezz/leakguard/issues/15)), menu polish ([#8](https://github.com/Isaacpaezz/leakguard/issues/8)) | 🚧 Next |
+| 1.1 | Windows: Windows Filtering Platform backend and tray app | 🗓️ Planned |
+| 1.2 | Linux: `nftables` backend and tray app | 🗓️ Planned |
 
-1. Download `leakguard-VERSION-macos.dmg` from
-   [Releases](https://github.com/Isaacpaezz/leakguard/releases).
-2. Open it and drag **leakguard** to **Applications**.
-3. Open leakguard. The app is not signed with an Apple certificate yet, so
-   macOS blocks it once: on macOS 15 or newer open **System Settings >
-   Privacy & Security** and click **Open Anyway**; on macOS 13 or 14
-   right-click the app and choose **Open**.
-4. Follow the 3-step setup that opens by itself. Your Mac asks for your
-   password once. No terminal needed.
+Design notes and lessons learned: [docs/HANDOFF.md](docs/HANDOFF.md).
 
-The app opens at every login (untick "Open at login" in its menu to stop
-that), and "Uninstall leakguard…" in its menu removes everything but the app,
-which you then drag to the Trash. Step-by-step guide in Spanish and English,
-also inside the DMG: [docs/install-macos.md](docs/install-macos.md).
+## Build from source
 
-## Build from source (contributors)
+<details>
+<summary>The <code>leakguard</code> command (contributors)</summary>
 
 > Needs [Go](https://go.dev/dl/) 1.25 or newer. To build the same DMG as a
 > release, see [CONTRIBUTING.md](CONTRIBUTING.md#build-the-macos-app).
@@ -161,92 +192,54 @@ sudo leakguard disable                         # turn it off; your choices are k
 `enable` loads the firewall rules and installs a background service
 (`leakguard serve`, run by macOS as root) that loads them at boot, checks
 them every 30 seconds, loads them again if the check fails, and logs each run
-to `/Library/Logs/leakguard.log`. The same
-service also listens on `/var/run/leakguard.sock` for the menu-bar
-app, so you can change services without typing your password each time. Only
-administrators of the Mac can talk to it: the socket belongs to the `admin`
-group, and the service checks who is calling and refuses everyone else.
-`leakguard status` asks it, so it can tell you PROTECTED without `sudo`.
-If the VPN interface goes down, the protected
-services stop working until it is back. `test` connects through your real
-connection (Wi-Fi or Ethernet) and finds it by itself even when the default
-route is the VPN; name it with `--via IFACE` if you have several. Run
-`leakguard help` for every option.
-
-The earlier shell prototype in [`prototypes/macos-pf`](prototypes/macos-pf/README.md)
-is kept as a legacy reference. If you installed it, remove it with
-`sudo prototypes/macos-pf/uninstall.sh` before using `leakguard`.
-
-## Menu-bar app (macOS)
-
-> ⚠️ Early stage. Most people should [install the app](#install-on-macos).
-> To build it from a clone of this repository you need the Xcode command
-> line tools (`xcode-select --install`).
-
-```sh
-go build -o leakguard ./cmd/leakguard
-go build -o leakguard-menubar ./cmd/leakguard-menubar && ./leakguard-menubar
-```
-
-A shield appears in the menu bar:
-
-| Icon | Meaning |
-|---|---|
-| Filled shield | Protected: the ticked services can only use the VPN. |
-| Shield outline | Not protected, or paused. The first line of the menu says why. |
-| Shield with a slash | leakguard is not set up on this Mac (its background service is not running). |
-
-The first time, no terminal is needed: the app opens a guided setup by
-itself, in your Mac's language (Spanish when your first preferred language is
-Spanish, English otherwise). You can also open it from "Set up leakguard
-(3 steps)…" in the menu. Each window is titled "Step N of 3":
-
-1. Choose what to protect. Services that are not supported yet are listed as
-   "coming soon" and cannot be chosen.
-2. Find your VPN: disconnect it and click Next, then connect it again and
-   click Next. The VPN is the connection that appeared; you never need to
-   know names like `utun4` or `ipsec0`. If none appeared, retry or choose
-   from a list; if several appeared, you choose.
-3. Turn the protection on. The window tells you first that your Mac will ask
-   for your login password, once, to install the background service; then
-   the macOS password prompt says why. It runs
-   `leakguard enable --vpn IFACE SERVICE...` once as administrator.
-
-Cancelling any step changes nothing. A last window confirms what is protected.
-Upgrading from an older leakguard (one installed before the menu-bar app,
-whose background service only re-applied the rules) uses the same setup with
-the `leakguard` command next to the app (build it as above); if there is none,
-the app tells you to put it there or run `sudo leakguard enable`.
-
-Once set up, the menu shows a plain status ("Protected", "Paused", ...), one
-checkbox per service, "Change VPN…" (step 2 again, no password), "Pause
-protection" or "Resume protection", and "Quit". Changes need no password: the
-background service only listens to administrators of the Mac, so the app must
-run in an administrator's account. Unticking the last service pauses the
-protection. Technical details, such as the VPN interface name, are in the
-icon's tooltip. `sudo leakguard enable` and `sudo leakguard apply` also end a
-pause.
-
-Under the status, two lines say how the session is going, for example "VPN
-connected for 2 h 15 min" (or "VPN disconnected for 3 min") and "Today: 14
-blocks · VPN dropped 2 times"; the tooltip adds today's time on the VPN.
-`leakguard status` prints the same numbers:
+to `/Library/Logs/leakguard.log`. The same service listens on
+`/var/run/leakguard.sock` for the menu-bar app, so you can change services
+without typing your password each time. Only administrators of the Mac can
+talk to it: the socket belongs to the `admin` group, and the service checks
+who is calling and refuses everyone else. `leakguard status` asks it, so it
+can tell you PROTECTED without `sudo`, and prints the session stats:
 
 ```
 Session:             VPN connected for 2 h 15 min
 Today:               14 blocks · VPN dropped 2 times · 5 h 20 min on the VPN
 ```
 
+`test` connects through your real connection (Wi-Fi or Ethernet) and finds it
+by itself even when the default route is the VPN; name it with `--via IFACE`
+if you have several. Run `leakguard help` for every option.
+
+The earlier shell prototype in [`prototypes/macos-pf`](prototypes/macos-pf/README.md)
+is kept as a legacy reference. If you installed it, remove it with
+`sudo prototypes/macos-pf/uninstall.sh` before using `leakguard`.
+
+</details>
+
+<details>
+<summary>The menu-bar app (contributors)</summary>
+
+You need the Xcode command line tools (`xcode-select --install`).
+
+```sh
+go build -o leakguard ./cmd/leakguard
+go build -o leakguard-menubar ./cmd/leakguard-menubar && ./leakguard-menubar
+```
+
+The setup runs `leakguard enable --vpn IFACE SERVICE...` once as
+administrator. Upgrading from an older leakguard (one installed before the
+menu-bar app) uses the same setup with the `leakguard` command next to the
+app; if there is none, the app tells you to put it there or run
+`sudo leakguard enable`. "Change VPN…" runs step 2 again with no password.
+Unticking the last service pauses the protection; `sudo leakguard enable` and
+`sudo leakguard apply` also end a pause. Technical details, such as the VPN
+interface name, today's time on the VPN and the version, are in the icon's
+tooltip.
+
 - **Session**: how long ago your VPN connected, or disconnected. The
   background service checks it every 5 seconds.
-- **Blocks**: packets to a protected service that leakguard rejected because
-  they tried to leave outside the VPN. One app retries several times, so this
-  is an approximate count of blocked connection attempts, not of requests.
 - **VPN dropped**: how many times your VPN went from connected to
   disconnected while the background service was watching.
-- **Today** starts at local midnight. The numbers live in
-  `/Library/Application Support/leakguard/stats.json` and survive restarts;
-  time while the Mac sleeps is not counted.
+- The numbers live in `/Library/Application Support/leakguard/stats.json` and
+  survive restarts; time while the Mac sleeps is not counted.
 
 Anything run as administrator uses the installed copy
 `/usr/local/libexec/leakguard/leakguard` only when it is current and it, and
@@ -255,36 +248,19 @@ otherwise the app refuses and asks you to reinstall with
 `sudo leakguard enable`. The `leakguard` next to the app is used only for the
 first install or to update an older one.
 
-"Quit" closes only the menu-bar app; the protection keeps running in the
-background. To turn it off, use "Pause protection" or `sudo leakguard disable`.
-
 When the app runs from `leakguard.app`, it opens at login: it writes
 `~/Library/LaunchAgents/dev.leakguard.menubar.plist` (no password) and
-rewrites it if you move the app. "Open at login" in the menu turns that off
-and the app remembers it in
-`~/Library/Application Support/leakguard/menubar.json`. Builds run from a
-clone never write it. "Uninstall leakguard…" explains what it removes, runs
+rewrites it if you move the app. "Open at login" turns that off and the app
+remembers it in `~/Library/Application Support/leakguard/menubar.json`. Opened
+from the disk image, it never writes the login item and the menu says "Move
+leakguard to Applications so it opens at login". "Uninstall leakguard…" runs
 `leakguard disable` once with your password (cancelling changes nothing),
-removes the login item and quits; then drag the app to the Trash. If the
-`leakguard` command inside a downloaded app still carries macOS's quarantine
-mark, the app removes that mark from its own command, and only that one,
-before running it; if it cannot, it says so and points to the install guide.
-`leakguard version` and the icon's tooltip show the version.
+removes the login item and quits. If the `leakguard` command inside a
+downloaded app still carries macOS's quarantine mark, the app removes that
+mark from its own command, and only that one, before running it; if it
+cannot, it says so and points to the install guide.
 
-## Roadmap
-
-| # | Milestone | Status |
-|---|-----------|--------|
-| 0 | Open source foundation: contributing rules, self-updating README | ✅ Done |
-| 1 | Go CLI for macOS: profiles from the catalog, `enable`, `disable`, `status`, `test` | 🚧 In review |
-| 2 | Menu-bar app on macOS: protection status and service checkboxes | 🚧 In progress |
-| 3 | Linux backend (`nftables`) and tray app | 🗓️ Planned |
-| 4 | Windows backend and tray app | 🗓️ Planned |
-| 5 | Self-updating IP catalog and domain-aware blocking for CDN-hosted services | 🗓️ Planned |
-| 6 | Installers and releases: macOS DMG on GitHub Releases | 🚧 In review |
-| 6b | More installers (Homebrew, winget, Linux packages) | 🗓️ Planned |
-
-Design notes and lessons learned: [docs/HANDOFF.md](docs/HANDOFF.md).
+</details>
 
 ## Contributing
 
@@ -305,32 +281,89 @@ service you protect.
 
 ## En español
 
-**leakguard** bloquea Claude, OpenAI o los servicios que elijas cuando tu VPN
-se cae. En lugar de usar tu conexión real y exponer tu IP, esos servicios
-quedan sin internet hasta que la VPN vuelve. El resto de tu computadora sigue
-funcionando con normalidad.
+### Qué es
+
+**leakguard** bloquea los servicios que elijas, como Claude, cuando tu VPN se
+cae. En lugar de usar tu conexión real y mostrar tu IP, esos servicios se
+quedan sin internet hasta que la VPN vuelve. El resto de tu Mac (correo,
+videos, banco) sigue funcionando con normalidad.
 
 Está pensado para países como Venezuela, donde estos servicios están
 restringidos y se usan a través de una VPN con *split tunneling* (por ejemplo,
-VPN Bypass). La meta es que sea igual de sencillo: un ícono en la barra de
-estado que te dice si estás protegido y una lista de servicios para marcar.
+VPN Bypass). La versión 0.1.0 es la primera versión pública, para macOS, y
+todavía es una versión preliminar. Hoy protege Anthropic (Claude); ChatGPT
+(OpenAI) llegará en la versión 1.0.
 
-El proyecto está en una etapa temprana. En macOS ya hay una app para la
-barra de menú.
+**[⬇️ Descargar para macOS](https://github.com/Isaacpaezz/leakguard/releases)**
+
+### Qué ves
+
+Un escudo en la barra de menú. Su menú te dice si estás protegido, cuánto
+tiempo lleva conectada tu VPN y cuántas veces leakguard bloqueó hoy un
+servicio protegido:
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/menu-es-dark.svg">
+    <img src="docs/assets/menu-es-light.svg" width="420" alt="El menú de leakguard bajo el ícono del escudo: Protegido; VPN conectada hace 2 h 15 min; Hoy: 14 bloqueos · la VPN se cayó 2 veces. Proteger estos servicios: Anthropic (Claude) marcado, OpenAI (ChatGPT, Codex) próximamente. Luego Cambiar de VPN…, Pausar la protección, Abrir al iniciar sesión (marcado), Desinstalar leakguard… y Salir.">
+  </picture>
+</p>
+
+La primera vez se abre sola una guía de 3 pasos. No necesitas saber nombres
+técnicos de tu VPN: leakguard la encuentra cuando la desconectas y la vuelves
+a conectar.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/setup-es-dark.svg">
+    <img src="docs/assets/setup-es-light.svg" width="880" alt="Tres ventanas de configuración, una tras otra. Paso 1 de 3: elige qué quieres proteger, con Anthropic (Claude) seleccionado. Paso 2 de 3: encuentra tu VPN; desconéctala y toca Siguiente, conéctala otra vez y toca Siguiente, y leakguard dice que encontró tu VPN. Paso 3 de 3: activa la protección; tu Mac te pide tu contraseña una sola vez.">
+  </picture>
+</p>
+
+El escudo lleno significa que estás protegido; el escudo vacío, que no estás
+protegido o que la protección está en pausa (la primera línea del menú dice
+por qué). Un **bloqueo** es un intento de un servicio protegido de salir sin
+la VPN que leakguard detuvo; es un conteo aproximado. "Hoy" empieza a la
+medianoche.
 
 ### Instalar en macOS
 
-Descarga `leakguard-VERSIÓN-macos.dmg` desde
-[Releases](https://github.com/Isaacpaezz/leakguard/releases), ábrelo y
-arrastra leakguard a Aplicaciones. La primera vez macOS la bloquea porque
-todavía no está firmada: en macOS 15 o más nuevo ve a **Configuración del
-Sistema > Privacidad y seguridad** y toca **Abrir igualmente**; en macOS 13
-o 14 haz clic derecho sobre la app y elige **Abrir**. Luego sigue los 3
-pasos que aparecen solos. La guía completa está en
-[docs/install-macos.md](docs/install-macos.md) y dentro del DMG.
+Necesitas macOS 13 o más nuevo (Apple Silicon o Intel) y una cuenta de
+administrador de la Mac.
 
-¿Quieres colaborar? Lee [CONTRIBUTING.md](CONTRIBUTING.md); puedes
-abrir issues en español.
+1. Descarga `leakguard-VERSIÓN-macos.dmg` desde
+   [Releases](https://github.com/Isaacpaezz/leakguard/releases).
+2. Ábrelo y arrastra **leakguard** a **Aplicaciones**.
+3. Abre leakguard desde Aplicaciones. Como todavía no está firmada con un
+   certificado de Apple, macOS la bloquea la primera vez: en macOS 15 o más
+   nuevo ve a **Configuración del Sistema > Privacidad y seguridad** y haz
+   clic en **Abrir igualmente**; en macOS 13 o 14 haz clic derecho sobre la
+   app y elige **Abrir**.
+4. Sigue los 3 pasos que aparecen solos. Tu Mac te pide tu contraseña una
+   sola vez. No necesitas la Terminal.
+
+leakguard se abre sola cada vez que entras a tu Mac (quita la marca de
+**Abrir al iniciar sesión** en el menú si no lo quieres). **Salir** cierra
+solo el menú: la protección sigue activa. Para pausarla, usa **Pausar la
+protección**.
+
+### Desinstalar
+
+1. En el menú del escudo, elige **Desinstalar leakguard…** y confirma.
+2. Escribe tu contraseña de la Mac. leakguard quita las reglas de protección,
+   el servicio de fondo y la apertura al iniciar sesión, y se cierra.
+3. Arrastra leakguard desde Aplicaciones a la Papelera.
+
+Si cancelas, no se cambia nada.
+
+### Enlaces
+
+- Guía completa de instalación, también dentro del DMG:
+  [docs/install-macos.md](docs/install-macos.md)
+- Descargas: [Releases](https://github.com/Isaacpaezz/leakguard/releases)
+- ¿Algo no funciona? [Reporta un problema](https://github.com/Isaacpaezz/leakguard/issues/new?template=bug_report.yml)
+  (puedes escribir en español).
+- ¿Quieres colaborar? Lee [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

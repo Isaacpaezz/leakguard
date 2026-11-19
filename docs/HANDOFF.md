@@ -79,9 +79,23 @@ vulnerability reporting, create labels `status:needs-triage`,
 
 ## Milestones
 
+Releases (owner, 2026-11-19): **0.1.0** is the first public version, macOS
+only, a pre-release. Its CHANGELOG section is dated 2026-11-19 and
+`go run ./tools/releasenotes -version 0.1.0` passes, so it is ready to tag:
+the maintainer pushes `v0.1.0` after the README landing PR
+(`docs/readme-landing`, `odd/tasks/readme-landing.md`) is merged. The README
+landing shows animated SVG illustrations from `docs/assets/` (hero, menu,
+setup; light and dark; English and Spanish), drawn from the real strings in
+`internal/menubar/i18n.go`; update them when those strings change.
+**1.0** is GitHub milestone 1
+(https://github.com/Isaacpaezz/leakguard/milestone/1): #14 ChatGPT/OpenAI,
+#16 self-updating IP ranges, #15 Developer ID signing and notarization, #8
+menu polish. Windows follows in 1.1 and Linux in 1.2. The numbered list below
+is the original work breakdown.
+
 0. ✅ Open source foundation: CONTRIBUTING, templates, CODEOWNERS, SECURITY,
    AGENTS.md + skills, service catalog, self-updating README.
-1. 🚧 In review. Port the macOS prototype into the Go CLI. Profiles come from
+1. ✅ Done (0.1.0). Port the macOS prototype into the Go CLI. Profiles come from
    `internal/catalog`. Commands: `enable`, `disable`, `status`, `test`.
    Done in `cmd/leakguard` (plus `services`, `interfaces`, `apply`): JSON
    config at `/Library/Application Support/leakguard/config.json`, pf anchor
@@ -89,9 +103,7 @@ vulnerability reporting, create labels `status:needs-triage`,
    root-owned copy at `/usr/local/libexec/leakguard/leakguard` (since
    milestone 2 it runs `serve`, which verifies every 30 s and reloads only
    when the check fails or the saved choice changed).
-   Pending: a live run by the owner (`sudo leakguard enable`, `test`,
-   `disable`), since tests never touch the real firewall.
-2. 🚧 Menu-bar app on macOS (Go systray) talking to the privileged service.
+2. ✅ Done (0.1.0). Menu-bar app on macOS (Go systray) talking to the privileged service.
    Done (PR A, `feat/daemon-socket`): the LaunchDaemon runs `leakguard serve`
    (RunAtLoad, KeepAlive) instead of a periodic `apply`. It applies the saved
    config at start and every 30 s unless paused (since session stats it
@@ -141,7 +153,7 @@ vulnerability reporting, create labels `status:needs-triage`,
    "Set up" uses the `leakguard` next to the app (possibly user-writable),
    which is otherwise used only for the first install. Before running setup
    the app polls the daemon once more and drops the draft if it now answers.
-   Pending: a live check by the owner.
+   Checked live by the owner with the 0.1.0 DMG (2026-11-19).
    Setup wizard (`feat/setup-wizard`, `odd/tasks/setup-wizard.md`): the menu
    draft and the VPN interface submenu are replaced by a 3-step wizard in
    `internal/menubar/wizard.go`, driven by a `Dialogs` interface (osascript
@@ -191,12 +203,12 @@ vulnerability reporting, create labels `status:needs-triage`,
    counter unseen: blocks may be lost then, never counted twice. VPN gaps over 2 min (sleep, daemon down) add no time and
    no drop. "Today" resets at local midnight, also across DST. Stats
    errors are logged once and never change protection.
-3. Linux `nftables` backend and tray app.
-4. Windows backend and tray app.
-5. Self-updating catalog: a scheduled workflow refreshes ranges from their
+3. Linux `nftables` backend and tray app (release 1.2).
+4. Windows backend and tray app (release 1.1).
+5. Self-updating catalog (release 1.0, #16): a scheduled workflow refreshes ranges from their
    sources (ASN prefixes) and opens a PR; the app downloads a signed catalog.
    Domain-aware blocking for CDN-hosted services (OpenAI).
-6. 🚧 In review (macOS part, `feat/macos-installer`,
+6. ✅ Done for macOS (0.1.0; `feat/macos-installer`,
    `odd/tasks/macos-installer.md`): `leakguard.app` in a DMG on GitHub
    Releases. `scripts/build-macos.sh VERSION` builds both binaries for arm64
    and amd64 with `-X internal/version.Version`, merges them with `lipo`,
@@ -241,11 +253,11 @@ vulnerability reporting, create labels `status:needs-triage`,
    cleared) and with `xattr -s` so links are never followed; a failure to
    read or clear the mark is `ErrQuarantined`, explained in plain words with
    a link to the guide.
-   Pending (T4): verify the release workflow, a live install from the DMG by
-   the owner, whether a quarantined CLI runs from the administrator prompt
-   at all, and the root uninstall.
-   Later: Homebrew tap, winget, Linux packages, Developer ID signing and
-   notarization (the bundle layout stays the same).
+   The owner installed from a quarantined DMG (PR #13, 08c5011) and saw
+   real blocks and a VPN drop counted. Pending: the first tagged run of the
+   release workflow (`v0.1.0`).
+   Later: Developer ID signing and notarization (1.0, #15; the bundle
+   layout stays the same), Homebrew tap, winget, Linux packages.
 
 ## Resume prompt
 
