@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 380" width="880" height="380" role="img" aria-labelledby="t d" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+<title id="t">leakguard: when the VPN drops, Claude goes offline instead of leaking</title>
+<desc id="d">Animation in three phases. 1: the VPN is connected and Claude's traffic goes through the VPN tunnel. 2: the VPN drops; Claude's traffic tries your real connection, hits the leakguard shield and is blocked, so Claude stays offline, while email, video and banking keep working over the normal connection. 3: the VPN reconnects and Claude works again through the VPN.</desc>
+<style>
+.pa{opacity:0;animation:pa 10s infinite}
+.pb{opacity:1;animation:pb 10s infinite}
+.pc{opacity:0;animation:pc 10s infinite}
+.ok{opacity:0;animation:ok 10s infinite}
+.ca{opacity:0;animation:ca 10s linear infinite}
+.cc{opacity:0;animation:cc 10s linear infinite}
+.cb{opacity:1;transform:translateX(96px);animation:cb 10s linear infinite}
+.f{animation:f 2.5s linear infinite}
+.f1{transform:translateX(90px)}.f2{transform:translateX(230px);animation-delay:-.83s}.f3{transform:translateX(370px);animation-delay:-1.66s}
+@keyframes pa{0%,29%{opacity:1}31%,100%{opacity:0}}
+@keyframes pb{0%,30%{opacity:0}32%,68%{opacity:1}70%,100%{opacity:0}}
+@keyframes pc{0%,69%{opacity:0}71%,100%{opacity:1}}
+@keyframes ok{0%,29%{opacity:1}31%,69%{opacity:0}71%,100%{opacity:1}}
+@keyframes ca{0%{opacity:0;transform:translateX(0)}3%{opacity:1;transform:translateX(0)}24%{opacity:1;transform:translateX(430px)}26%,100%{opacity:0;transform:translateX(430px)}}
+@keyframes cc{0%,72%{opacity:0;transform:translateX(0)}74%{opacity:1;transform:translateX(0)}95%{opacity:1;transform:translateX(430px)}97%,100%{opacity:0;transform:translateX(430px)}}
+@keyframes cb{0%,33%{opacity:0;transform:translateX(0)}35%{opacity:1;transform:translateX(0)}43%{opacity:1;transform:translateX(96px)}47%{opacity:0;transform:translateX(96px)}49%{opacity:0;transform:translateX(0)}51%{opacity:1;transform:translateX(0)}59%{opacity:1;transform:translateX(96px)}63%,100%{opacity:0;transform:translateX(96px)}}
+@keyframes f{0%{opacity:0;transform:translateX(0)}8%,92%{opacity:1}100%{opacity:0;transform:translateX(430px)}}
+@media (prefers-reduced-motion: reduce){*{animation:none!important}}</style>
+<rect x="1" y="1" width="878" height="378" rx="16" fill="#161b22" stroke="#30363d"/>
+<text x="440" y="52" font-size="15" fill="#8b949e" font-weight="600" text-anchor="middle">leakguard: a kill switch only for the services you choose</text>
+<rect x="40" y="96" width="200" height="140" rx="10" fill="#0d1117" stroke="#e6edf3" stroke-width="2"/>
+<line x1="41" y1="118" x2="239" y2="118" stroke="#30363d"/>
+<g transform="translate(222 107) scale(.55)"><path d="M0,-14 L12,-9 V1 C12,9 6,13 0,16 C-6,13 -12,9 -12,1 V-9 Z" fill="#e6edf3"/></g>
+<text x="208" y="111" font-size="10" fill="#8b949e" text-anchor="end">leakguard</text>
+<text x="56" y="111" font-size="10" fill="#8b949e" font-weight="600">Your Mac</text>
+<rect x="56" y="128" width="168" height="24" rx="6" fill="#0c2d6b"/>
+<text x="140" y="145" font-size="13" fill="#e6edf3" font-weight="600" text-anchor="middle">Claude</text>
+<rect x="56" y="173" width="168" height="24" rx="6" fill="#0c2d6b" opacity=".55"/>
+<text x="140" y="190" font-size="11" fill="#8b949e" text-anchor="middle">Claude, if the VPN is gone</text>
+<rect x="56" y="206" width="168" height="24" rx="6" fill="#161b22" stroke="#30363d"/>
+<text x="140" y="222" font-size="11" fill="#e6edf3" text-anchor="middle">Email, video, banking…</text>
+<rect x="24" y="236" width="232" height="10" rx="4" fill="#e6edf3"/>
+<text x="262" y="124" font-size="11" fill="#8b949e" font-weight="600">VPN tunnel</text>
+<g class="ok"><line x1="240" y1="140" x2="690" y2="140" stroke="#3fb950" stroke-width="6" stroke-linecap="round"/><rect x="430" y="127" width="80" height="26" rx="13" fill="#3fb950"/><text x="470" y="145" font-size="13" fill="#ffffff" font-weight="700" text-anchor="middle">VPN ✓</text></g>
+<g class="pb"><line x1="240" y1="140" x2="420" y2="140" stroke="#f85149" stroke-width="4" stroke-dasharray="8 6"/><line x1="520" y1="140" x2="690" y2="140" stroke="#f85149" stroke-width="4" stroke-dasharray="8 6"/><rect x="430" y="127" width="80" height="26" rx="13" fill="#0d1117" stroke="#f85149" stroke-width="2"/><text x="470" y="145" font-size="13" fill="#f85149" font-weight="700" text-anchor="middle">VPN ✕</text><text x="470" y="118" font-size="12" fill="#f85149" font-weight="700" text-anchor="middle">VPN dropped</text></g>
+<circle class="ca" cx="250" cy="140" r="7" fill="#3fb950" stroke="#0d1117" stroke-width="2"/>
+<circle class="cc" cx="250" cy="140" r="7" fill="#3fb950" stroke="#0d1117" stroke-width="2"/>
+<path d="M240 185 H620 L690 165" fill="none" stroke="#6e7681" stroke-width="2" stroke-dasharray="4 6"/>
+<text x="420" y="201" font-size="11" fill="#8b949e">Claude over your real connection: always closed</text>
+<g class="pb"><circle cx="380" cy="185" r="24" fill="#2d1517" stroke="#f85149" stroke-width="2"/><text x="420" y="178" font-size="13" fill="#f85149" font-weight="700">Blocked: Claude stays offline</text></g>
+<g transform="translate(380 185)"><path d="M0,-14 L12,-9 V1 C12,9 6,13 0,16 C-6,13 -12,9 -12,1 V-9 Z" fill="#e6edf3"/><path d="M-4,-3 L4,5 M4,-3 L-4,5" stroke="#0d1117" stroke-width="2.4" stroke-linecap="round"/></g>
+<circle class="cb" cx="250" cy="185" r="7" fill="#f85149" stroke="#0d1117" stroke-width="2"/>
+<line x1="240" y1="226" x2="690" y2="226" stroke="#58a6ff" stroke-width="4" stroke-linecap="round"/>
+<text x="420" y="246" font-size="11" fill="#8b949e">Everything else: your normal connection</text>
+<circle class="f f1" cx="250" cy="226" r="6" fill="#58a6ff" stroke="#0d1117" stroke-width="2"/>
+<circle class="f f2" cx="250" cy="226" r="6" fill="#58a6ff" stroke="#0d1117" stroke-width="2"/>
+<circle class="f f3" cx="250" cy="226" r="6" fill="#58a6ff" stroke="#0d1117" stroke-width="2"/>
+<rect x="690" y="105" width="160" height="70" rx="10" fill="#0d1117" stroke="#30363d" stroke-width="2"/>
+<text x="770" y="133" font-size="15" fill="#e6edf3" font-weight="700" text-anchor="middle">Claude</text>
+<g class="ok"><text x="770" y="157" font-size="12" fill="#3fb950" font-weight="600" text-anchor="middle">✓ works, via the VPN</text></g>
+<g class="pb"><text x="770" y="157" font-size="12" fill="#f85149" font-weight="600" text-anchor="middle">✕ offline, no leak</text></g>
+<rect x="690" y="196" width="160" height="60" rx="10" fill="#0d1117" stroke="#30363d" stroke-width="2"/>
+<text x="770" y="221" font-size="14" fill="#e6edf3" font-weight="700" text-anchor="middle">Everything else</text>
+<text x="770" y="242" font-size="12" fill="#3fb950" font-weight="600" text-anchor="middle">✓ keeps working</text>
+<g class="pa"><text x="440" y="298" font-size="17" fill="#e6edf3" font-weight="600" text-anchor="middle">VPN connected: Claude goes through the VPN.</text></g>
+<g class="pb"><text x="440" y="298" font-size="17" fill="#e6edf3" font-weight="600" text-anchor="middle">VPN dropped: leakguard blocks Claude. Everything else keeps working.</text></g>
+<g class="pc"><text x="440" y="298" font-size="17" fill="#e6edf3" font-weight="600" text-anchor="middle">VPN back: Claude works again, through the VPN.</text></g>
+<rect x="170" y="322" width="160" height="30" rx="15" fill="none" stroke="#30363d"/>
+<rect class="pa" x="170" y="322" width="160" height="30" rx="15" fill="#12261e" stroke="#3fb950" stroke-width="1.5"/>
+<text x="250" y="342" font-size="13" fill="#e6edf3" font-weight="600" text-anchor="middle">1 · Connected</text>
+<rect x="360" y="322" width="160" height="30" rx="15" fill="none" stroke="#30363d"/>
+<rect class="pb" x="360" y="322" width="160" height="30" rx="15" fill="#2d1517" stroke="#f85149" stroke-width="1.5"/>
+<text x="440" y="342" font-size="13" fill="#e6edf3" font-weight="600" text-anchor="middle">2 · VPN drops</text>
+<rect x="550" y="322" width="160" height="30" rx="15" fill="none" stroke="#30363d"/>
+<rect class="pc" x="550" y="322" width="160" height="30" rx="15" fill="#12261e" stroke="#3fb950" stroke-width="1.5"/>
+<text x="630" y="342" font-size="13" fill="#e6edf3" font-weight="600" text-anchor="middle">3 · Back</text>
+</svg>

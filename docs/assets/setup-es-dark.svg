@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 300" width="880" height="300" role="img" aria-labelledby="t d" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+<title id="t">La configuración de leakguard en 3 pasos</title>
+<desc id="d">Tres ventanas aparecen una tras otra. Paso 1 de 3: elige qué quieres proteger, por ejemplo Anthropic (Claude). Paso 2 de 3: encuentra tu VPN desconectándola, tocando Siguiente y conectándola otra vez; leakguard la encuentra. Paso 3 de 3: activa la protección; tu Mac te pide tu contraseña una sola vez.</desc>
+<style>
+.k1,.k2,.k3{animation:k1 9s infinite}
+.k2{animation-name:k2}.k3{animation-name:k3}
+@keyframes k1{0%{opacity:0;transform:translateY(8px)}6%,92%{opacity:1;transform:translateY(0)}100%{opacity:0}}
+@keyframes k2{0%,22%{opacity:0;transform:translateY(8px)}28%,92%{opacity:1;transform:translateY(0)}100%{opacity:0}}
+@keyframes k3{0%,44%{opacity:0;transform:translateY(8px)}50%,92%{opacity:1;transform:translateY(0)}100%{opacity:0}}
+@media (prefers-reduced-motion: reduce){*{animation:none!important}}</style>
+<g class="k1">
+<rect x="12" y="20" width="266" height="262" rx="12" fill="#2b2b2d" stroke="#30363d"/>
+<path d="M12 32 a12 12 0 0 1 12 -12 h242 a12 12 0 0 1 12 12 v16 h-266 z" fill="#3a3a3c"/>
+<circle cx="28" cy="34" r="5" fill="#ff5f57"/>
+<circle cx="44" cy="34" r="5" fill="#febc2e"/>
+<circle cx="60" cy="34" r="5" fill="#28c840"/>
+<text x="163.0" y="39" font-size="12" fill="#e6edf3" font-weight="700" text-anchor="middle">Paso 1 de 3</text>
+<g transform="translate(40 74) scale(.9)"><path d="M0,-14 L12,-9 V1 C12,9 6,13 0,16 C-6,13 -12,9 -12,1 V-9 Z" fill="#e6edf3"/></g>
+<text x="62" y="70" font-size="13" fill="#e6edf3" font-weight="700">Elige qué quieres proteger.</text>
+<text x="28" y="104" font-size="12" fill="#8b949e">Estos servicios solo podrán usar tu</text>
+<text x="28" y="120" font-size="12" fill="#8b949e">VPN: si tu VPN se cae, dejan de</text>
+<text x="28" y="136" font-size="12" fill="#8b949e">conectarse hasta que vuelva.</text>
+<text x="28" y="156" font-size="12" fill="#8b949e">Próximamente: OpenAI (ChatGPT, Codex).</text>
+<rect x="28" y="176" width="234" height="30" rx="6" fill="#0d1117" stroke="#30363d"/>
+<rect x="32" y="180" width="226" height="20" rx="4" fill="#0a63d6"/>
+<text x="40" y="194" font-size="12" fill="#ffffff" font-weight="600">Anthropic (Claude)</text>
+<rect x="189" y="244" width="75" height="24" rx="6" fill="#0a63d6" stroke="#30363d"/>
+<text x="226.5" y="261" font-size="12" fill="#ffffff" font-weight="600" text-anchor="middle">Siguiente</text>
+<rect x="113" y="244" width="68" height="24" rx="6" fill="#5a5a5e" stroke="#30363d"/>
+<text x="147.0" y="261" font-size="12" fill="#e6edf3" text-anchor="middle">Cancelar</text>
+</g>
+<g class="k2">
+<rect x="307" y="20" width="266" height="262" rx="12" fill="#2b2b2d" stroke="#30363d"/>
+<path d="M307 32 a12 12 0 0 1 12 -12 h242 a12 12 0 0 1 12 12 v16 h-266 z" fill="#3a3a3c"/>
+<circle cx="323" cy="34" r="5" fill="#ff5f57"/>
+<circle cx="339" cy="34" r="5" fill="#febc2e"/>
+<circle cx="355" cy="34" r="5" fill="#28c840"/>
+<text x="458.0" y="39" font-size="12" fill="#e6edf3" font-weight="700" text-anchor="middle">Paso 2 de 3</text>
+<g transform="translate(335 74) scale(.9)"><path d="M0,-14 L12,-9 V1 C12,9 6,13 0,16 C-6,13 -12,9 -12,1 V-9 Z" fill="#e6edf3"/></g>
+<text x="357" y="70" font-size="13" fill="#e6edf3" font-weight="700">Ahora vamos a encontrar tu</text>
+<text x="357" y="86" font-size="13" fill="#e6edf3" font-weight="700">VPN.</text>
+<circle cx="333" cy="112" r="9" fill="#58a6ff"/>
+<text x="333" y="116" font-size="11" fill="#ffffff" font-weight="700" text-anchor="middle">1</text>
+<text x="349" y="116" font-size="12" fill="#e6edf3">Desconecta tu VPN y toca</text>
+<text x="349" y="132" font-size="12" fill="#e6edf3">Siguiente.</text>
+<circle cx="333" cy="156" r="9" fill="#58a6ff"/>
+<text x="333" y="160" font-size="11" fill="#ffffff" font-weight="700" text-anchor="middle">2</text>
+<text x="349" y="160" font-size="12" fill="#e6edf3">Ahora conéctala y toca</text>
+<text x="349" y="176" font-size="12" fill="#e6edf3">Siguiente.</text>
+<circle cx="333" cy="200" r="9" fill="#3fb950"/>
+<text x="333" y="204" font-size="11" fill="#ffffff" font-weight="700" text-anchor="middle">✓</text>
+<text x="349" y="204" font-size="12" fill="#3fb950" font-weight="700">¡Encontramos tu VPN!</text>
+<rect x="484" y="244" width="75" height="24" rx="6" fill="#0a63d6" stroke="#30363d"/>
+<text x="521.5" y="261" font-size="12" fill="#ffffff" font-weight="600" text-anchor="middle">Siguiente</text>
+<rect x="408" y="244" width="68" height="24" rx="6" fill="#5a5a5e" stroke="#30363d"/>
+<text x="442.0" y="261" font-size="12" fill="#e6edf3" text-anchor="middle">Cancelar</text>
+</g>
+<g class="k3">
+<rect x="602" y="20" width="266" height="262" rx="12" fill="#2b2b2d" stroke="#30363d"/>
+<path d="M602 32 a12 12 0 0 1 12 -12 h242 a12 12 0 0 1 12 12 v16 h-266 z" fill="#3a3a3c"/>
+<circle cx="618" cy="34" r="5" fill="#ff5f57"/>
+<circle cx="634" cy="34" r="5" fill="#febc2e"/>
+<circle cx="650" cy="34" r="5" fill="#28c840"/>
+<text x="753.0" y="39" font-size="12" fill="#e6edf3" font-weight="700" text-anchor="middle">Paso 3 de 3</text>
+<g transform="translate(630 74) scale(.9)"><path d="M0,-14 L12,-9 V1 C12,9 6,13 0,16 C-6,13 -12,9 -12,1 V-9 Z" fill="#e6edf3"/></g>
+<text x="652" y="70" font-size="13" fill="#e6edf3" font-weight="700">Activar la protección.</text>
+<text x="618" y="104" font-size="12" fill="#8b949e">Tu Mac te va a pedir tu contraseña: es</text>
+<text x="618" y="120" font-size="12" fill="#8b949e">la misma que usas para entrar a la</text>
+<text x="618" y="136" font-size="12" fill="#8b949e">Mac. La necesitamos una sola vez, para</text>
+<text x="618" y="152" font-size="12" fill="#8b949e">instalar el servicio que bloquea</text>
+<text x="618" y="168" font-size="12" fill="#8b949e">Anthropic (Claude) si tu VPN se cae.</text>
+<rect x="793" y="244" width="61" height="24" rx="6" fill="#0a63d6" stroke="#30363d"/>
+<text x="823.5" y="261" font-size="12" fill="#ffffff" font-weight="600" text-anchor="middle">Activar</text>
+<rect x="717" y="244" width="68" height="24" rx="6" fill="#5a5a5e" stroke="#30363d"/>
+<text x="751.0" y="261" font-size="12" fill="#e6edf3" text-anchor="middle">Cancelar</text>
+</g>
+<path d="M284 151 l12 0 m-5 -6 l6 6 l-6 6" fill="none" stroke="#8b949e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M579 151 l12 0 m-5 -6 l6 6 l-6 6" fill="none" stroke="#8b949e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
