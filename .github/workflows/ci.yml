@@ -13,7 +13,7 @@ jobs:
     name: Test, vet and README check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - uses: actions/setup-go@v6
@@ -34,7 +34,7 @@ jobs:
     name: Test on macOS (real pfctl and plutil checks)
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - uses: actions/setup-go@v6
