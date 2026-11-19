@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/Isaacpaezz/leakguard/internal/ipc"
 )
 
 var trickyPaths = []string{
@@ -99,7 +101,7 @@ func TestSetupScript(t *testing.T) {
 		},
 	}
 	for _, tc := range tests {
-		got, err := SetupScript(tc.cli, tc.draft, fullCatalog)
+		got, err := SetupScript(tc.cli, tc.draft, fullCatalog, "")
 		if err != nil {
 			t.Fatalf("SetupScript(%q): %v", tc.cli, err)
 		}
@@ -114,7 +116,7 @@ func TestSetupScriptAgainstInjection(t *testing.T) {
 	const prefix, suffix = `do shell script "`, `" with administrator privileges`
 	draft := Draft{VPNInterface: "utun3", Services: []string{"anthropic", "mistral"}}
 	for _, p := range trickyPaths {
-		script, err := SetupScript(p, draft, fullCatalog)
+		script, err := SetupScript(p, draft, fullCatalog, "")
 		if err != nil {
 			t.Fatalf("SetupScript(%q): %v", p, err)
 		}
@@ -163,7 +165,7 @@ func TestSetupScriptRejects(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			s, err := SetupScript(tc.cli, tc.draft, fullCatalog)
+			s, err := SetupScript(tc.cli, tc.draft, fullCatalog, "")
 			if err == nil || err.Error() != tc.wantErr {
 				t.Errorf("SetupScript = %q, %v; want error %q", s, err, tc.wantErr)
 			}
@@ -171,6 +173,54 @@ func TestSetupScriptRejects(t *testing.T) {
 				t.Errorf("script with an error = %q, want none", s)
 			}
 		})
+	}
+}
+
+// R2-untranslated-setup-error: what SetupScript, the choice checks and the
+// dialog driver refuse reaches the user in the user's language, while the
+// error text itself stays for the logs and the tests above.
+func TestExplainSetupErrors(t *testing.T) {
+	errOf := func(_ any, err error) error { return err }
+	pathErr := errOf(SetupScript("relative/leakguard", oneService, fullCatalog, ""))
+	ctrlErr := errOf(SetupScript("/tmp/a\nb", oneService, fullCatalog, ""))
+	choiceErr := errOf(SetupScript("/x/leakguard", Draft{VPNInterface: "en0", Services: []string{"anthropic"}}, fullCatalog, ""))
+	serviceErr := errOf(SetupScript("/x/leakguard", Draft{VPNInterface: "ipsec0", Services: []string{"openai"}}, fullCatalog, ""))
+	vpnErr := errOf(ChangeVPNRequest(English, ipc.Status{Services: []string{"anthropic"}}, "en0"))
+	buttonErr := errOf(ParseButton("Otro\n", Dialog{Buttons: []string{"OK"}}))
+	listErr := errOf(ParseChoice("9\n", List{Items: []string{"a"}}))
+	const (
+		pathES   = "No se puede usar el comando leakguard que está junto a esta app: su ubicación no es válida"
+		pathEN   = "The leakguard command next to this app cannot be used: its location is not valid"
+		choiceES = "La VPN o los servicios elegidos no son válidos; vuelve a configurar leakguard"
+		choiceEN = "The chosen VPN or services are not valid; set up leakguard again"
+		dialogES = "La ventana respondió algo inesperado"
+		dialogEN = "The dialog gave an unexpected answer"
+	)
+	tests := []struct {
+		name     string
+		err      error
+		es, en   string
+		wantText string
+	}{
+		{"relative path", pathErr, pathES, pathEN, "the leakguard command needs an absolute path"},
+		{"control characters", ctrlErr, pathES, pathEN, "the path of the leakguard command contains control characters"},
+		{"real connection", choiceErr, choiceES, choiceEN, `"en0" is not a VPN interface; it carries your real connection`},
+		{"planned service", serviceErr, choiceES, choiceEN, `service "openai" is not supported yet`},
+		{"change VPN to a real connection", vpnErr, choiceES, choiceEN, `"en0" is not a VPN interface; it carries your real connection`},
+		{"unexpected button", buttonErr, dialogES, dialogEN, `unexpected dialog answer "Otro"`},
+		{"unexpected list answer", listErr, dialogES, dialogEN, `unexpected list answer "9"`},
+	}
+	for _, tc := range tests {
+		if tc.err == nil || tc.err.Error() != tc.wantText {
+			t.Errorf("%s: error %v, want %q", tc.name, tc.err, tc.wantText)
+			continue
+		}
+		if got := Explain(Spanish, tc.err); got != tc.es {
+			t.Errorf("%s: Explain(es) = %q, want %q", tc.name, got, tc.es)
+		}
+		if got := Explain(English, tc.err); got != tc.en {
+			t.Errorf("%s: Explain(en) = %q, want %q", tc.name, got, tc.en)
+		}
 	}
 }
 
@@ -262,6 +312,9 @@ func TestFindCLI(t *testing.T) {
 				if err == nil || err.Error() != tc.wantErr {
 					t.Fatalf("FindCLI = %q, %v; want error %q", got, err, tc.wantErr)
 				}
+				if !errors.Is(err, ErrCLINotRootOwned) && !errors.Is(err, ErrCLIUpdate) && !errors.Is(err, ErrNoCLI) {
+					t.Errorf("FindCLI error %v is not one Explain translates", err)
+				}
 				if got != "" {
 					t.Errorf("path with an error = %q", got)
 				}
@@ -275,7 +328,7 @@ func TestFindCLI(t *testing.T) {
 }
 
 func TestSetupScriptRejectsInvalidUTF8(t *testing.T) {
-	s, err := SetupScript("/tmp/\xff\xfe/leakguard", oneService, fullCatalog)
+	s, err := SetupScript("/tmp/\xff\xfe/leakguard", oneService, fullCatalog, "")
 	if err == nil || err.Error() != "the path of the leakguard command is not valid UTF-8" {
 		t.Errorf("SetupScript = %q, %v; want the UTF-8 error", s, err)
 	}
@@ -284,24 +337,25 @@ func TestSetupScriptRejectsInvalidUTF8(t *testing.T) {
 	}
 }
 
-func TestSetupFailure(t *testing.T) {
-	tests := map[string]string{
-		"0:95: execution error: User canceled. (-128)\n": "Set up canceled",
-		"0:120: execution error: leakguard: name at least one service, for example: sudo leakguard enable anthropic (see leakguard services) (1)\n": "Set up failed: leakguard: name at least one service, for example: sudo leakguard enable anthropic (see leakguard services)",
-		"something odd\n":     "Set up failed: something odd",
-		"a\nb\nlast line\n\n": "Set up failed: last line",
-	}
-	for out, want := range tests {
-		if got := SetupFailure(out, errors.New("exit status 1")); got != want {
-			t.Errorf("SetupFailure(%q) = %q, want %q", out, got, want)
+// S3: the administrator prompt says why, quoted like everything else.
+func TestSetupScriptWithPrompt(t *testing.T) {
+	const prefix = `do shell script "'/x/leakguard' enable '--vpn' 'ipsec0' 'anthropic'" with prompt "`
+	const suffix = `" with administrator privileges`
+	for _, prompt := range trickyTexts[:len(trickyTexts)-1] {
+		script, err := SetupScript("/x/leakguard", oneService, fullCatalog, prompt)
+		if err != nil {
+			t.Fatalf("SetupScript(prompt %q): %v", prompt, err)
+		}
+		if !strings.HasPrefix(script, prefix) || !strings.HasSuffix(script, suffix) {
+			t.Fatalf("unexpected script shape: %s", script)
+		}
+		if got := strings.TrimSuffix(strings.TrimPrefix(script, prefix), suffix); got != appleScriptString(prompt) {
+			t.Errorf("prompt literal = %s, want %s", got, appleScriptString(prompt))
 		}
 	}
-	// Without any output, the error from running osascript is the only clue.
-	if got := SetupFailure("", errors.New(`exec: "/usr/bin/osascript": no such file`)); got != `Set up failed: exec: "/usr/bin/osascript": no such file` {
-		t.Errorf("SetupFailure with empty output = %q", got)
-	}
-	if got := SetupFailure(" \n", nil); got != "Set up failed" {
-		t.Errorf("SetupFailure without output or error = %q", got)
+	want := `do shell script "'/x/leakguard' enable '--vpn' 'ipsec0' 'anthropic'" with prompt "leakguard necesita tu contraseña una sola vez para instalar el servicio que te protege." with administrator privileges`
+	if got, _ := SetupScript("/x/leakguard", oneService, fullCatalog, AdminPrompt(Spanish)); got != want {
+		t.Errorf("script = %s\nwant     %s", got, want)
 	}
 }
 

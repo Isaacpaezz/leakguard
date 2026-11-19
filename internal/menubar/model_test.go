@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"strings"
 	"syscall"
 	"testing"
 
@@ -18,7 +19,7 @@ var testCatalog = []ipc.Service{
 	{ID: "mistral", Name: "Mistral", Status: "supported"},
 }
 
-// fullCatalog matches testCatalog for the "not set up" menu.
+// fullCatalog matches testCatalog for the wizard and the setup script.
 var fullCatalog = []catalog.Service{
 	{ID: "anthropic", Name: "Anthropic (Claude)", Status: catalog.StatusSupported},
 	{ID: "openai", Name: "OpenAI", Status: catalog.StatusPlanned},
@@ -42,91 +43,118 @@ func status(mod func(*ipc.Status)) ipc.Status {
 func ptr(st ipc.Status) *ipc.Status { return &st }
 
 var (
-	pauseItem  = ToggleItem{Visible: true, Label: "Pause protection"}
-	resumeItem = ToggleItem{Visible: true, Resume: true, Label: "Resume protection"}
+	pauseES  = ToggleItem{Visible: true, Label: "Pausar la protección"}
+	resumeES = ToggleItem{Visible: true, Resume: true, Label: "Reanudar la protección"}
+	pauseEN  = ToggleItem{Visible: true, Label: "Pause protection"}
 )
 
-func services(checked ...string) []ServiceItem {
+func services(l Lang, checked ...string) []ServiceItem {
 	is := map[string]bool{}
 	for _, id := range checked {
 		is[id] = true
 	}
+	soon := "OpenAI (coming soon)"
+	if l == Spanish {
+		soon = "OpenAI (próximamente)"
+	}
 	return []ServiceItem{
 		{ID: "anthropic", Label: "Anthropic (Claude)", Checked: is["anthropic"], Enabled: true},
-		{ID: "openai", Label: "OpenAI (coming soon)", Checked: is["openai"], Enabled: false},
+		{ID: "openai", Label: soon, Checked: is["openai"], Enabled: false},
 		{ID: "mistral", Label: "Mistral", Checked: is["mistral"], Enabled: true},
 	}
 }
 
+// S5: a plain status, the service checkboxes, Change VPN, Pause/Resume; the
+// interface name only in the tooltip.
 func TestBuild(t *testing.T) {
 	notAuthorized := fmt.Errorf("pause: %w", ipc.ErrNotAuthorized)
+	unavailable := fmt.Errorf("%w (dial unix: no such file)", ipc.ErrDaemonUnavailable)
+	notConfigured := status(func(s *ipc.Status) {
+		s.Protected = false
+		s.Reason = ipc.ReasonNotConfigured
+		s.VPNInterface = ""
+		s.VPNConnected = false
+		s.Services = []string{}
+	})
 	tests := []struct {
-		name       string
-		st         *ipc.Status
-		err        error
-		candidates []string
-		want       Menu
+		name   string
+		st     *ipc.Status
+		err    error
+		lang   Lang
+		update bool
+		want   Menu
 	}{
 		{
-			name:       "protected",
-			st:         ptr(status(nil)),
-			candidates: []string{"ipsec0", "utun3"},
+			name: "protected",
+			st:   ptr(status(nil)),
+			lang: Spanish,
 			want: Menu{
-				State:    StateProtected,
-				Status:   "Protected through ipsec0",
-				Services: services("anthropic"),
-				VPNs: []VPNItem{
-					{Name: "ipsec0", Label: "ipsec0", Checked: true},
-					{Name: "utun3", Label: "utun3"},
-				},
-				Toggle: pauseItem,
+				State:     StateProtected,
+				Status:    "Protegido",
+				Tooltip:   "leakguard: Protegido · VPN: ipsec0",
+				Services:  services(Spanish, "anthropic"),
+				ChangeVPN: true,
+				Toggle:    pauseES,
 			},
 		},
 		{
-			name: "protected while the VPN is down",
-			st: ptr(status(func(s *ipc.Status) {
-				s.VPNConnected = false
-			})),
-			candidates: []string{"ipsec0"},
+			name: "protected in English",
+			st:   ptr(status(nil)),
+			lang: English,
 			want: Menu{
-				State:    StateProtected,
-				Status:   "Protected through ipsec0 (not connected: these services are offline)",
-				Services: services("anthropic"),
-				VPNs:     []VPNItem{{Name: "ipsec0", Label: "ipsec0 (not connected)", Checked: true}},
-				Toggle:   pauseItem,
+				State:     StateProtected,
+				Status:    "Protected",
+				Tooltip:   "leakguard: Protected · VPN: ipsec0",
+				Services:  services(English, "anthropic"),
+				ChangeVPN: true,
+				Toggle:    pauseEN,
 			},
 		},
 		{
-			name: "saved interface missing from the candidates is still listed and checked",
-			st: ptr(status(func(s *ipc.Status) {
-				s.VPNInterface = "ppp0"
-			})),
-			candidates: []string{"utun3", "utun3"},
+			name: "protected while the VPN is down: blocked, not leaking",
+			st:   ptr(status(func(s *ipc.Status) { s.VPNConnected = false })),
+			lang: Spanish,
 			want: Menu{
-				State:    StateProtected,
-				Status:   "Protected through ppp0",
-				Services: services("anthropic"),
-				VPNs: []VPNItem{
-					{Name: "utun3", Label: "utun3"},
-					{Name: "ppp0", Label: "ppp0", Checked: true},
-				},
-				Toggle: pauseItem,
+				State:     StateProtected,
+				Status:    "Protegido: tu VPN está desconectada y estos servicios no conectan",
+				Tooltip:   "leakguard: Protegido: tu VPN está desconectada y estos servicios no conectan · VPN: ipsec0",
+				Services:  services(Spanish, "anthropic"),
+				ChangeVPN: true,
+				Toggle:    pauseES,
 			},
 		},
 		{
-			name: "not protected shows the reason",
+			name: "not protected with the VPN down",
 			st: ptr(status(func(s *ipc.Status) {
 				s.Protected = false
-				s.Reason = "pf is disabled"
+				s.VPNConnected = false
+				s.Reason = "the rules are not loaded"
+			})),
+			lang: Spanish,
+			want: Menu{
+				State:     StateNotProtected,
+				Status:    "Sin protección: tu VPN está desconectada",
+				Tooltip:   "leakguard: Sin protección: tu VPN está desconectada · VPN: ipsec0 · the rules are not loaded",
+				Services:  services(Spanish, "anthropic"),
+				ChangeVPN: true,
+				Toggle:    pauseES,
+			},
+		},
+		{
+			name: "not protected: the technical reason only in the tooltip",
+			st: ptr(status(func(s *ipc.Status) {
+				s.Protected = false
+				s.Reason = "pf is disabled\nmore detail"
 				s.Services = []string{"anthropic", "mistral"}
 			})),
-			candidates: []string{"ipsec0"},
+			lang: Spanish,
 			want: Menu{
-				State:    StateNotProtected,
-				Status:   "Not protected: pf is disabled",
-				Services: services("anthropic", "mistral"),
-				VPNs:     []VPNItem{{Name: "ipsec0", Label: "ipsec0", Checked: true}},
-				Toggle:   pauseItem,
+				State:     StateNotProtected,
+				Status:    "Sin protección: leakguard no pudo comprobar sus reglas",
+				Tooltip:   "leakguard: Sin protección: leakguard no pudo comprobar sus reglas · VPN: ipsec0 · pf is disabled",
+				Services:  services(Spanish, "anthropic", "mistral"),
+				ChangeVPN: true,
+				Toggle:    pauseES,
 			},
 		},
 		{
@@ -135,52 +163,90 @@ func TestBuild(t *testing.T) {
 				s.Protected = false
 				s.Reason = ipc.ReasonPaused
 			})),
-			candidates: []string{"ipsec0"},
+			lang: Spanish,
 			want: Menu{
-				State:    StatePaused,
-				Status:   "Paused: the selected services are not protected",
-				Services: services("anthropic"),
-				VPNs:     []VPNItem{{Name: "ipsec0", Label: "ipsec0", Checked: true}},
-				Toggle:   resumeItem,
+				State:     StatePaused,
+				Status:    "En pausa",
+				Tooltip:   "leakguard: En pausa · VPN: ipsec0",
+				Services:  services(Spanish, "anthropic"),
+				ChangeVPN: true,
+				Toggle:    resumeES,
 			},
 		},
 		{
-			name: "daemon running without a configuration",
-			st: ptr(status(func(s *ipc.Status) {
-				s.Protected = false
-				s.Reason = ipc.ReasonNotConfigured
-				s.VPNInterface = ""
-				s.VPNConnected = false
-				s.Services = []string{}
-			})),
-			candidates: []string{"ipsec0"},
+			name: "daemon running without a configuration opens the setup",
+			st:   &notConfigured,
+			lang: Spanish,
 			want: Menu{
-				State:    StateNotProtected,
-				Status:   "Not set up yet: choose a VPN interface, then a service",
-				Services: services(),
-				VPNs:     []VPNItem{{Name: "ipsec0", Label: "ipsec0"}},
+				State:   StateNotSetUp,
+				Status:  "leakguard todavía no está configurado",
+				Tooltip: "leakguard: leakguard todavía no está configurado",
+				SetUp:   true,
+			},
+		},
+		{
+			name: "daemon with a VPN but no services opens the setup",
+			st:   ptr(status(func(s *ipc.Status) { s.Protected = false; s.Services = []string{} })),
+			lang: English,
+			want: Menu{
+				State:   StateNotSetUp,
+				Status:  "leakguard is not set up yet",
+				Tooltip: "leakguard: leakguard is not set up yet",
+				SetUp:   true,
+			},
+		},
+		{
+			name: "daemon unavailable: only the setup and quit",
+			err:  unavailable,
+			lang: Spanish,
+			want: Menu{
+				State:   StateNotSetUp,
+				Status:  "leakguard todavía no está configurado",
+				Tooltip: "leakguard: leakguard no está configurado en esta Mac",
+				SetUp:   true,
+			},
+		},
+		{
+			name:   "older install needs the same setup",
+			err:    unavailable,
+			lang:   Spanish,
+			update: true,
+			want: Menu{
+				State:   StateNotSetUp,
+				Status:  "Hay que actualizar leakguard: toca Configurar",
+				Tooltip: "leakguard: leakguard no está configurado en esta Mac",
+				SetUp:   true,
 			},
 		},
 		{
 			name: "not authorized by the daemon",
 			err:  notAuthorized,
-			want: Menu{State: StateNotProtected, Status: "Only administrators can change leakguard"},
+			lang: Spanish,
+			want: Menu{State: StateNotProtected, Status: "Solo un administrador de la Mac puede cambiar leakguard", Tooltip: "leakguard: Solo un administrador de la Mac puede cambiar leakguard"},
 		},
 		{
 			name: "socket permission denied",
 			err:  &os.SyscallError{Syscall: "connect", Err: syscall.EACCES},
-			want: Menu{State: StateNotProtected, Status: "Only administrators can change leakguard"},
+			lang: English,
+			want: Menu{State: StateNotProtected, Status: "Only administrators can change leakguard", Tooltip: "leakguard: Only administrators can change leakguard"},
 		},
 		{
 			name: "no status yet",
-			want: Menu{State: StateNotProtected, Status: "Checking…"},
+			lang: Spanish,
+			want: Menu{State: StateNotProtected, Status: "Comprobando…", Tooltip: "leakguard: Comprobando…"},
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := Build(tc.st, tc.err, tc.candidates, Setup{Catalog: fullCatalog})
+			got := Build(tc.st, tc.err, Setup{Catalog: fullCatalog, Update: tc.update, Lang: tc.lang})
 			if !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("Build:\n got %+v\nwant %+v", got, tc.want)
+			}
+			// S1: no interface name outside the tooltip.
+			for _, s := range []string{got.Status, got.Toggle.Label} {
+				if strings.Contains(s, "ipsec") || strings.Contains(s, "utun") {
+					t.Errorf("interface name in %q", s)
+				}
 			}
 		})
 	}
@@ -210,63 +276,61 @@ func TestClicks(t *testing.T) {
 		{
 			name: "tick a service adds it in catalog order",
 			click: func() (Request, error) {
-				return ToggleService(status(func(s *ipc.Status) { s.Services = []string{"mistral"} }), "", nil, "anthropic")
+				return ToggleService(English, status(func(s *ipc.Status) { s.Services = []string{"mistral"} }), "anthropic")
 			},
 			want: set("ipsec0", "anthropic", "mistral"),
 		},
 		{
 			name: "untick one of two services",
 			click: func() (Request, error) {
-				return ToggleService(status(func(s *ipc.Status) { s.Services = []string{"anthropic", "mistral"} }), "", nil, "anthropic")
+				return ToggleService(English, status(func(s *ipc.Status) { s.Services = []string{"anthropic", "mistral"} }), "anthropic")
 			},
 			want: set("ipsec0", "mistral"),
 		},
 		{
 			name:  "untick the last service pauses instead of sending an empty list",
-			click: func() (Request, error) { return ToggleService(status(nil), "", nil, "anthropic") },
+			click: func() (Request, error) { return ToggleService(English, status(nil), "anthropic") },
 			want:  Request{Pause: true},
 		},
 		{
 			name:  "unticking one while paused resumes with the rest",
-			click: func() (Request, error) { return ToggleService(paused, "", nil, "mistral") },
+			click: func() (Request, error) { return ToggleService(English, paused, "mistral") },
 			want:  set("ipsec0", "anthropic"),
 		},
 		{
 			name:    "a planned service cannot be ticked",
-			click:   func() (Request, error) { return ToggleService(status(nil), "", nil, "openai") },
+			click:   func() (Request, error) { return ToggleService(English, status(nil), "openai") },
 			wantErr: "OpenAI is coming soon and cannot be protected yet",
 		},
 		{
+			name:    "a planned service cannot be ticked, in Spanish",
+			click:   func() (Request, error) { return ToggleService(Spanish, status(nil), "openai") },
+			wantErr: "OpenAI llegará pronto y todavía no se puede proteger",
+		},
+		{
 			name:    "an unknown service cannot be ticked",
-			click:   func() (Request, error) { return ToggleService(status(nil), "", nil, "nope") },
-			wantErr: `unknown service "nope"`,
+			click:   func() (Request, error) { return ToggleService(English, status(nil), "nope") },
+			wantErr: `Unknown service "nope"`,
 		},
 		{
-			name:    "a service needs a VPN interface first",
-			click:   func() (Request, error) { return ToggleService(noVPN, "", nil, "anthropic") },
-			wantErr: "Choose a VPN interface first",
+			name:    "without a saved VPN nothing is sent: set up first",
+			click:   func() (Request, error) { return ToggleService(Spanish, noVPN, "anthropic") },
+			wantErr: "Configura leakguard primero",
 		},
 		{
-			name:    "with two connected VPNs the app does not guess",
-			click:   func() (Request, error) { return ToggleService(noVPN, "", []string{"ipsec0", "utun3"}, "anthropic") },
-			wantErr: "Choose a VPN interface first",
+			name:  "change VPN keeps the saved services",
+			click: func() (Request, error) { return ChangeVPNRequest(English, paused, "utun4") },
+			want:  set("utun4", "anthropic", "mistral"),
 		},
 		{
-			name:  "with no VPN chosen the only connected VPN is used",
-			click: func() (Request, error) { return ToggleService(noVPN, "", []string{"utun3"}, "mistral") },
-			want:  set("utun3", "mistral"),
+			name:    "change VPN without saved services sends nothing",
+			click:   func() (Request, error) { return ChangeVPNRequest(Spanish, noVPN, "utun4") },
+			wantErr: "Configura leakguard primero",
 		},
 		{
-			name:  "the first ticked service is sent with the pending VPN",
-			click: func() (Request, error) { return ToggleService(noVPN, "utun3", []string{"ipsec0"}, "anthropic") },
-			want:  set("utun3", "anthropic"),
-		},
-		{
-			name: "a pending VPN wins over the saved one",
-			click: func() (Request, error) {
-				return ToggleService(status(func(s *ipc.Status) { s.Services = []string{} }), "utun3", nil, "anthropic")
-			},
-			want: set("utun3", "anthropic"),
+			name:    "change VPN refuses a real connection",
+			click:   func() (Request, error) { return ChangeVPNRequest(English, paused, "en0") },
+			wantErr: `"en0" is not a VPN interface; it carries your real connection`,
 		},
 		{
 			name:  "pause",
@@ -275,13 +339,13 @@ func TestClicks(t *testing.T) {
 		},
 		{
 			name:  "resume sends the saved choice",
-			click: func() (Request, error) { return ResumeRequest(paused) },
+			click: func() (Request, error) { return ResumeRequest(English, paused) },
 			want:  set("ipsec0", "anthropic", "mistral"),
 		},
 		{
 			name:    "resume without a saved choice",
-			click:   func() (Request, error) { return ResumeRequest(noVPN) },
-			wantErr: "Nothing to resume: choose a VPN interface and a service",
+			click:   func() (Request, error) { return ResumeRequest(Spanish, noVPN) },
+			wantErr: "No hay nada que reanudar: configura leakguard primero",
 		},
 	}
 	for _, tc := range tests {
@@ -303,130 +367,6 @@ func TestClicks(t *testing.T) {
 				t.Errorf("request = %+v, want %+v", got, tc.want)
 			}
 		})
-	}
-}
-
-func TestChooseVPN(t *testing.T) {
-	noServices := status(func(s *ipc.Status) {
-		s.Protected = false
-		s.Reason = ipc.ReasonNotConfigured
-		s.VPNInterface = ""
-		s.Services = []string{}
-	})
-	tests := []struct {
-		name     string
-		st       ipc.Status
-		vpn      string
-		want     Request
-		wantSend bool
-		wantErr  string
-	}{
-		{
-			name:     "keeps the services",
-			st:       status(func(s *ipc.Status) { s.Services = []string{"anthropic", "mistral"} }),
-			vpn:      "utun3",
-			want:     Request{VPNInterface: "utun3", Services: []string{"anthropic", "mistral"}},
-			wantSend: true,
-		},
-		{
-			name: "without services it is held by the app, not sent",
-			st:   noServices,
-			vpn:  "utun3",
-		},
-		{
-			name:    "without services a real connection is refused",
-			st:      noServices,
-			vpn:     "en0",
-			wantErr: `"en0" is not a VPN interface; it carries your real connection`,
-		},
-		{
-			name:    "without services an unsafe name is refused",
-			st:      noServices,
-			vpn:     "utun0; id",
-			wantErr: `"utun0; id" is not a valid interface name`,
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got, send, err := ChooseVPN(tc.st, tc.vpn)
-			if tc.wantErr != "" {
-				if err == nil || err.Error() != tc.wantErr || send {
-					t.Fatalf("ChooseVPN() = %+v, %v, %v; want error %q", got, send, err, tc.wantErr)
-				}
-				return
-			}
-			if err != nil || send != tc.wantSend || !reflect.DeepEqual(got, tc.want) {
-				t.Fatalf("ChooseVPN() = %+v, %v, %v; want %+v, %v", got, send, err, tc.want, tc.wantSend)
-			}
-		})
-	}
-}
-
-// The way out of "daemon running without a configuration": choose the VPN
-// (held by the app), then tick a service (sent together), then the daemon
-// reports the saved choice and the pending VPN is dropped.
-func TestPendingVPNLeadsOutOfNotSetUp(t *testing.T) {
-	empty := status(func(s *ipc.Status) {
-		s.Protected = false
-		s.Reason = ipc.ReasonNotConfigured
-		s.VPNInterface = ""
-		s.VPNConnected = false
-		s.Services = []string{}
-	})
-	candidates := []string{"ipsec0", "utun3"}
-
-	if m := Build(&empty, nil, candidates, Setup{}); m.Status != "Not set up yet: choose a VPN interface, then a service" {
-		t.Fatalf("status before choosing = %q", m.Status)
-	}
-	req, send, err := ChooseVPN(empty, "utun3")
-	if err != nil || send || !reflect.DeepEqual(req, Request{}) {
-		t.Fatalf("ChooseVPN() = %+v, %v, %v; want held locally", req, send, err)
-	}
-	pending := KeepPendingVPN(&empty, nil, "utun3")
-	if pending != "utun3" {
-		t.Fatalf("KeepPendingVPN() = %q, want utun3 while not set up", pending)
-	}
-	m := Build(&empty, nil, candidates, Setup{PendingVPN: pending})
-	want := Menu{
-		State:    StateNotProtected,
-		Status:   "Now tick a service to protect through utun3",
-		Services: services(),
-		VPNs:     []VPNItem{{Name: "ipsec0", Label: "ipsec0"}, {Name: "utun3", Label: "utun3", Checked: true}},
-	}
-	if !reflect.DeepEqual(m, want) {
-		t.Fatalf("Build with a pending VPN:\n got %+v\nwant %+v", m, want)
-	}
-	req, err = ToggleService(empty, pending, candidates, "anthropic")
-	if err != nil || !reflect.DeepEqual(req, Request{VPNInterface: "utun3", Services: []string{"anthropic"}}) {
-		t.Fatalf("ToggleService() = %+v, %v; want set utun3 anthropic", req, err)
-	}
-	saved := status(func(s *ipc.Status) { s.VPNInterface = "utun3" })
-	if got := KeepPendingVPN(&saved, nil, pending); got != "" {
-		t.Fatalf("KeepPendingVPN() after the set = %q, want it dropped", got)
-	}
-}
-
-func TestKeepPendingVPN(t *testing.T) {
-	empty := status(func(s *ipc.Status) { s.VPNInterface = ""; s.Services = []string{} })
-	vpnOnly := status(func(s *ipc.Status) { s.Services = []string{} })
-	configured := status(nil)
-	unavailable := fmt.Errorf("%w (dial)", ipc.ErrDaemonUnavailable)
-	tests := []struct {
-		name string
-		st   *ipc.Status
-		err  error
-		want string
-	}{
-		{"kept while the daemon has no services", &empty, nil, "utun3"},
-		{"kept when the saved config has a VPN but no services", &vpnOnly, nil, "utun3"},
-		{"dropped once the daemon has a choice", &configured, nil, ""},
-		{"dropped when the daemon is gone", nil, unavailable, ""},
-		{"dropped on any other error", nil, errors.New("boom"), ""},
-	}
-	for _, tc := range tests {
-		if got := KeepPendingVPN(tc.st, tc.err, "utun3"); got != tc.want {
-			t.Errorf("%s: KeepPendingVPN() = %q, want %q", tc.name, got, tc.want)
-		}
 	}
 }
 
@@ -453,7 +393,7 @@ func TestErrorLineAfterPoll(t *testing.T) {
 
 func TestToggleServiceDoesNotChangeTheStatus(t *testing.T) {
 	st := status(func(s *ipc.Status) { s.Services = []string{"anthropic", "mistral"} })
-	if _, err := ToggleService(st, "", nil, "anthropic"); err != nil {
+	if _, err := ToggleService(English, st, "anthropic"); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(st.Services, []string{"anthropic", "mistral"}) {
@@ -463,249 +403,65 @@ func TestToggleServiceDoesNotChangeTheStatus(t *testing.T) {
 
 func TestExplain(t *testing.T) {
 	tests := []struct {
+		l    Lang
 		err  error
 		want string
 	}{
-		{fmt.Errorf("%w (dial)", ipc.ErrDaemonUnavailable), "leakguard is not set up on this Mac (its background service is not running)"},
-		{ipc.ErrNotAuthorized, "Only administrators can change leakguard"},
-		{fmt.Errorf("set: %w", ipc.ErrNotAuthorized), "Only administrators can change leakguard"},
+		{English, fmt.Errorf("%w (dial)", ipc.ErrDaemonUnavailable), "leakguard is not set up on this Mac"},
+		{Spanish, fmt.Errorf("%w (dial)", ipc.ErrDaemonUnavailable), "leakguard no está configurado en esta Mac"},
+		{English, ipc.ErrNotAuthorized, "Only administrators can change leakguard"},
+		{English, fmt.Errorf("set: %w", ipc.ErrNotAuthorized), "Only administrators can change leakguard"},
+		{Spanish, ipc.ErrNotAuthorized, "Solo un administrador de la Mac puede cambiar leakguard"},
 		// Only the sentinel counts, never an error that happens to read the same.
-		{errors.New("not authorized"), "Could not change leakguard: not authorized"},
-		{&os.SyscallError{Syscall: "connect", Err: syscall.EACCES}, "Only administrators can change leakguard"},
-		{fmt.Errorf("read: %w", os.ErrDeadlineExceeded), "The leakguard background service did not answer; try again"},
-		{errors.New("could not apply the firewall rules: pfctl failed\nmore detail"), "Could not change leakguard: could not apply the firewall rules: pfctl failed"},
+		{English, errors.New("not authorized"), "Could not change leakguard: not authorized"},
+		{English, &os.SyscallError{Syscall: "connect", Err: syscall.EACCES}, "Only administrators can change leakguard"},
+		{English, fmt.Errorf("read: %w", os.ErrDeadlineExceeded), "The leakguard background service did not answer; try again"},
+		{Spanish, fmt.Errorf("read: %w", os.ErrDeadlineExceeded), "El servicio de leakguard no respondió; inténtalo de nuevo"},
+		{English, errors.New("could not apply the firewall rules: pfctl failed\nmore detail"), "Could not change leakguard: could not apply the firewall rules: pfctl failed"},
+		{Spanish, errors.New("could not apply the firewall rules: pfctl failed"), "No se pudo cambiar leakguard: could not apply the firewall rules: pfctl failed"},
+		{English, nil, ""},
+		// What FindCLI refuses, in plain words.
+		{Spanish, ErrCLINotRootOwned, "El leakguard instalado no pertenece a root. Reinstálalo con: sudo leakguard enable"},
+		{English, ErrCLINotRootOwned, "The installed leakguard is not owned by root. Reinstall it with: sudo leakguard enable"},
+		{Spanish, ErrCLIUpdate, "Para actualizar leakguard, pon el nuevo comando leakguard junto a esta app o ejecuta: sudo leakguard enable"},
+		{Spanish, ErrNoCLI, "Pon el comando leakguard junto a esta app e inténtalo de nuevo"},
+		{English, ErrNoCLI, "Put the leakguard command next to this app, then try again"},
 	}
 	for _, tc := range tests {
-		if got := Explain(tc.err); got != tc.want {
-			t.Errorf("Explain(%v) = %q, want %q", tc.err, got, tc.want)
+		if got := Explain(tc.l, tc.err); got != tc.want {
+			t.Errorf("Explain(%s, %v) = %q, want %q", tc.l, tc.err, got, tc.want)
 		}
 	}
 }
 
-func TestBuildNotSetUp(t *testing.T) {
-	unavailable := fmt.Errorf("%w (dial unix: no such file)", ipc.ErrDaemonUnavailable)
+// R3-002: the setup opens by itself only on the first poll of a launch, and
+// only when leakguard is not installed or an older install needs updating;
+// a daemon that restarts later never opens it.
+func TestShouldAutoOpen(t *testing.T) {
+	down := fmt.Errorf("%w (dial)", ipc.ErrDaemonUnavailable)
+	slow := fmt.Errorf("read: %w", os.ErrDeadlineExceeded)
 	tests := []struct {
-		name       string
-		draft      Draft
-		candidates []string
-		want       Menu
+		name            string
+		first, answered bool
+		err             error
+		inst            Install
+		want            bool
 	}{
-		{
-			name:       "empty draft asks for the VPN first",
-			candidates: []string{"ipsec0", "utun3"},
-			want: Menu{
-				State:    StateNotSetUp,
-				Status:   "Choose your VPN interface",
-				Services: services(),
-				VPNs:     []VPNItem{{Name: "ipsec0", Label: "ipsec0"}, {Name: "utun3", Label: "utun3"}},
-				SetUp:    SetUpItem{Visible: true},
-			},
-		},
-		{
-			name:       "VPN chosen asks for a service",
-			draft:      Draft{VPNInterface: "utun3"},
-			candidates: []string{"ipsec0", "utun3"},
-			want: Menu{
-				State:    StateNotSetUp,
-				Status:   "Choose at least one service",
-				Services: services(),
-				VPNs:     []VPNItem{{Name: "ipsec0", Label: "ipsec0"}, {Name: "utun3", Label: "utun3", Checked: true}},
-				SetUp:    SetUpItem{Visible: true},
-			},
-		},
-		{
-			name:       "service without a VPN still asks for the VPN",
-			draft:      Draft{Services: []string{"anthropic"}},
-			candidates: []string{"ipsec0"},
-			want: Menu{
-				State:    StateNotSetUp,
-				Status:   "Choose your VPN interface",
-				Services: services("anthropic"),
-				VPNs:     []VPNItem{{Name: "ipsec0", Label: "ipsec0"}},
-				SetUp:    SetUpItem{Visible: true},
-			},
-		},
-		{
-			name:       "complete draft enables set up",
-			draft:      Draft{VPNInterface: "ipsec0", Services: []string{"anthropic", "mistral"}},
-			candidates: []string{"ipsec0"},
-			want: Menu{
-				State:    StateNotSetUp,
-				Status:   "Ready: click Set up leakguard…",
-				Services: services("anthropic", "mistral"),
-				VPNs:     []VPNItem{{Name: "ipsec0", Label: "ipsec0", Checked: true}},
-				SetUp:    SetUpItem{Visible: true, Enabled: true},
-			},
-		},
-		{
-			name:       "drafted VPN that disappeared stays listed",
-			draft:      Draft{VPNInterface: "ppp0", Services: []string{"anthropic"}},
-			candidates: nil,
-			want: Menu{
-				State:    StateNotSetUp,
-				Status:   "Ready: click Set up leakguard…",
-				Services: services("anthropic"),
-				VPNs:     []VPNItem{{Name: "ppp0", Label: "ppp0", Checked: true}},
-				SetUp:    SetUpItem{Visible: true, Enabled: true},
-			},
-		},
+		{"first poll, nothing installed", true, false, down, InstallNone, true},
+		{"first poll, older install needs updating", true, false, down, InstallOld, true},
+		{"first poll, installed service still starting", true, false, down, InstallCurrent, false},
+		{"first poll, daemon answers", true, false, nil, InstallCurrent, false},
+		{"first poll, daemon refuses", true, false, ipc.ErrNotAuthorized, InstallNone, false},
+		{"first poll, daemon slow", true, false, slow, InstallNone, false},
+		{"later poll, daemon restarting after it answered", false, true, down, InstallNone, false},
+		{"later poll, daemon restarting, current install", false, true, down, InstallCurrent, false},
+		{"later poll, never answered", false, false, down, InstallNone, false},
+		{"daemon answered before", true, true, down, InstallNone, false},
 	}
 	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := Build(nil, unavailable, tc.candidates, Setup{Catalog: fullCatalog, Draft: tc.draft})
-			if !reflect.DeepEqual(got, tc.want) {
-				t.Errorf("Build:\n got %+v\nwant %+v", got, tc.want)
-			}
-		})
-	}
-}
-
-func TestDefaultDraft(t *testing.T) {
-	tests := []struct {
-		connected []string
-		want      Draft
-	}{
-		{nil, Draft{}},
-		{[]string{"ipsec0"}, Draft{VPNInterface: "ipsec0"}},
-		{[]string{"ipsec0", "utun3"}, Draft{}},
-		{[]string{"ipsec0", "ipsec0"}, Draft{VPNInterface: "ipsec0"}},
-		{[]string{"en0"}, Draft{}},
-	}
-	for _, tc := range tests {
-		if got := DefaultDraft(tc.connected); !reflect.DeepEqual(got, tc.want) {
-			t.Errorf("DefaultDraft(%v) = %+v, want %+v", tc.connected, got, tc.want)
+		if got := ShouldAutoOpen(tc.first, tc.answered, tc.err, tc.inst); got != tc.want {
+			t.Errorf("%s: ShouldAutoOpen = %v, want %v", tc.name, got, tc.want)
 		}
-	}
-}
-
-func TestDraftClicks(t *testing.T) {
-	tests := []struct {
-		name    string
-		click   func() (Draft, error)
-		want    Draft
-		wantErr string
-	}{
-		{
-			name:  "tick a service",
-			click: func() (Draft, error) { return Draft{}.ToggleService(fullCatalog, "mistral") },
-			want:  Draft{Services: []string{"mistral"}},
-		},
-		{
-			name: "tick keeps catalog order and the VPN",
-			click: func() (Draft, error) {
-				return Draft{VPNInterface: "ipsec0", Services: []string{"mistral"}}.ToggleService(fullCatalog, "anthropic")
-			},
-			want: Draft{VPNInterface: "ipsec0", Services: []string{"anthropic", "mistral"}},
-		},
-		{
-			name: "untick the last service leaves an empty draft",
-			click: func() (Draft, error) {
-				return Draft{Services: []string{"anthropic"}}.ToggleService(fullCatalog, "anthropic")
-			},
-			want: Draft{},
-		},
-		{
-			name:    "planned service",
-			click:   func() (Draft, error) { return Draft{}.ToggleService(fullCatalog, "openai") },
-			wantErr: "OpenAI is coming soon and cannot be protected yet",
-		},
-		{
-			name:    "unknown service",
-			click:   func() (Draft, error) { return Draft{}.ToggleService(fullCatalog, "nope") },
-			wantErr: `unknown service "nope"`,
-		},
-		{
-			name:  "choose a VPN keeps the services",
-			click: func() (Draft, error) { return Draft{Services: []string{"anthropic"}}.ChooseVPN("utun3") },
-			want:  Draft{VPNInterface: "utun3", Services: []string{"anthropic"}},
-		},
-		{
-			name:    "a real connection is not a VPN",
-			click:   func() (Draft, error) { return Draft{}.ChooseVPN("en0") },
-			wantErr: `"en0" is not a VPN interface; it carries your real connection`,
-		},
-		{
-			name:    "an unsafe name is rejected",
-			click:   func() (Draft, error) { return Draft{}.ChooseVPN("utun0; id") },
-			wantErr: `"utun0; id" is not a valid interface name`,
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := tc.click()
-			if tc.wantErr != "" {
-				if err == nil || err.Error() != tc.wantErr {
-					t.Fatalf("error = %v, want %q", err, tc.wantErr)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if !reflect.DeepEqual(got, tc.want) {
-				t.Errorf("draft = %+v, want %+v", got, tc.want)
-			}
-		})
-	}
-}
-
-func TestDraftToggleDoesNotChangeTheOriginal(t *testing.T) {
-	d := Draft{Services: []string{"anthropic", "mistral"}}
-	if _, err := d.ToggleService(fullCatalog, "anthropic"); err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(d.Services, []string{"anthropic", "mistral"}) {
-		t.Errorf("original draft changed to %v", d.Services)
-	}
-}
-
-func TestBuildNotSetUpOlderInstall(t *testing.T) {
-	unavailable := fmt.Errorf("%w (dial unix: no such file)", ipc.ErrDaemonUnavailable)
-	tests := []struct {
-		name  string
-		draft Draft
-		want  Menu
-	}{
-		{
-			name:  "complete draft asks to update",
-			draft: Draft{VPNInterface: "ipsec0", Services: []string{"anthropic"}},
-			want: Menu{
-				State:    StateNotSetUp,
-				Status:   "Update needed: click Set up leakguard… to update",
-				Services: services("anthropic"),
-				VPNs:     []VPNItem{{Name: "ipsec0", Label: "ipsec0", Checked: true}},
-				SetUp:    SetUpItem{Visible: true, Enabled: true},
-			},
-		},
-		{
-			name:  "incomplete draft still keeps set up disabled",
-			draft: Draft{VPNInterface: "ipsec0"},
-			want: Menu{
-				State:    StateNotSetUp,
-				Status:   "Update needed. Choose at least one service",
-				Services: services(),
-				VPNs:     []VPNItem{{Name: "ipsec0", Label: "ipsec0", Checked: true}},
-				SetUp:    SetUpItem{Visible: true},
-			},
-		},
-		{
-			name: "empty draft asks for the VPN",
-			want: Menu{
-				State:    StateNotSetUp,
-				Status:   "Update needed. Choose your VPN interface",
-				Services: services(),
-				VPNs:     []VPNItem{{Name: "ipsec0", Label: "ipsec0"}},
-				SetUp:    SetUpItem{Visible: true},
-			},
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := Build(nil, unavailable, []string{"ipsec0"}, Setup{Catalog: fullCatalog, Draft: tc.draft, Update: true})
-			if !reflect.DeepEqual(got, tc.want) {
-				t.Errorf("Build:\n got %+v\nwant %+v", got, tc.want)
-			}
-		})
 	}
 }
 

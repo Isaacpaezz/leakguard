@@ -1,12 +1,14 @@
 //go:build darwin
 
 // Command leakguard-menubar is the macOS menu-bar app. It shows whether the
-// chosen services are protected and lets an administrator tick services,
-// choose the VPN interface and pause the protection. It only talks to the
-// root daemon over its socket: quitting the app never stops the protection.
+// chosen services are protected, guides the first setup in three steps with
+// native dialogs, and lets an administrator tick services, change the VPN and
+// pause the protection. It only talks to the root daemon over its socket:
+// quitting the app never stops the protection.
 package main
 
 import (
+	"bytes"
 	"errors"
 	"net"
 	"net/netip"
@@ -26,38 +28,49 @@ import (
 
 const (
 	pollEvery = 3 * time.Second
-	// lineLength bounds the status and error lines, in characters.
-	lineLength = 70
+	// lineLength bounds the status and error lines, in runes.
+	lineLength = menubar.MenuLineLength
 )
 
 func main() {
 	a := &app{
 		client:  ipc.Client{Path: ipc.DefaultPath},
 		actions: make(chan action),
+		lang:    macLanguage(),
 	}
 	a.catalog, a.catalogErr = catalog.Embedded()
 	systray.Run(a.ready, func() {})
+}
+
+// macLanguage is the language of the Mac's first preferred language.
+func macLanguage() menubar.Lang {
+	out, _ := exec.Command("/usr/bin/defaults", "read", "-g", "AppleLanguages").Output()
+	return menubar.ParseLang(string(out))
 }
 
 type actionKind int
 
 const (
 	actService actionKind = iota
-	actVPN
 	actToggle
 	actSetUp
-	actSetUpDone
+	actChangeVPN
+	actWizardDone
 )
 
+// action is a click, or the end of the wizard. service is the clicked
+// service's ID; err is what the wizard returned (nil, a cancel or a failure).
 type action struct {
-	kind actionKind
-	arg  string
+	kind    actionKind
+	service string
+	err     error
 }
 
 // app keeps the state; only its loop goroutine reads or changes it.
 type app struct {
 	client  ipc.Client
 	actions chan action
+	lang    menubar.Lang
 
 	st      *ipc.Status
 	stErr   error
@@ -65,18 +78,19 @@ type app struct {
 	// errFresh is set when the click just handled wrote errLine, so the
 	// poll right after it keeps the line (see menubar.ErrorLineAfterPoll).
 	errFresh bool
-	// pendingVPN is the VPN interface chosen while the daemon has no
-	// services yet; it is sent with the first ticked service.
-	pendingVPN string
-	menu       menubar.Menu
-	icon       menubar.State
-	settingUp  bool
+	menu     menubar.Menu
+	icon     menubar.State
 
-	// catalog and draft drive the menu while leakguard is not set up: the
-	// clicks change the draft only, and "Set up" sends it to enable.
+	// wizardOpen is set while the setup or "Change VPN" dialogs run in
+	// their own goroutine: one at a time, and polling goes on meanwhile.
+	wizardOpen bool
+	// polled is set after the first status poll of this launch; answered
+	// once the daemon answered any poll. Both decide whether the setup opens
+	// by itself (menubar.ShouldAutoOpen).
+	polled, answered bool
+
 	catalog    []catalog.Service
 	catalogErr error
-	draft      *menubar.Draft
 
 	layout string
 	done   chan struct{}
@@ -84,9 +98,8 @@ type app struct {
 }
 
 type items struct {
-	status, errLine, setUp, vpn, toggle, quit *systray.MenuItem
-	services                                  map[string]*systray.MenuItem
-	vpns                                      map[string]*systray.MenuItem
+	status, errLine, setUp, changeVPN, toggle, quit *systray.MenuItem
+	services                                        map[string]*systray.MenuItem
 }
 
 func (a *app) ready() {
@@ -121,45 +134,52 @@ func (a *app) poll() {
 	}
 	a.errLine = menubar.ErrorLineAfterPoll(a.errLine, a.errFresh, err)
 	a.errFresh = false
-	a.pendingVPN = menubar.KeepPendingVPN(a.st, a.stErr, a.pendingVPN)
 	a.draw()
+	// Only the first poll of this launch may open the setup by itself, and
+	// only when leakguard is not installed or needs updating; a daemon that
+	// restarts later just shows its status.
+	first, answeredBefore := !a.polled, a.answered
+	a.polled = true
+	if err == nil {
+		a.answered = true
+	}
+	if first && a.catalogErr == nil &&
+		menubar.ShouldAutoOpen(first, answeredBefore, err, menubar.InstalledState("")) {
+		a.startSetUp()
+	}
 }
 
 func (a *app) handle(act action) {
 	a.errFresh = true
 	switch act.kind {
 	case actSetUp:
-		a.setUp()
+		a.startSetUp()
 		return
-	case actSetUpDone:
-		a.settingUp = false
-		a.errLine = act.arg
+	case actChangeVPN:
+		a.startChangeVPN()
 		return
-	}
-	if a.notSetUp() {
-		a.editDraft(act)
+	case actWizardDone:
+		// The wizard already showed a failure in a dialog; the menu keeps
+		// its first line. A cancel clears the line.
+		a.wizardOpen = false
+		a.errLine = menubar.WizardMessage(a.lang, act.err)
 		return
 	}
 	if a.st == nil {
-		a.errLine = menubar.Explain(a.stErr)
+		a.errLine = menubar.Explain(a.lang, a.stErr)
+		return
+	}
+	if a.menu.State == menubar.StateNotSetUp {
 		return
 	}
 	var req menubar.Request
 	var err error
 	switch act.kind {
 	case actService:
-		req, err = menubar.ToggleService(*a.st, a.pendingVPN, connectedVPNCandidates(), act.arg)
-	case actVPN:
-		var send bool
-		req, send, err = menubar.ChooseVPN(*a.st, act.arg)
-		if err == nil && !send {
-			a.pendingVPN = act.arg
-			a.errLine = ""
-			return
-		}
+		req, err = menubar.ToggleService(a.lang, *a.st, act.service)
 	case actToggle:
 		if a.menu.Toggle.Resume {
-			req, err = menubar.ResumeRequest(*a.st)
+			req, err = menubar.ResumeRequest(a.lang, *a.st)
 		} else {
 			req = menubar.PauseRequest()
 		}
@@ -175,60 +195,86 @@ func (a *app) handle(act action) {
 	}
 	a.errLine = ""
 	if err != nil {
-		a.errLine = menubar.Explain(err)
+		a.errLine = menubar.Explain(a.lang, err)
 	}
 }
 
-func (a *app) notSetUp() bool {
+// daemonUnavailable reports whether the last poll found no daemon: then the
+// setup installs it with the administrator prompt.
+func (a *app) daemonUnavailable() bool {
 	return errors.Is(a.stErr, ipc.ErrDaemonUnavailable)
 }
 
-// editDraft applies a click to the local draft; nothing reaches the daemon.
-func (a *app) editDraft(act action) {
-	d := a.currentDraft()
-	var err error
-	switch act.kind {
-	case actService:
-		d, err = d.ToggleService(a.catalog, act.arg)
-	case actVPN:
-		d, err = d.ChooseVPN(act.arg)
-	default:
-		return
+func (a *app) wizard(needsPassword bool) menubar.Wizard {
+	return menubar.Wizard{
+		Lang:          a.lang,
+		Dialogs:       osaDialogs{},
+		Catalog:       a.catalog,
+		ConnectedVPNs: connectedVPNCandidates,
+		NeedsPassword: needsPassword,
 	}
-	a.errLine = ""
-	if err != nil {
-		a.errLine = err.Error()
-		return
-	}
-	a.draft = &d
 }
 
-// currentDraft is the draft, starting from the default on first use.
-func (a *app) currentDraft() menubar.Draft {
-	if a.draft == nil {
-		d := menubar.DefaultDraft(connectedVPNCandidates())
-		a.draft = &d
-	}
-	return *a.draft
-}
-
-// setUp runs "leakguard enable" once through the macOS administrator prompt.
-func (a *app) setUp() {
-	if a.settingUp || !a.notSetUp() || !a.menu.SetUp.Enabled {
+// startSetUp opens the 3-step setup. Without the daemon, step 3 runs
+// "leakguard enable" once through the macOS administrator prompt; with a
+// daemon that has no choice yet, it saves the choice without a password.
+func (a *app) startSetUp() {
+	if a.wizardOpen || !a.menu.SetUp || a.catalogErr != nil {
 		return
 	}
-	// The daemon may have come up since the last poll: then there is
-	// nothing to set up, and the draft is dropped.
-	st, err := a.client.Status()
+	a.wizardOpen = true
+	w := a.wizard(a.daemonUnavailable())
+	client, lang, all := a.client, a.lang, a.catalog
+	go func() {
+		err := w.Run(func(d menubar.Draft) error {
+			if w.NeedsPassword {
+				return install(client, lang, all, d)
+			}
+			return save(client, d)
+		})
+		a.actions <- action{kind: actWizardDone, err: err}
+	}()
+}
+
+// startChangeVPN runs step 2 again and saves the VPN through the daemon.
+func (a *app) startChangeVPN() {
+	if a.wizardOpen || !a.menu.ChangeVPN {
+		return
+	}
+	a.wizardOpen = true
+	w := a.wizard(false)
+	client, lang := a.client, a.lang
+	go func() {
+		err := w.ChangeVPN(func(vpn string) error {
+			st, err := client.Status()
+			if err != nil {
+				return err
+			}
+			req, err := menubar.ChangeVPNRequest(lang, st, vpn)
+			if err != nil {
+				return err
+			}
+			return save(client, menubar.Draft{VPNInterface: req.VPNInterface, Services: req.Services})
+		})
+		a.actions <- action{kind: actWizardDone, err: err}
+	}()
+}
+
+// save sends d to the running daemon, which needs no password. Its errors
+// stay as they are: the wizard says them in the user's language.
+func save(client ipc.Client, d menubar.Draft) error {
+	_, err := client.Set(d.VPNInterface, d.Services)
+	return err
+}
+
+// install runs "leakguard enable" for d once with administrator rights.
+// Its errors stay as they are: the wizard says them in the user's language.
+func install(client ipc.Client, lang menubar.Lang, all []catalog.Service, d menubar.Draft) error {
+	// The daemon may have come up since the wizard opened: then it saves the
+	// choice and no password is needed.
+	_, err := client.Status()
 	if !menubar.SetupNeeded(err) {
-		if err == nil {
-			a.st, a.stErr = &st, nil
-		} else {
-			a.st, a.stErr = nil, err
-		}
-		a.draft = nil
-		a.errLine = ""
-		return
+		return save(client, d)
 	}
 	exe, err := os.Executable()
 	if err == nil {
@@ -239,24 +285,45 @@ func (a *app) setUp() {
 	}
 	cli, err := menubar.FindCLI(exe, menubar.InstalledState(""), isExecutable, menubar.CheckInstalledCLI)
 	if err != nil {
-		a.errLine = err.Error()
-		return
+		return err
 	}
-	script, err := menubar.SetupScript(cli, a.currentDraft(), a.catalog)
+	script, err := menubar.SetupScript(cli, d, all, menubar.AdminPrompt(lang))
 	if err != nil {
-		a.errLine = err.Error()
-		return
+		return err
 	}
-	a.settingUp = true
-	a.errLine = "Setting up leakguard…"
-	go func() {
-		out, err := exec.Command("/usr/bin/osascript", "-e", script).CombinedOutput()
-		msg := ""
-		if err != nil {
-			msg = menubar.SetupFailure(string(out), err)
-		}
-		a.actions <- action{kind: actSetUpDone, arg: msg}
-	}()
+	_, err = runScript(script)
+	return err
+}
+
+// osaDialogs draws the wizard with osascript: "display dialog" and "choose
+// from list". Cancelling returns menubar.ErrCancelled.
+type osaDialogs struct{}
+
+func (osaDialogs) Ask(d menubar.Dialog) (int, error) {
+	out, err := runScript(menubar.DialogScript(d))
+	if err != nil {
+		return 0, err
+	}
+	return menubar.ParseButton(out, d)
+}
+
+func (osaDialogs) Choose(l menubar.List) ([]int, error) {
+	out, err := runScript(menubar.ListScript(l))
+	if err != nil {
+		return nil, err
+	}
+	return menubar.ParseChoice(out, l)
+}
+
+// runScript runs an AppleScript with osascript and returns what it printed.
+func runScript(script string) (string, error) {
+	var stdout, stderr bytes.Buffer
+	cmd := exec.Command("/usr/bin/osascript", "-e", script)
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		return "", menubar.ScriptError(stderr.String()+stdout.String(), err)
+	}
+	return stdout.String(), nil
 }
 
 func isExecutable(path string) bool {
@@ -265,6 +332,8 @@ func isExecutable(path string) bool {
 }
 
 // connectedVPNCandidates are the VPN candidates that are up with an address.
+// macOS keeps system tunnels (utun0-3) up without an address; they are never
+// the user's VPN.
 func connectedVPNCandidates() []string {
 	ifs, err := net.Interfaces()
 	if err != nil {
@@ -291,20 +360,14 @@ func connectedVPNCandidates() []string {
 }
 
 func (a *app) draw() {
-	setup := menubar.Setup{Catalog: a.catalog, PendingVPN: a.pendingVPN}
-	if a.notSetUp() {
-		setup.Draft = a.currentDraft()
+	setup := menubar.Setup{Catalog: a.catalog, Lang: a.lang}
+	if a.daemonUnavailable() {
 		setup.Update = menubar.InstalledState("") == menubar.InstallOld
-	} else if a.st != nil {
-		a.draft = nil // a later "not set up" starts from the default again
 	}
-	// Only connected VPN interfaces are offered: macOS keeps system tunnels
-	// (utun0-3) up without an address, and they are never the user's VPN.
-	// The saved interface is still shown, marked "not connected".
-	m := menubar.Build(a.st, a.stErr, connectedVPNCandidates(), setup)
+	m := menubar.Build(a.st, a.stErr, setup)
 	if m.State == menubar.StateNotSetUp && a.catalogErr != nil {
-		m.Status = "Could not read the service list: " + a.catalogErr.Error()
-		m.SetUp.Enabled = false
+		m.Status = a.lang.Text(menubar.MsgCatalogError, a.catalogErr.Error())
+		m.SetUp = false
 	}
 	a.menu = m
 
@@ -319,11 +382,7 @@ func (a *app) draw() {
 			systray.SetTemplateIcon(iconOutline, iconOutline)
 		}
 	}
-	if m.State == menubar.StateNotSetUp {
-		systray.SetTooltip(menubar.Explain(a.stErr))
-	} else {
-		systray.SetTooltip("leakguard: " + m.Status)
-	}
+	systray.SetTooltip(m.Tooltip)
 
 	if key := layoutKey(m); key != a.layout {
 		a.rebuild(m)
@@ -343,20 +402,11 @@ func (a *app) draw() {
 		setChecked(item, s.Checked)
 		setEnabled(item, s.Enabled)
 	}
-	if it.vpn != nil {
-		title := "VPN interface"
-		for _, v := range m.VPNs {
-			item := it.vpns[v.Name]
-			item.SetTitle(v.Label)
-			setChecked(item, v.Checked)
-			if v.Checked {
-				title = "VPN interface: " + v.Name
-			}
-		}
-		it.vpn.SetTitle(title)
-	}
 	if it.setUp != nil {
-		setEnabled(it.setUp, m.SetUp.Enabled)
+		setEnabled(it.setUp, !a.wizardOpen)
+	}
+	if it.changeVPN != nil {
+		setEnabled(it.changeVPN, !a.wizardOpen)
 	}
 	if it.toggle != nil {
 		it.toggle.SetTitle(m.Toggle.Label)
@@ -370,13 +420,13 @@ func layoutKey(m menubar.Menu) string {
 	for _, s := range m.Services {
 		b.WriteString("|s:" + s.ID)
 	}
-	for _, v := range m.VPNs {
-		b.WriteString("|v:" + v.Name)
+	if m.ChangeVPN {
+		b.WriteString("|vpn")
 	}
 	if m.Toggle.Visible {
 		b.WriteString("|toggle")
 	}
-	if m.SetUp.Visible {
+	if m.SetUp {
 		b.WriteString("|setup")
 	}
 	return b.String()
@@ -390,43 +440,40 @@ func (a *app) rebuild(m menubar.Menu) {
 	}
 	a.done = make(chan struct{})
 	systray.ResetMenu()
+	l := a.lang
 
-	it := items{services: map[string]*systray.MenuItem{}, vpns: map[string]*systray.MenuItem{}}
+	it := items{services: map[string]*systray.MenuItem{}}
 	it.status = systray.AddMenuItem("", "")
 	it.status.Disable()
-	it.errLine = systray.AddMenuItem("", "The last change did not work")
+	it.errLine = systray.AddMenuItem("", l.Text(menubar.MsgMenuErrorTip))
 	it.errLine.Disable()
 	systray.AddSeparator()
-	if len(m.Services) > 0 {
-		header := systray.AddMenuItem("Protect these services:", "")
-		header.Disable()
-		for _, s := range m.Services {
-			item := systray.AddMenuItemCheckbox(s.Label, "Allow this service only through the VPN", s.Checked)
-			it.services[s.ID] = item
-			a.forward(item, action{kind: actService, arg: s.ID})
-		}
-	}
-	if len(m.VPNs) > 0 {
-		it.vpn = systray.AddMenuItem("VPN interface", "The only interface the protected services may use")
-		for _, v := range m.VPNs {
-			item := it.vpn.AddSubMenuItemCheckbox(v.Label, "", v.Checked)
-			it.vpns[v.Name] = item
-			a.forward(item, action{kind: actVPN, arg: v.Name})
-		}
-	}
-	if m.SetUp.Visible {
-		systray.AddSeparator()
-		it.setUp = systray.AddMenuItem("Set up leakguard…", "Protects the ticked services through the chosen VPN and installs the background service; asks for an administrator password once")
-		it.setUp.Disable()
+	if m.SetUp {
+		it.setUp = systray.AddMenuItem(l.Text(menubar.MsgMenuSetUp), l.Text(menubar.MsgMenuSetUpTip))
 		a.forward(it.setUp, action{kind: actSetUp})
 	}
-	if m.Toggle.Visible {
+	if len(m.Services) > 0 {
+		header := systray.AddMenuItem(l.Text(menubar.MsgMenuServicesHeader), "")
+		header.Disable()
+		for _, s := range m.Services {
+			item := systray.AddMenuItemCheckbox(s.Label, l.Text(menubar.MsgMenuServiceTip), s.Checked)
+			it.services[s.ID] = item
+			a.forward(item, action{kind: actService, service: s.ID})
+		}
+	}
+	if m.ChangeVPN || m.Toggle.Visible {
 		systray.AddSeparator()
-		it.toggle = systray.AddMenuItem(m.Toggle.Label, "Pause lets the services use your normal connection until you resume")
+	}
+	if m.ChangeVPN {
+		it.changeVPN = systray.AddMenuItem(l.Text(menubar.MsgMenuChangeVPN), l.Text(menubar.MsgMenuChangeVPNTip))
+		a.forward(it.changeVPN, action{kind: actChangeVPN})
+	}
+	if m.Toggle.Visible {
+		it.toggle = systray.AddMenuItem(m.Toggle.Label, l.Text(menubar.MsgMenuToggleTip))
 		a.forward(it.toggle, action{kind: actToggle})
 	}
 	systray.AddSeparator()
-	it.quit = systray.AddMenuItem("Quit", "Closes this menu only; the protection keeps running in the background")
+	it.quit = systray.AddMenuItem(l.Text(menubar.MsgMenuQuit), l.Text(menubar.MsgMenuQuitTip))
 	done := a.done
 	go func() {
 		select {

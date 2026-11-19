@@ -99,6 +99,7 @@ Missing a service? [Request it](https://github.com/Isaacpaezz/leakguard/issues/n
 - `leakguard status` without `sudo` asks the background service, which verifies the rules as root, so it reports PROTECTED or NOT PROTECTED without a password.
 
 **Changed**
+- Menu-bar app: the first setup is a guided 3-step setup in native macOS dialogs, in the Mac's language (Spanish or English): choose the services, find your VPN by disconnecting and reconnecting it (no interface names: the app names its kind, such as "IPsec VPN", and you can choose another), and turn the protection on after a warning that the Mac will ask for your password once. Cancelling any step changes nothing; any other failure is explained in plain words in a dialog and on the menu. The setup opens by itself only when the app starts and leakguard is not set up or needs an update, never when the background service restarts later. Once set up, the menu shows a plain status, the services, "Change VPN…", pause or resume, and quit; the VPN interface submenu is gone.
 - Menu-bar app: the VPN interface list shows only connected VPN interfaces, not idle system tunnels.
 - `leakguard test` fails unless every domain of a protected service has a refused address, and reports a resolved address outside the catalog ranges as `NOT COVERED` (pf does not block it).
 - `leakguard test` picks your real connection itself when the default route is the VPN, and stops with a clear message when the `--via` interface is not connected.
@@ -164,30 +165,36 @@ A shield appears in the menu bar:
 | Shield outline | Not protected, or paused. The first line of the menu says why. |
 | Shield with a slash | leakguard is not set up on this Mac (its background service is not running). |
 
-The menu shows the status, one checkbox per service (services that are not
-supported yet appear as "coming soon"), a VPN interface submenu, and
-"Pause protection" or "Resume protection". Changes need no password: the
+The first time, no terminal is needed: the app opens a guided setup by
+itself, in your Mac's language (Spanish when your first preferred language is
+Spanish, English otherwise). You can also open it from "Set up leakguard
+(3 steps)…" in the menu. Each window is titled "Step N of 3":
+
+1. Choose what to protect. Services that are not supported yet are listed as
+   "coming soon" and cannot be chosen.
+2. Find your VPN: disconnect it and click Next, then connect it again and
+   click Next. The VPN is the connection that appeared; you never need to
+   know names like `utun4` or `ipsec0`. If none appeared, retry or choose
+   from a list; if several appeared, you choose.
+3. Turn the protection on. The window tells you first that your Mac will ask
+   for your login password, once, to install the background service; then
+   the macOS password prompt says why. It runs
+   `leakguard enable --vpn IFACE SERVICE...` once as administrator.
+
+Cancelling any step changes nothing. A last window confirms what is protected.
+Upgrading from an older leakguard (one installed before the menu-bar app,
+whose background service only re-applied the rules) uses the same setup with
+the `leakguard` command next to the app (build it as above); if there is none,
+the app tells you to put it there or run `sudo leakguard enable`.
+
+Once set up, the menu shows a plain status ("Protected", "Paused", ...), one
+checkbox per service, "Change VPN…" (step 2 again, no password), "Pause
+protection" or "Resume protection", and "Quit". Changes need no password: the
 background service only listens to administrators of the Mac, so the app must
 run in an administrator's account. Unticking the last service pauses the
-protection. If the background service runs without a choice yet, choose the
-VPN interface first and then tick a service (or just tick a service: when
-exactly one VPN is connected, it is used). `sudo leakguard enable` and
-`sudo leakguard apply` also end a pause.
-
-The first time, no terminal is needed. While leakguard is not set up, the
-menu already lists the services and your VPN interfaces (connect the VPN
-first; if exactly one is connected it is chosen for you). Tick the services and
-choose the VPN interface; until both are chosen, the first line says what is
-missing and "Set up leakguard…" stays disabled. Then click "Set up
-leakguard…": it runs `leakguard enable --vpn IFACE SERVICE...` once with the
-macOS administrator prompt, which protects your choice and installs the
-background service.
-
-Upgrading from an older leakguard (one installed before the menu-bar app,
-whose background service only re-applied the rules) also works from the menu:
-the first line says "Update needed", and "Set up leakguard…" updates it with
-the `leakguard` command next to the app (build it as above). If there is none,
-the menu tells you to put it there or run `sudo leakguard enable`.
+protection. Technical details, such as the VPN interface name, are in the
+icon's tooltip. `sudo leakguard enable` and `sudo leakguard apply` also end a
+pause.
 
 Anything run as administrator uses the installed copy
 `/usr/local/libexec/leakguard/leakguard` only when it is current and it, and
