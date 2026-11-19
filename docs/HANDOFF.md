@@ -223,6 +223,13 @@ vulnerability reporting, create labels `status:needs-triage`,
    hide the icon after a restart; the menu shows "Move leakguard to
    Applications so it opens at login" instead. `menubar.json` and the agent
    are read with a non-blocking open and only when they are regular files.
+   From the DMG or translocated (`menubar.MustMoveToApplications`), setup
+   and uninstall show only "Primero mueve leakguard a Aplicaciones…" and do
+   nothing else, so `ErrQuarantined` means a real quarantine failure in
+   Applications. `SetOpenAtLogin` changes the LaunchAgent first and saves
+   the choice only when that worked (and restores the agent if saving
+   fails); the uninstall failure says the app still opens at login only
+   when the LaunchAgent exists.
    Uninstall: `menubar.Uninstaller` (confirm with Cancel as default, then
    `<cli> disable` through the same administrator script builder with its
    own prompt, then remove the LaunchAgent and `menubar.json`, then quit);

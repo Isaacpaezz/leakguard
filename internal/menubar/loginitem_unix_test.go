@@ -53,3 +53,41 @@ func TestLoginItemRefusesFIFO(t *testing.T) {
 		t.Errorf("agent:\n%s\nwant:\n%s", got, want)
 	}
 }
+
+// R4-002: when the LaunchAgent cannot be changed, SetOpenAtLogin fails and
+// leaves both the agent and the saved choice as they were, so the menu's
+// checkbox, the preference and the agent never disagree.
+func TestSetOpenAtLoginFailureKeepsState(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	for _, from := range []bool{true, false} {
+		home := t.TempDir()
+		if err := SetOpenAtLogin(home, bundledExe, from, writable); err != nil {
+			t.Fatal(err)
+		}
+		agentBefore := readOrNil(t, LoginItemPath(home))
+		prefsBefore := readOrNil(t, PrefsPath(home))
+		dir := filepath.Dir(LoginItemPath(home))
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(dir, 0o500); err != nil {
+			t.Fatal(err)
+		}
+		err := SetOpenAtLogin(home, bundledExe, !from, writable)
+		os.Chmod(dir, 0o755)
+		if err == nil {
+			t.Errorf("from %v: SetOpenAtLogin(%v) = nil, want the error", from, !from)
+		}
+		if got := LoadPrefs(home).OpenAtLogin; got != from {
+			t.Errorf("from %v: saved choice = %v, want it unchanged", from, got)
+		}
+		if got := readOrNil(t, PrefsPath(home)); string(got) != string(prefsBefore) {
+			t.Errorf("from %v: menubar.json changed to %s", from, got)
+		}
+		if got := readOrNil(t, LoginItemPath(home)); string(got) != string(agentBefore) {
+			t.Errorf("from %v: agent changed to %q", from, got)
+		}
+	}
+}

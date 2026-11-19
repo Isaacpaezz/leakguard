@@ -364,3 +364,76 @@ func TestSyncLoginItemNeverFromDMG(t *testing.T) {
 		t.Errorf("external disk: ProgramArguments = %q, want [%q]", args, externalExe)
 	}
 }
+
+// R4-001 (S4, S6): from the DMG or a translocated copy, setup and uninstall
+// first ask the user to move the app to Applications; elsewhere they run.
+func TestMustMoveToApplications(t *testing.T) {
+	ro := readOnlyAt(dmgBundle)
+	tests := []struct {
+		name string
+		exe  string
+		want bool
+	}{
+		{"mounted DMG", dmgExe, true},
+		{"translocated", translocated, true},
+		{"Applications", bundledExe, false},
+		{"writable external disk", externalExe, false},
+		{"development build", devExe, false},
+	}
+	for _, tc := range tests {
+		if got := MustMoveToApplications(tc.exe, ro); got != tc.want {
+			t.Errorf("%s: MustMoveToApplications = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// R4-001: the guard shows one plain dialog with a single button and says
+// the caller must stop; where the app may run, it shows nothing.
+func TestGuardMoveToApplications(t *testing.T) {
+	ro := readOnlyAt(dmgBundle)
+	tests := []struct {
+		name string
+		lang Lang
+		exe  string
+		want []string
+	}{
+		{"DMG, Spanish", Spanish, dmgExe, []string{"ask: leakguard|Primero mueve leakguard a Aplicaciones: arrastra el ícono de leakguard a la carpeta Aplicaciones, ábrelo desde ahí y vuelve a intentarlo.|Entendido"}},
+		{"translocated, English", English, translocated, []string{"ask: leakguard|First move leakguard to Applications: drag the leakguard icon to the Applications folder, open it from there and try again.|OK"}},
+		{"Applications", Spanish, bundledExe, nil},
+		{"development build", English, devExe, nil},
+	}
+	for _, tc := range tests {
+		var answers []answer
+		if tc.want != nil {
+			answers = []answer{click(0)}
+		}
+		f := &fakeDialogs{t: t, answers: answers}
+		stop := GuardMoveToApplications(tc.lang, f, tc.exe, ro)
+		if stop != (tc.want != nil) {
+			t.Errorf("%s: stop = %v, want %v", tc.name, stop, tc.want != nil)
+		}
+		if got := f.all(); strings.Join(got, "\n") != strings.Join(tc.want, "\n") {
+			t.Errorf("%s: dialogs %q, want %q", tc.name, got, tc.want)
+		}
+		if len(f.asks) == 1 && (f.asks[0].Default != 0 || f.asks[0].Cancel != -1 || len(f.asks[0].Buttons) != 1) {
+			t.Errorf("%s: dialog %+v, want one button, default, no cancel", tc.name, f.asks[0])
+		}
+	}
+}
+
+// R4-002: whether the LaunchAgent is there, for the uninstall message.
+func TestLoginItemPresent(t *testing.T) {
+	home := t.TempDir()
+	if LoginItemPresent(home) {
+		t.Error("no agent: present = true")
+	}
+	if _, err := SyncLoginItem(home, bundledExe, writable); err != nil {
+		t.Fatal(err)
+	}
+	if !LoginItemPresent(home) {
+		t.Error("agent written: present = false")
+	}
+	if LoginItemPresent("") || LoginItemPresent("relative") {
+		t.Error("unknown home: present = true")
+	}
+}

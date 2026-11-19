@@ -138,6 +138,9 @@ const (
 	msgUninstallPrompt
 	msgUninstallCancelled
 	msgUninstallFailed
+	msgUninstallFailedNoLoginItem
+	msgMoveToApplicationsFirst
+	msgButtonUnderstood
 	msgUninstallCleanupFailed
 	msgUninstallDone
 
@@ -247,14 +250,17 @@ var messages = [msgCount]text{
 	msgKindPPP:              {"VPN PPP", "PPP VPN"},
 	msgTooltipVersion:       {"%s · versión %s", "%s · version %s"},
 
-	msgUninstallTitle:         {"Desinstalar leakguard", "Uninstall leakguard"},
-	msgUninstallConfirm:       {"¿Quieres desinstalar leakguard?\n\nSe quitarán las reglas de protección, el servicio de fondo y la apertura al iniciar sesión. Los servicios que protegías volverán a usar tu conexión normal.\n\nLa app se queda en Aplicaciones: después puedes arrastrarla a la Papelera. Tu Mac te va a pedir tu contraseña.", "Do you want to uninstall leakguard?\n\nThis removes the protection rules, the background service and the login item. The services you protected will use your normal connection again.\n\nThe app stays in Applications: afterwards you can drag it to the Trash. Your Mac will ask for your password."},
-	msgButtonUninstall:        {"Desinstalar", "Uninstall"},
-	msgUninstallPrompt:        {"leakguard necesita tu contraseña para quitar la protección y el servicio de fondo.", "leakguard needs your password to remove the protection and the background service."},
-	msgUninstallCancelled:     {"No se desinstaló nada: leakguard sigue igual que antes.", "Nothing was uninstalled: leakguard keeps working as before."},
-	msgUninstallFailed:        {"No se pudo desinstalar leakguard: %s\n\nLa app sigue abriéndose al iniciar sesión. Puedes intentarlo de nuevo desde el menú.", "Could not uninstall leakguard: %s\n\nThe app still opens at login. You can try again from the menu."},
-	msgUninstallCleanupFailed: {"leakguard se desinstaló, pero no se pudo quitar la apertura al iniciar sesión: %s\n\nPuedes arrastrar la app a la Papelera.", "leakguard was uninstalled, but the login item could not be removed: %s\n\nYou can drag the app to the Trash."},
-	msgUninstallDone:          {"leakguard se desinstaló. Puedes arrastrar la app a la Papelera.", "leakguard was uninstalled. You can drag the app to the Trash."},
+	msgUninstallTitle:             {"Desinstalar leakguard", "Uninstall leakguard"},
+	msgUninstallConfirm:           {"¿Quieres desinstalar leakguard?\n\nSe quitarán las reglas de protección, el servicio de fondo y la apertura al iniciar sesión. Los servicios que protegías volverán a usar tu conexión normal.\n\nLa app se queda en Aplicaciones: después puedes arrastrarla a la Papelera. Tu Mac te va a pedir tu contraseña.", "Do you want to uninstall leakguard?\n\nThis removes the protection rules, the background service and the login item. The services you protected will use your normal connection again.\n\nThe app stays in Applications: afterwards you can drag it to the Trash. Your Mac will ask for your password."},
+	msgButtonUninstall:            {"Desinstalar", "Uninstall"},
+	msgUninstallPrompt:            {"leakguard necesita tu contraseña para quitar la protección y el servicio de fondo.", "leakguard needs your password to remove the protection and the background service."},
+	msgUninstallCancelled:         {"No se desinstaló nada: leakguard sigue igual que antes.", "Nothing was uninstalled: leakguard keeps working as before."},
+	msgUninstallFailed:            {"No se pudo desinstalar leakguard: %s\n\nLa app sigue abriéndose al iniciar sesión. Puedes intentarlo de nuevo desde el menú.", "Could not uninstall leakguard: %s\n\nThe app still opens at login. You can try again from the menu."},
+	msgUninstallFailedNoLoginItem: {"No se pudo desinstalar leakguard: %s\n\nPuedes intentarlo de nuevo desde el menú.", "Could not uninstall leakguard: %s\n\nYou can try again from the menu."},
+	msgMoveToApplicationsFirst:    {"Primero mueve leakguard a Aplicaciones: arrastra el ícono de leakguard a la carpeta Aplicaciones, ábrelo desde ahí y vuelve a intentarlo.", "First move leakguard to Applications: drag the leakguard icon to the Applications folder, open it from there and try again."},
+	msgButtonUnderstood:           {"Entendido", "OK"},
+	msgUninstallCleanupFailed:     {"leakguard se desinstaló, pero no se pudo quitar la apertura al iniciar sesión: %s\n\nPuedes arrastrar la app a la Papelera.", "leakguard was uninstalled, but the login item could not be removed: %s\n\nYou can drag the app to the Trash."},
+	msgUninstallDone:              {"leakguard se desinstaló. Puedes arrastrar la app a la Papelera.", "leakguard was uninstalled. You can drag the app to the Trash."},
 }
 
 // Text returns message m in language l, formatted with args when given.

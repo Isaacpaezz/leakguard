@@ -16,11 +16,15 @@ type Uninstaller struct {
 	Disable func() error
 	// Cleanup removes the LaunchAgent and menubar.json.
 	Cleanup func() error
+	// LoginItem reports whether the login item is there, so a failure does
+	// not claim the app opens at login when it does not. Nil reads as no.
+	LoginItem func() bool
 }
 
 // Run asks first, with Cancel as the default button. Cancelling, at the
 // first dialog or at the password prompt, changes nothing and says so; a
-// failed Disable leaves the login item in place and says why. It returns
+// failed Disable leaves the login item in place and says why (and that the
+// app still opens at login only when it does). It returns
 // nil once leakguard is uninstalled: the app should quit then. Errors read
 // in plain words with WizardMessage.
 func (u Uninstaller) Run() error {
@@ -37,7 +41,11 @@ func (u Uninstaller) Run() error {
 	if err == nil {
 		err = u.Disable()
 		if err != nil && !errors.Is(err, ErrCancelled) {
-			err = stepError{msgUninstallFailed, err}
+			msg := msgUninstallFailedNoLoginItem
+			if u.LoginItem != nil && u.LoginItem() {
+				msg = msgUninstallFailed
+			}
+			err = stepError{msg, err}
 		}
 	}
 	if errors.Is(err, ErrCancelled) {

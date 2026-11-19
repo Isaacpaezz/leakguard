@@ -283,7 +283,7 @@ func (a *app) wizard(needsPassword bool) menubar.Wizard {
 // "leakguard enable" once through the macOS administrator prompt; with a
 // daemon that has no choice yet, it saves the choice without a password.
 func (a *app) startSetUp() {
-	if a.wizardOpen || !a.menu.SetUp || a.catalogErr != nil {
+	if a.wizardOpen || !a.menu.SetUp || a.catalogErr != nil || a.mustMove() {
 		return
 	}
 	a.wizardOpen = true
@@ -298,6 +298,23 @@ func (a *app) startSetUp() {
 		})
 		a.actions <- action{kind: actWizardDone, err: err}
 	}()
+}
+
+// mustMove reports whether the app runs from the mounted DMG or a
+// translocated copy (menubar.MustMoveToApplications). Then it asks the user,
+// in one dialog of its own goroutine, to move the app to Applications first,
+// and setup and uninstall do nothing else.
+func (a *app) mustMove() bool {
+	if !menubar.MustMoveToApplications(a.exe, menubar.ReadOnlyVolume) {
+		return false
+	}
+	a.wizardOpen = true
+	lang, exe := a.lang, a.exe
+	go func() {
+		menubar.GuardMoveToApplications(lang, osaDialogs{}, exe, menubar.ReadOnlyVolume)
+		a.actions <- action{kind: actWizardDone}
+	}()
+	return true
 }
 
 // startChangeVPN runs step 2 again and saves the VPN through the daemon.
@@ -391,7 +408,7 @@ func clearQuarantine(path string) error {
 // "leakguard disable", then the login item and the preferences go. The app
 // quits once it is done.
 func (a *app) startUninstall() {
-	if a.wizardOpen {
+	if a.wizardOpen || a.mustMove() {
 		return
 	}
 	a.wizardOpen = true
@@ -411,7 +428,8 @@ func (a *app) startUninstall() {
 			_, err = runScript(script)
 			return err
 		},
-		Cleanup: func() error { return menubar.RemoveLoginItem(home) },
+		Cleanup:   func() error { return menubar.RemoveLoginItem(home) },
+		LoginItem: func() bool { return menubar.LoginItemPresent(home) },
 	}
 	go func() {
 		a.actions <- action{kind: actUninstallDone, err: u.Run()}

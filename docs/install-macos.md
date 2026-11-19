@@ -22,7 +22,9 @@ y una cuenta de administrador de la Mac.
    aparece al lado.
 3. Expulsa el disco "leakguard" (botón ⏏ en el Finder).
 
-Abre leakguard desde Aplicaciones, no desde la imagen de disco.
+Abre leakguard desde Aplicaciones, no desde la imagen de disco. Si la abres
+desde la imagen de disco, leakguard te pide primero que la muevas a
+Aplicaciones y no configura ni desinstala nada.
 
 ## 3. Ábrela la primera vez
 
@@ -104,7 +106,9 @@ administrator account on the Mac.
 2. Drag **leakguard** onto the **Applications** folder next to it.
 3. Eject the "leakguard" disk (the ⏏ button in Finder).
 
-Open leakguard from Applications, not from the disk image.
+Open leakguard from Applications, not from the disk image. If you open it
+from the disk image, leakguard first asks you to move it to Applications and
+does not set up or uninstall anything.
 
 ## 3. Open it the first time
 

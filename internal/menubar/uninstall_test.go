@@ -13,15 +13,16 @@ type uninstallRun struct {
 	err               error
 }
 
-func runUninstall(t *testing.T, l Lang, disableErr, cleanupErr error, answers ...answer) uninstallRun {
+func runUninstall(t *testing.T, l Lang, loginItem bool, disableErr, cleanupErr error, answers ...answer) uninstallRun {
 	t.Helper()
 	f := &fakeDialogs{t: t, answers: answers}
 	r := uninstallRun{dialogs: f}
 	u := Uninstaller{
-		Lang:    l,
-		Dialogs: f,
-		Disable: func() error { r.disabled++; return disableErr },
-		Cleanup: func() error { r.cleaned++; return cleanupErr },
+		Lang:      l,
+		Dialogs:   f,
+		Disable:   func() error { r.disabled++; return disableErr },
+		Cleanup:   func() error { r.cleaned++; return cleanupErr },
+		LoginItem: func() bool { return loginItem },
 	}
 	r.err = u.Run()
 	if len(f.answers) != 0 {
@@ -46,6 +47,7 @@ func TestUninstall(t *testing.T) {
 		cleanupErr        error
 		answers           []answer
 		wantErr           error
+		noLoginItem       bool
 		disabled, cleaned int
 		dialogs           []string
 		wantMessage       string
@@ -98,6 +100,38 @@ func TestUninstall(t *testing.T) {
 			wantMessage: "No se pudo desinstalar leakguard: pfctl: device busy\n\nLa app sigue abriéndose al iniciar sesión. Puedes intentarlo de nuevo desde el menú.",
 		},
 		{
+			name:        "disable failed, no login item",
+			lang:        Spanish,
+			disableErr:  failed,
+			noLoginItem: true,
+			answers:     []answer{click(1), click(0)},
+			wantErr:     failed,
+			disabled:    1,
+			dialogs:     []string{uninstallAskES, "ask: leakguard|No se pudo desinstalar leakguard: pfctl: device busy\n\nPuedes intentarlo de nuevo desde el menú.|Aceptar"},
+			wantMessage: "No se pudo desinstalar leakguard: pfctl: device busy\n\nPuedes intentarlo de nuevo desde el menú.",
+		},
+		{
+			name:        "disable failed, no login item, English",
+			lang:        English,
+			disableErr:  failed,
+			noLoginItem: true,
+			answers:     []answer{click(1), click(0)},
+			wantErr:     failed,
+			disabled:    1,
+			dialogs:     []string{uninstallAskEN, "ask: leakguard|Could not uninstall leakguard: pfctl: device busy\n\nYou can try again from the menu.|OK"},
+			wantMessage: "Could not uninstall leakguard: pfctl: device busy\n\nYou can try again from the menu.",
+		},
+		{
+			name:        "disable failed with a login item, English",
+			lang:        English,
+			disableErr:  failed,
+			answers:     []answer{click(1), click(0)},
+			wantErr:     failed,
+			disabled:    1,
+			dialogs:     []string{uninstallAskEN, "ask: leakguard|Could not uninstall leakguard: pfctl: device busy\n\nThe app still opens at login. You can try again from the menu.|OK"},
+			wantMessage: "Could not uninstall leakguard: pfctl: device busy\n\nThe app still opens at login. You can try again from the menu.",
+		},
+		{
 			name:        "quarantined CLI",
 			lang:        Spanish,
 			disableErr:  QuarantineError(errors.New("xattr: [Errno 1] Operation not permitted")),
@@ -118,7 +152,7 @@ func TestUninstall(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			r := runUninstall(t, tc.lang, tc.disableErr, tc.cleanupErr, tc.answers...)
+			r := runUninstall(t, tc.lang, !tc.noLoginItem, tc.disableErr, tc.cleanupErr, tc.answers...)
 			if (tc.wantErr == nil) != (r.err == nil) || (tc.wantErr != nil && !errors.Is(r.err, tc.wantErr)) {
 				t.Errorf("Run() = %v, want %v", r.err, tc.wantErr)
 			}
@@ -144,7 +178,7 @@ func TestUninstall(t *testing.T) {
 // A dialog that fails before the password changes nothing.
 func TestUninstallDialogFails(t *testing.T) {
 	broken := errors.New("osascript failed")
-	r := runUninstall(t, Spanish, nil, nil, answer{err: broken}, click(0))
+	r := runUninstall(t, Spanish, true, nil, nil, answer{err: broken}, click(0))
 	if !errors.Is(r.err, broken) || r.disabled != 0 || r.cleaned != 0 {
 		t.Errorf("Run() = %v, disabled %d, cleaned %d; want the dialog error and nothing run", r.err, r.disabled, r.cleaned)
 	}

@@ -190,8 +190,15 @@ func SyncLoginItem(home, exe string, readOnly ReadOnlyFunc) (bool, error) {
 		return true, err
 	}
 	on := LoadPrefs(home).OpenAtLogin
+	return on, applyLoginItem(home, exe, on, readOnly)
+}
+
+// applyLoginItem makes the LaunchAgent in home match on for the app
+// executable exe (see DecideLoginItem), unless the app runs from where a
+// login item would not survive a restart (see LoginMenu).
+func applyLoginItem(home, exe string, on bool, readOnly ReadOnlyFunc) error {
 	if !CanOpenAtLogin(exe, readOnly) {
-		return on, nil
+		return nil
 	}
 	path := LoginItemPath(home)
 	data, err := readRegular(path, maxLoginItem)
@@ -205,34 +212,40 @@ func SyncLoginItem(home, exe string, readOnly ReadOnlyFunc) (bool, error) {
 	case LoginWrite:
 		want, err := LoginItemPlist(exe)
 		if err != nil {
-			return on, err
+			return err
 		}
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			return on, err
+			return err
 		}
-		return on, writeFileAtomic(path, want, 0o644)
+		return writeFileAtomic(path, want, 0o644)
 	case LoginRemove:
 		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return on, err
+			return err
 		}
 	}
-	return on, nil
+	return nil
 }
 
-// SetOpenAtLogin remembers the user's choice from the menu and applies it
-// at once (see SyncLoginItem). No password is needed: everything is in the
-// user's home folder.
+// SetOpenAtLogin applies the user's choice from the menu at once (see
+// SyncLoginItem) and remembers it. It is all or nothing: the LaunchAgent
+// changes first and the choice is saved only when that worked; when saving
+// fails, the LaunchAgent goes back to the previous choice. On an error the
+// agent and the saved choice stay as they were, so the menu keeps its old
+// checkbox. No password is needed: everything is in the user's home folder.
 func SetOpenAtLogin(home, exe string, on bool, readOnly ReadOnlyFunc) error {
 	if err := checkHome(home); err != nil {
 		return err
 	}
 	p := LoadPrefs(home)
-	p.OpenAtLogin = on
-	if err := SavePrefs(home, p); err != nil {
+	was := p.OpenAtLogin
+	if err := applyLoginItem(home, exe, on, readOnly); err != nil {
 		return err
 	}
-	_, err := SyncLoginItem(home, exe, readOnly)
-	return err
+	p.OpenAtLogin = on
+	if err := SavePrefs(home, p); err != nil {
+		return errors.Join(err, applyLoginItem(home, exe, was, readOnly))
+	}
+	return nil
 }
 
 // RemoveLoginItem removes the LaunchAgent and menubar.json, for the
@@ -362,4 +375,40 @@ func readRegular(path string, max int64) ([]byte, error) {
 		return nil, fmt.Errorf("%s is larger than %d bytes", path, max)
 	}
 	return data, nil
+}
+
+// MustMoveToApplications reports whether the app executable exe runs from
+// where it should not be set up or uninstalled: the mounted DMG or a copy
+// macOS translocated (see LoginMenu). There the embedded command cannot be
+// prepared and the login item would point nowhere after a restart, so the
+// user is asked to move the app to Applications first.
+func MustMoveToApplications(exe string, readOnly ReadOnlyFunc) bool {
+	return LoginMenu(exe, readOnly) == LoginItemMoveHint
+}
+
+// GuardMoveToApplications shows, when MustMoveToApplications says so, one
+// plain dialog asking the user to move the app to Applications, and returns
+// true: the caller then does nothing else. Otherwise it shows nothing and
+// returns false.
+func GuardMoveToApplications(l Lang, d Dialogs, exe string, readOnly ReadOnlyFunc) bool {
+	if !MustMoveToApplications(exe, readOnly) {
+		return false
+	}
+	d.Ask(Dialog{
+		Title:   l.Text(msgAppTitle),
+		Text:    l.Text(msgMoveToApplicationsFirst),
+		Buttons: []string{l.Text(msgButtonUnderstood)},
+		Default: 0,
+		Cancel:  -1,
+	})
+	return true
+}
+
+// LoginItemPresent reports whether the LaunchAgent exists in home.
+func LoginItemPresent(home string) bool {
+	if checkHome(home) != nil {
+		return false
+	}
+	_, err := os.Lstat(LoginItemPath(home))
+	return err == nil
 }
