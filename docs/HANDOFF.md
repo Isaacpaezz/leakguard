@@ -87,13 +87,16 @@ vulnerability reporting, create labels `status:needs-triage`,
    config at `/Library/Application Support/leakguard/config.json`, pf anchor
    `com.apple/250.leakguard`, LaunchDaemon `dev.leakguard` running a
    root-owned copy at `/usr/local/libexec/leakguard/leakguard` (since
-   milestone 2 it runs `serve`, which re-applies every 30 s).
+   milestone 2 it runs `serve`, which verifies every 30 s and reloads only
+   when the check fails or the saved choice changed).
    Pending: a live run by the owner (`sudo leakguard enable`, `test`,
    `disable`), since tests never touch the real firewall.
 2. 🚧 Menu-bar app on macOS (Go systray) talking to the privileged service.
    Done (PR A, `feat/daemon-socket`): the LaunchDaemon runs `leakguard serve`
    (RunAtLoad, KeepAlive) instead of a periodic `apply`. It applies the saved
-   config at start and every 30 s unless paused, and serves
+   config at start and every 30 s unless paused (since session stats it
+   verifies every 30 s and reloads only on failure or a changed choice), and
+   serves
    `/var/run/leakguard.sock` (`internal/ipc`): one newline-terminated JSON
    request and response per connection, at most 64 KiB, 5 s deadline;
    commands `status`, `set`, `pause` (flush and save `"paused": true`; `set`,
@@ -161,6 +164,33 @@ vulnerability reporting, create labels `status:needs-triage`,
    backslashes, quotes and line breaks; tests round-trip them through
    `osascript -e 'return ...'` and compile the scripts with `osacompile`,
    never running a dialog or administrator rights.
+   Session stats (`feat/session-stats`, `odd/tasks/session-stats.md`): the
+   menu shows "VPN connected for 2 h 15 min" (or "disconnected for") and
+   "Today: 14 blocks · VPN dropped 2 times" under the status, and today's
+   VPN time in the tooltip; `leakguard status` prints the same. The daemon
+   owns the numbers (`internal/stats`, pure, fed with timestamped samples):
+   it samples the saved VPN every 5 s, reads the packet counter of the
+   `block return` rule (`pf.Firewall.BlockCount`, `pfctl -a ANCHOR -s rules
+   -v`) on each 30 s tick and right before every reload, `set` load and
+   pause flush (after the config is saved, so blocks meanwhile count), and
+   saves `/Library/Application Support/leakguard/stats.json` at most once a
+   minute and at shutdown, from its own goroutine so a slow disk never
+   delays a verify (shutdown waits for a save in flight). At start the
+   daemon loads the rules first and reads the stats file after, replaying
+   the start reading on it; `stats.Load` opens without blocking and refuses
+   anything but a regular file of at most 64 KiB, so a FIFO or a hung file
+   at that path never keeps the rules from loading. pf resets rule counters on every anchor
+   load, so the loop no longer reloads every 30 s: it loads at start, then
+   verifies (pf enabled and `State.Verify`) and reloads only when the check
+   fails or the saved choice differs from the one it loaded. Counting rule
+   (never double counts, may undercount): a lower reading than the last
+   means a reset, so the reading itself is new; the daemon's own loads and
+   flushes set the baseline to zero; a tracker without a saved file takes
+   its first reading as a baseline; after a restart the saved reading is
+   the baseline. A reload that fails after pf loaded the anchor resets the
+   counter unseen: blocks may be lost then, never counted twice. VPN gaps over 2 min (sleep, daemon down) add no time and
+   no drop. "Today" resets at local midnight, also across DST. Stats
+   errors are logged once and never change protection.
 3. Linux `nftables` backend and tray app.
 4. Windows backend and tray app.
 5. Self-updating catalog: a scheduled workflow refreshes ranges from their

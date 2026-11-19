@@ -88,17 +88,19 @@ Missing a service? [Request it](https://github.com/Isaacpaezz/leakguard/issues/n
 
 **Added**
 - `leakguard` CLI for macOS: `services`, `interfaces`, `enable`, `disable`, `status`, `test` and `apply`, with services taken from the catalog.
-- `sudo leakguard enable --vpn ipsec0 anthropic` protects the chosen services and installs a LaunchDaemon that re-applies and verifies the rules at boot and every 30 seconds.
+- `sudo leakguard enable --vpn ipsec0 anthropic` protects the chosen services and installs a LaunchDaemon that loads the rules at boot and verifies them every 30 seconds.
 - `leakguard test` proves the protection: it connects to each protected address through your normal connection and expects a refusal.
 - Service catalog (`catalog/services/*.json`) with Anthropic (Claude) supported and OpenAI planned.
 - Self-updating README: the service table and this section are generated from the catalog and this file, and CI blocks changes that leave it stale.
 - Contributor guide, issue and pull request templates, code owners, security policy and agent rules.
 - macOS `pf` prototype that blocks Claude when the VPN is down.
-- The background service now runs `leakguard serve`: it stays running, re-applies the rules every 30 seconds and listens on `/var/run/leakguard.sock` for the menu-bar app. Only administrators can talk to it, and it can pause the protection without uninstalling.
+- The background service now runs `leakguard serve`: it stays running, verifies the rules every 30 seconds and listens on `/var/run/leakguard.sock` for the menu-bar app. Only administrators can talk to it, and it can pause the protection without uninstalling.
 - macOS menu-bar app (`leakguard-menubar`): a shield shows whether you are protected; tick services, choose the VPN interface, and pause or resume without a password. The first setup happens in the menu too: tick services, choose the VPN, and "Set up leakguard…" installs it with one administrator prompt, and updates an older install the same way.
 - `leakguard status` without `sudo` asks the background service, which verifies the rules as root, so it reports PROTECTED or NOT PROTECTED without a password.
+- Session stats: the menu shows how long the VPN has been connected ("VPN conectada hace 2 h 15 min") or disconnected, and today's blocks and VPN drops ("Hoy: 14 bloqueos · la VPN se cayó 2 veces"); the icon's tooltip adds today's time on the VPN. `leakguard status` prints the same. A block is one packet rejected by leakguard's rule, an approximate count of blocked connection attempts. "Today" starts at local midnight; the numbers are kept in `/Library/Application Support/leakguard/stats.json` and survive restarts. With no blocks or no drops today, `leakguard status` says "no blocks" and "VPN never dropped". The stats never delay the protection: the rules load before the stats file is read, a stats file that is not a regular file is ignored, and the file is saved in the background.
 
 **Changed**
+- The background service checks the rules every 30 seconds and loads them again only when the check fails or the saved choice changed, instead of reloading them every time, so the firewall keeps its block counters.
 - Menu-bar app: the first setup is a guided 3-step setup in native macOS dialogs, in the Mac's language (Spanish or English): choose the services, find your VPN by disconnecting and reconnecting it (no interface names: the app names its kind, such as "IPsec VPN", and you can choose another), and turn the protection on after a warning that the Mac will ask for your password once. Cancelling any step changes nothing; any other failure is explained in plain words in a dialog and on the menu. The setup opens by itself only when the app starts and leakguard is not set up or needs an update, never when the background service restarts later. Once set up, the menu shows a plain status, the services, "Change VPN…", pause or resume, and quit; the VPN interface submenu is gone.
 - Menu-bar app: the VPN interface list shows only connected VPN interfaces, not idle system tunnels.
 - `leakguard test` fails unless every domain of a protected service has a refused address, and reports a resolved address outside the catalog ranges as `NOT COVERED` (pf does not block it).
@@ -130,8 +132,9 @@ sudo leakguard disable                         # turn it off; your choices are k
 ```
 
 `enable` loads the firewall rules and installs a background service
-(`leakguard serve`, run by macOS as root) that re-applies them at boot and
-every 30 seconds and logs each run to `/Library/Logs/leakguard.log`. The same
+(`leakguard serve`, run by macOS as root) that loads them at boot, checks
+them every 30 seconds, loads them again if the check fails, and logs each run
+to `/Library/Logs/leakguard.log`. The same
 service also listens on `/var/run/leakguard.sock` for the menu-bar
 app, so you can change services without typing your password each time. Only
 administrators of the Mac can talk to it: the socket belongs to the `admin`
@@ -195,6 +198,27 @@ run in an administrator's account. Unticking the last service pauses the
 protection. Technical details, such as the VPN interface name, are in the
 icon's tooltip. `sudo leakguard enable` and `sudo leakguard apply` also end a
 pause.
+
+Under the status, two lines say how the session is going, for example "VPN
+connected for 2 h 15 min" (or "VPN disconnected for 3 min") and "Today: 14
+blocks · VPN dropped 2 times"; the tooltip adds today's time on the VPN.
+`leakguard status` prints the same numbers:
+
+```
+Session:             VPN connected for 2 h 15 min
+Today:               14 blocks · VPN dropped 2 times · 5 h 20 min on the VPN
+```
+
+- **Session**: how long ago your VPN connected, or disconnected. The
+  background service checks it every 5 seconds.
+- **Blocks**: packets to a protected service that leakguard rejected because
+  they tried to leave outside the VPN. One app retries several times, so this
+  is an approximate count of blocked connection attempts, not of requests.
+- **VPN dropped**: how many times your VPN went from connected to
+  disconnected while the background service was watching.
+- **Today** starts at local midnight. The numbers live in
+  `/Library/Application Support/leakguard/stats.json` and survive restarts;
+  time while the Mac sleeps is not counted.
 
 Anything run as administrator uses the installed copy
 `/usr/local/libexec/leakguard/leakguard` only when it is current and it, and

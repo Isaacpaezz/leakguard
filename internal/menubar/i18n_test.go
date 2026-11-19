@@ -1,9 +1,13 @@
 package menubar
 
 import (
+	"math"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
+
+	"github.com/Isaacpaezz/leakguard/internal/ipc"
 )
 
 // S4: the Mac's first preferred language decides.
@@ -80,6 +84,25 @@ func TestStatusFitsMenuLine(t *testing.T) {
 		for _, m := range statuses {
 			if s := l.Text(m); utf8.RuneCountInString(s) > MenuLineLength {
 				t.Errorf("%v status %q has %d runes, more than %d", l, s, utf8.RuneCountInString(s), MenuLineLength)
+			}
+		}
+	}
+}
+
+// S6: the session and today lines fit the menu too, even with huge numbers.
+func TestStatsLinesFitMenuLine(t *testing.T) {
+	now := time.Date(2026, 11, 16, 15, 0, 0, 0, time.UTC)
+	long := now.Add(-99999 * 24 * time.Hour).Add(-23 * time.Hour).Format(time.RFC3339)
+	for _, l := range []Lang{Spanish, English} {
+		for _, s := range []ipc.Stats{
+			{Connected: true, SessionSince: long, TodayBlocks: math.MaxUint64, TodayDrops: math.MaxUint32},
+			{SessionSince: long, TodayBlocks: 1, TodayDrops: 1},
+			{SessionSince: now.Add(-(23*time.Hour + 59*time.Minute)).Format(time.RFC3339), TodayDrops: 1000000},
+		} {
+			for _, line := range []string{sessionLine(l, s, now), todayLine(l, s)} {
+				if line == "" || utf8.RuneCountInString(line) > MenuLineLength {
+					t.Errorf("%v line %q has %d runes, want 1 to %d", l, line, utf8.RuneCountInString(line), MenuLineLength)
+				}
 			}
 		}
 	}

@@ -242,3 +242,62 @@ func TestStateVerifyNormalizesEntries(t *testing.T) {
 		t.Fatalf("Verify() = %v, want missing host error", err)
 	}
 }
+
+const anchorRulesV = "-a " + Anchor + " -s rules -v"
+
+// S2: blocks are the Packets counter of the block rule, on the line after it.
+func TestBlockCount(t *testing.T) {
+	const loadedV = `pass out quick on ipsec0 from any to <leakguard> flags S/SA keep state
+  [ Evaluations: 120       Packets: 99        Bytes: 9000        States: 1     ]
+  [ Inserted: uid 0 pid 4242 State Creations: 1     ]
+block return out quick from any to <leakguard>
+  [ Evaluations: 120       Packets: 14        Bytes: 840         States: 0     ]
+  [ Inserted: uid 0 pid 4242 State Creations: 0     ]
+`
+	for _, tc := range []struct {
+		name, out string
+		want      uint64
+	}{
+		{"loaded", loadedV, 14},
+		{"zero", "block return out quick from any to <leakguard>\n  [ Evaluations: 0         Packets: 0         Bytes: 0           States: 0     ]\n", 0},
+		{"one rule per family adds up", "block return out quick inet from any to <leakguard>\n  [ Evaluations: 3 Packets: 2 Bytes: 80 States: 0 ]\n" +
+			"block return out quick inet6 from any to <leakguard>\n  [ Evaluations: 3 Packets: 5 Bytes: 400 States: 0 ]\n", 7},
+	} {
+		f := &fakeRunner{outputs: map[string]string{anchorRulesV: tc.out}}
+		got, err := Firewall{Runner: f}.BlockCount()
+		if err != nil || got != tc.want {
+			t.Errorf("%s: BlockCount() = %d, %v; want %d", tc.name, got, err, tc.want)
+		}
+		if len(f.calls) != 1 || f.calls[0].args != anchorRulesV {
+			t.Errorf("%s: pfctl calls = %v", tc.name, f.calls)
+		}
+	}
+}
+
+// An unreadable counter is an error, never a zero that would look like a
+// reset and hide or invent blocks.
+func TestBlockCountErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name, out string
+		fail      error
+		want      string
+	}{
+		{"no rules loaded", "", nil, "leakguard rules are not loaded"},
+		{"no block rule", "pass out quick on ipsec0 from any to <leakguard> flags S/SA keep state\n  [ Evaluations: 1 Packets: 1 Bytes: 1 States: 0 ]\n", nil, "block rule is not loaded"},
+		{"no counter line", "block return out quick from any to <leakguard>\n", nil, "cannot read the block counter: no counters after the block rule"},
+		{"counter line of another rule", "block return out quick from any to <leakguard>\npass out quick on ipsec0 from any to <leakguard> keep state\n", nil, "cannot read the block counter: no counters after the block rule"},
+		{"no Packets field", "block return out quick from any to <leakguard>\n  [ Evaluations: 1 Bytes: 1 States: 0 ]\n", nil, `cannot read the block counter: no packet count in "[ Evaluations: 1 Bytes: 1 States: 0 ]"`},
+		{"bad number", "block return out quick from any to <leakguard>\n  [ Evaluations: 1 Packets: -3 Bytes: 1 States: 0 ]\n", nil, `cannot read the block counter: no packet count in "[ Evaluations: 1 Packets: -3 Bytes: 1 States: 0 ]"`},
+		{"pfctl fails", "", errors.New("pfctl: permission denied"), "pfctl: permission denied"},
+	} {
+		f := &fakeRunner{outputs: map[string]string{anchorRulesV: tc.out}, fail: map[string]error{anchorRulesV: tc.fail}}
+		got, err := Firewall{Runner: f}.BlockCount()
+		if err == nil || err.Error() != tc.want || got != 0 {
+			t.Errorf("%s: BlockCount() = %d, %v; want error %q", tc.name, got, err, tc.want)
+		}
+	}
+	f := &fakeRunner{outputs: map[string]string{}}
+	if _, err := (Firewall{Runner: f}).BlockCount(); !errors.Is(err, ErrNotLoaded) {
+		t.Errorf("no rules: %v, want ErrNotLoaded", err)
+	}
+}

@@ -464,3 +464,34 @@ func TestServerRefusesToTakeOverALiveSocket(t *testing.T) {
 		t.Fatalf("first server handled %d requests, want 1", calls.Load())
 	}
 }
+
+// S3: the stats are an optional status object; without them the field is
+// left out, so an older daemon's answer reads the same.
+func TestStatusStatsWireFormat(t *testing.T) {
+	st := Status{Services: []string{}, Catalog: []Service{}, Stats: &Stats{
+		Connected: true, SessionSince: "2026-11-16T15:00:00Z", TodayVPNSeconds: 19200,
+		TodayBlocks: 14, TodayDrops: 2, Day: "2026-11-16",
+	}}
+	var b strings.Builder
+	if err := writeMessage(&b, Response{OK: true, Status: &st}); err != nil {
+		t.Fatal(err)
+	}
+	want := `"stats":{"connected":true,"session_since":"2026-11-16T15:00:00Z","today_vpn_seconds":19200,"today_blocks":14,"today_drops":2,"day":"2026-11-16"}`
+	if !strings.Contains(b.String(), want) {
+		t.Fatalf("response = %s, want %s", b.String(), want)
+	}
+	resp, err := readResponse(strings.NewReader(b.String()))
+	if err != nil || resp.Status.Stats == nil || *resp.Status.Stats != *st.Stats {
+		t.Fatalf("readResponse() = %+v, %v", resp, err)
+	}
+	b.Reset()
+	st.Stats = nil
+	writeMessage(&b, Response{OK: true, Status: &st})
+	if strings.Contains(b.String(), "stats") {
+		t.Fatalf("a status without stats sends %s", b.String())
+	}
+	resp, err = readResponse(strings.NewReader(b.String()))
+	if err != nil || resp.Status.Stats != nil {
+		t.Fatalf("readResponse() without stats = %+v, %v", resp, err)
+	}
+}

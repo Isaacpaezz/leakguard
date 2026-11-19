@@ -345,6 +345,7 @@ func (c *cli) status(args []string) error {
 	if line, ok := c.daemon().LastLogLine(); ok {
 		fmt.Fprintf(w, "Last background run:\t%s\n", line)
 	}
+	printStats(w, c.savedStats(), c.now())
 	if !c.env.IsRoot() {
 		fmt.Fprintf(w, "Firewall:\trun \"sudo leakguard status\" to verify the rules\n")
 		return w.Flush()

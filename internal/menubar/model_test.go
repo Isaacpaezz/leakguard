@@ -8,6 +8,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/Isaacpaezz/leakguard/internal/catalog"
 	"github.com/Isaacpaezz/leakguard/internal/ipc"
@@ -479,6 +480,68 @@ func TestSetupNeeded(t *testing.T) {
 	for _, tc := range tests {
 		if got := SetupNeeded(tc.err); got != tc.want {
 			t.Errorf("%s: SetupNeeded = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+var statsNow = time.Date(2026, 11, 16, 15, 0, 0, 0, time.UTC)
+
+func withStats(s ipc.Stats) *ipc.Status {
+	return ptr(status(func(st *ipc.Status) { st.Stats = &s }))
+}
+
+// S1, S2, S3, S6: two plain lines under the status and today's VPN time in
+// the tooltip; no interface names in the lines.
+func TestBuildStats(t *testing.T) {
+	since := statsNow.Add(-(2*time.Hour + 15*time.Minute)).Format(time.RFC3339)
+	tests := []struct {
+		name                   string
+		st                     *ipc.Status
+		lang                   Lang
+		now                    time.Time
+		session, today, tipEnd string
+	}{
+		{"connected, es", withStats(ipc.Stats{Connected: true, SessionSince: since, TodayVPNSeconds: 5*3600 + 20*60, TodayBlocks: 14, TodayDrops: 2}), Spanish, statsNow,
+			"VPN conectada hace 2 h 15 min", "Hoy: 14 bloqueos · la VPN se cayó 2 veces", "leakguard: Protegido · VPN: ipsec0 · Hoy: 5 h 20 min por la VPN"},
+		{"connected, en", withStats(ipc.Stats{Connected: true, SessionSince: since, TodayVPNSeconds: 5*3600 + 20*60, TodayBlocks: 14, TodayDrops: 2}), English, statsNow,
+			"VPN connected for 2 h 15 min", "Today: 14 blocks · VPN dropped 2 times", "leakguard: Protected · VPN: ipsec0 · Today: 5 h 20 min on the VPN"},
+		{"singular, es", withStats(ipc.Stats{SessionSince: statsNow.Add(-3 * time.Minute).Format(time.RFC3339), TodayBlocks: 1, TodayDrops: 1, TodayVPNSeconds: 45}), Spanish, statsNow,
+			"VPN desconectada hace 3 min", "Hoy: 1 bloqueo · la VPN se cayó 1 vez", "leakguard: Protegido · VPN: ipsec0 · Hoy: 45 s por la VPN"},
+		{"singular, en", withStats(ipc.Stats{SessionSince: statsNow.Add(-3 * time.Minute).Format(time.RFC3339), TodayBlocks: 1, TodayDrops: 1}), English, statsNow,
+			"VPN disconnected for 3 min", "Today: 1 block · VPN dropped 1 time", "leakguard: Protected · VPN: ipsec0 · Today: 0 s on the VPN"},
+		{"zero, es", withStats(ipc.Stats{Connected: true, SessionSince: statsNow.Add(-45 * time.Second).Format(time.RFC3339)}), Spanish, statsNow,
+			"VPN conectada hace 45 s", "Hoy: sin bloqueos", "leakguard: Protegido · VPN: ipsec0 · Hoy: 0 s por la VPN"},
+		{"zero, en", withStats(ipc.Stats{Connected: true}), English, statsNow,
+			"", "Today: no blocks", "leakguard: Protected · VPN: ipsec0 · Today: 0 s on the VPN"},
+		{"no blocks, drops", withStats(ipc.Stats{TodayDrops: 3, SessionSince: "not a time"}), Spanish, statsNow,
+			"", "Hoy: sin bloqueos · la VPN se cayó 3 veces", "leakguard: Protegido · VPN: ipsec0 · Hoy: 0 s por la VPN"},
+		{"days", withStats(ipc.Stats{Connected: true, SessionSince: statsNow.Add(-(76 * time.Hour)).Format(time.RFC3339)}), English, statsNow,
+			"VPN connected for 3 d 4 h", "Today: no blocks", "leakguard: Protected · VPN: ipsec0 · Today: 0 s on the VPN"},
+		{"no clock: no session line", withStats(ipc.Stats{Connected: true, SessionSince: since}), English, time.Time{},
+			"", "Today: no blocks", "leakguard: Protected · VPN: ipsec0 · Today: 0 s on the VPN"},
+		{"older daemon: no stats", ptr(status(nil)), Spanish, statsNow, "", "", "leakguard: Protegido · VPN: ipsec0"},
+	}
+	for _, tc := range tests {
+		m := Build(tc.st, nil, Setup{Lang: tc.lang, Now: tc.now})
+		if m.Session != tc.session || m.Today != tc.today || m.Tooltip != tc.tipEnd {
+			t.Errorf("%s: session %q, today %q, tooltip %q\nwant %q, %q, %q", tc.name, m.Session, m.Today, m.Tooltip, tc.session, tc.today, tc.tipEnd)
+		}
+		if strings.Contains(m.Session+m.Today, "ipsec0") {
+			t.Errorf("%s: an interface name in the menu lines", tc.name)
+		}
+	}
+	// Paused or offline menus keep the lines; a reason stays in the tooltip.
+	off := withStats(ipc.Stats{SessionSince: statsNow.Add(-3 * time.Minute).Format(time.RFC3339), TodayDrops: 1})
+	off.Protected, off.VPNConnected, off.Reason = false, false, "leakguard rules are not loaded"
+	m := Build(off, nil, Setup{Lang: English, Now: statsNow})
+	if m.Session != "VPN disconnected for 3 min" || m.Today != "Today: no blocks · VPN dropped 1 time" ||
+		m.Tooltip != "leakguard: Not protected: your VPN is disconnected · VPN: ipsec0 · leakguard rules are not loaded · Today: 0 s on the VPN" {
+		t.Errorf("offline menu = %+v", m)
+	}
+	// Menus without a choice have no stats lines.
+	for _, st := range []*ipc.Status{nil, ptr(ipc.Status{Stats: &ipc.Stats{TodayBlocks: 3}})} {
+		if m := Build(st, nil, Setup{Lang: English, Now: statsNow}); m.Session != "" || m.Today != "" {
+			t.Errorf("Build(%+v) shows stats: %+v", st, m)
 		}
 	}
 }
