@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"github.com/Isaacpaezz/leakguard/internal/daemon"
 	"github.com/Isaacpaezz/leakguard/internal/ipc"
 	"github.com/Isaacpaezz/leakguard/internal/pf"
+	"github.com/Isaacpaezz/leakguard/internal/stats"
 )
 
 // syncBuffer is a bytes.Buffer that the daemon goroutines and the test can
@@ -541,5 +543,370 @@ func TestStatusWithRootIgnoresTheDaemon(t *testing.T) {
 	expect(t, code, out, errOut, 0, []string{"Firewall:           PROTECTED\n"}, nil)
 	if strings.Contains(out, "from the daemon") || len(h.pfctl.calls) == 0 {
 		t.Fatalf("root status used the daemon:\n%s", out)
+	}
+}
+
+// statefulPfctl is a pf that keeps what was loaded into the anchor and the
+// block rule's packet counter, which a load or a flush sets to zero, like pf.
+type statefulPfctl struct {
+	mu      sync.Mutex
+	calls   []string
+	rules   []string
+	table   []string
+	packets uint64
+	failV   error
+}
+
+func (p *statefulPfctl) Run(stdin string, args ...string) (string, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	key := strings.Join(args, " ")
+	p.calls = append(p.calls, key)
+	switch key {
+	case "-s info":
+		return "Status: Enabled for 1 days\n", nil
+	case loadAnchor:
+		p.rules, p.table, p.packets = nil, nil, 0
+		for _, l := range strings.Split(stdin, "\n") {
+			switch {
+			case strings.HasPrefix(l, "pass "), strings.HasPrefix(l, "block "):
+				p.rules = append(p.rules, l)
+			case strings.HasPrefix(l, "table "):
+				inner := l[strings.Index(l, "{")+1 : strings.Index(l, "}")]
+				for _, r := range strings.Split(inner, ",") {
+					p.table = append(p.table, strings.TrimSpace(r))
+				}
+			}
+		}
+	case flushAnchor:
+		p.rules, p.table, p.packets = nil, nil, 0
+	case "-a " + pf.Anchor + " -s rules":
+		return strings.Join(p.rules, "\n"), nil
+	case "-a " + pf.Anchor + " -s rules -v":
+		if p.failV != nil {
+			return "", p.failV
+		}
+		var b strings.Builder
+		for _, r := range p.rules {
+			n := uint64(0)
+			if strings.HasPrefix(r, "block ") {
+				n = p.packets
+			}
+			fmt.Fprintf(&b, "%s\n  [ Evaluations: 9  Packets: %d  Bytes: 0  States: 0 ]\n", r, n)
+		}
+		return b.String(), nil
+	case "-a " + pf.Anchor + " -t leakguard -T show":
+		return strings.Join(p.table, "\n"), nil
+	}
+	return "", nil
+}
+
+// block counts n packets rejected by the block rule, while it is loaded.
+func (p *statefulPfctl) block(n uint64) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.rules) > 0 {
+		p.packets += n
+	}
+}
+
+// unload empties the anchor behind the daemon's back.
+func (p *statefulPfctl) unload() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.rules, p.table, p.packets = nil, nil, 0
+}
+
+func (p *statefulPfctl) count(call string) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return countCalls(p.calls, call)
+}
+
+func (p *statefulPfctl) setFailV(err error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.failV = err
+}
+
+func statefulHarness(t *testing.T) (*harness, *statefulPfctl) {
+	t.Helper()
+	h := newHarness(t, true)
+	p := &statefulPfctl{}
+	h.env.Pfctl = p
+	h.saveConfig(t, anthropicConfig)
+	return h, p
+}
+
+// eventually polls cond for up to 5 seconds.
+func eventually(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func todayBlocks(s *serving) uint64 {
+	st, err := s.client.Status()
+	if err != nil || st.Stats == nil {
+		return 1<<64 - 1
+	}
+	return st.Stats.TodayBlocks
+}
+
+// S5a: verified rules are not reloaded, so pf keeps its counters.
+func TestServeDoesNotReloadVerifiedRules(t *testing.T) {
+	h, p := statefulHarness(t)
+	h.env.ApplyEvery = 5 * time.Millisecond
+	s := startServe(t, h)
+	s.waitFor(t, "2026-11-16T15:00:00Z Protected through ipsec0: anthropic\n", 4)
+	s.stop(t)
+	if n := p.count(loadAnchor); n != 1 {
+		t.Fatalf("the anchor was loaded %d times, want once at start", n)
+	}
+	if p.count("-a "+pf.Anchor+" -s rules") < 3 {
+		t.Fatalf("the rules were not verified on each tick: %v", p.calls)
+	}
+}
+
+// S5a, fail closed: rules that fail verification are loaded again.
+func TestServeReloadsWhenVerificationFails(t *testing.T) {
+	h, p := statefulHarness(t)
+	h.env.ApplyEvery = 5 * time.Millisecond
+	s := startServe(t, h)
+	p.unload()
+	eventually(t, "a reload", func() bool { return p.count(loadAnchor) >= 2 })
+	s.waitFor(t, "Protected through ipsec0", 2)
+	s.stop(t)
+	if want := "2026-11-16T15:00:00Z leakguard: rules not verified, loading them again: leakguard rules are not loaded\n"; !strings.Contains(s.stderr.String(), want) {
+		t.Fatalf("stderr = %q, want %q", s.stderr.String(), want)
+	}
+}
+
+// S5a: a saved choice that changed behind the daemon (sudo leakguard enable)
+// is loaded on the next tick, even while the old rules still verify.
+func TestServeReloadsWhenTheSavedChoiceChanges(t *testing.T) {
+	h, p := statefulHarness(t)
+	h.env.ApplyEvery = 5 * time.Millisecond
+	s := startServe(t, h)
+	h.saveConfig(t, config.Config{VPNInterface: "utun9", Services: []string{"anthropic"}})
+	s.waitFor(t, "Protected through utun9: anthropic\n", 1)
+	s.stop(t)
+	if n := p.count(loadAnchor); n != 2 {
+		t.Fatalf("the anchor was loaded %d times, want 2", n)
+	}
+}
+
+// S5b: the counter is read before every reload, set and pause flush, on each
+// tick and at shutdown, so no block is lost and none counts twice, also
+// across a daemon restart.
+func TestServeCountsBlocksAcrossReloadsAndRestarts(t *testing.T) {
+	h, p := statefulHarness(t)
+	s := startServe(t, h)
+	if got := todayBlocks(s); got != 0 {
+		t.Fatalf("blocks at start = %d", got)
+	}
+	p.block(14)
+	if _, err := s.client.Set("ipsec0", []string{"anthropic"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := todayBlocks(s); got != 14 {
+		t.Fatalf("blocks after a set = %d, want 14", got)
+	}
+	p.block(5)
+	if _, err := s.client.Pause(); err != nil {
+		t.Fatal(err)
+	}
+	if got := todayBlocks(s); got != 19 {
+		t.Fatalf("blocks after a pause = %d, want 19", got)
+	}
+	if _, err := s.client.Set("ipsec0", []string{"anthropic"}); err != nil {
+		t.Fatal(err)
+	}
+	p.block(2)
+	if code := s.stop(t); code != 0 {
+		t.Fatalf("serve exit code = %d: %s", code, s.stderr.String())
+	}
+	if n := p.count(loadAnchor); n != 3 {
+		t.Fatalf("loads = %d, want start, set, set", n)
+	}
+	// While the daemon is down, 3 more packets are blocked. The next start
+	// counts only those before it reloads the anchor.
+	p.block(3)
+	s2 := startServe(t, h)
+	if got := todayBlocks(s2); got != 24 {
+		t.Fatalf("blocks after a restart = %d, want 24 (21 saved + 3)", got)
+	}
+	s2.stop(t)
+	if strings.Contains(s.stderr.String()+s2.stderr.String(), "stats") {
+		t.Fatalf("stats errors: %s%s", s.stderr.String(), s2.stderr.String())
+	}
+}
+
+// S5b: each tick reads the counter, without reloading.
+func TestServeCountsBlocksOnEachTick(t *testing.T) {
+	h, p := statefulHarness(t)
+	h.env.ApplyEvery = 5 * time.Millisecond
+	s := startServe(t, h)
+	p.block(4)
+	eventually(t, "4 blocks", func() bool { return todayBlocks(s) == 4 })
+	p.block(6)
+	eventually(t, "10 blocks", func() bool { return todayBlocks(s) == 10 })
+	s.stop(t)
+	if n := p.count(loadAnchor); n != 1 {
+		t.Fatalf("loads = %d, want 1", n)
+	}
+}
+
+// S4: failing to read the counter or to save the stats is logged once and
+// never stops verifying or loading the rules.
+func TestServeKeepsProtectingWhenStatsFail(t *testing.T) {
+	h, p := statefulHarness(t)
+	h.env.ApplyEvery = 5 * time.Millisecond
+	h.env.SampleEvery = time.Millisecond
+	if err := os.MkdirAll(h.path(stats.DefaultPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p.setFailV(errors.New("pfctl: counters unavailable"))
+	s := startServe(t, h)
+	s.waitFor(t, "Protected through ipsec0", 3)
+	p.unload()
+	eventually(t, "a reload", func() bool { return p.count(loadAnchor) >= 2 })
+	s.waitFor(t, "Protected through ipsec0", 5)
+	if code := s.stop(t); code != 0 {
+		t.Fatalf("serve exit code = %d", code)
+	}
+	errOut := s.stderr.String()
+	for _, want := range []string{
+		"leakguard: could not read the session stats: ",
+		"leakguard: could not read the block counter: pfctl: counters unavailable\n",
+		"leakguard: could not save the session stats: ",
+	} {
+		if !strings.Contains(errOut, want) {
+			t.Errorf("stderr lacks %q:\n%s", want, errOut)
+		}
+	}
+	if n := strings.Count(errOut, "could not read the block counter"); n != 1 {
+		t.Errorf("the counter error was logged %d times, want once:\n%s", n, errOut)
+	}
+	if n := strings.Count(errOut, "could not save the session stats"); n != 1 {
+		t.Errorf("the save error was logged %d times, want once:\n%s", n, errOut)
+	}
+}
+
+// interfacesSwitch is a VPN that the test connects and disconnects.
+type interfacesSwitch struct {
+	mu sync.Mutex
+	up bool
+}
+
+func (i *interfacesSwitch) set(up bool) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.up = up
+}
+
+func (i *interfacesSwitch) list() ([]Interface, error) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return []Interface{{Name: "en0", Up: true, HasAddress: true}, {Name: "ipsec0", Up: i.up, HasAddress: i.up}}, nil
+}
+
+// S1, S3: the daemon samples the VPN and reports the session and today's
+// drops in its status.
+func TestServeReportsTheSession(t *testing.T) {
+	h, _ := statefulHarness(t)
+	vpn := &interfacesSwitch{up: true}
+	h.env.Interfaces = vpn.list
+	h.env.SampleEvery = time.Millisecond
+	s := startServe(t, h)
+	st, err := s.client.Status()
+	want := ipc.Stats{Connected: true, SessionSince: "2026-11-16T15:00:00Z", Day: "2026-11-16"}
+	if err != nil || st.Stats == nil || *st.Stats != want {
+		t.Fatalf("Status().Stats = %+v, %v; want %+v", st.Stats, err, want)
+	}
+	vpn.set(false)
+	eventually(t, "a drop", func() bool {
+		st, err := s.client.Status()
+		return err == nil && st.Stats != nil && !st.Stats.Connected && st.Stats.TodayDrops == 1
+	})
+	s.stop(t)
+	saved, err := stats.Load(h.path(stats.DefaultPath), time.UTC)
+	if err != nil || saved.Summary(fixedNow).Drops != 1 {
+		t.Fatalf("saved stats = %+v, %v; want 1 drop", saved.Summary(fixedNow), err)
+	}
+}
+
+// Without a configuration there is nothing to sample and no stats.
+func TestServeHasNoStatsWithoutAConfiguration(t *testing.T) {
+	h := newHarness(t, true)
+	h.env.SampleEvery = time.Millisecond
+	s := startServe(t, h)
+	time.Sleep(20 * time.Millisecond)
+	if st, err := s.client.Status(); err != nil || st.Stats != nil {
+		t.Fatalf("Status() = %+v, %v; want no stats", st, err)
+	}
+	s.stop(t)
+	if exists(h.path(stats.DefaultPath)) {
+		t.Fatal("serve saved stats without a configuration")
+	}
+}
+
+// S3: status shows the session and today's totals, from the daemon.
+func TestStatusShowsTheStatsFromTheDaemon(t *testing.T) {
+	for _, tc := range []struct {
+		stats ipc.Stats
+		want  []string
+	}{
+		{ipc.Stats{Connected: true, SessionSince: "2026-11-16T12:45:00Z", TodayVPNSeconds: 5*3600 + 20*60, TodayBlocks: 14, TodayDrops: 2, Day: "2026-11-16"},
+			[]string{"Session:             VPN connected for 2 h 15 min\n", "Today:               14 blocks · VPN dropped 2 times · 5 h 20 min on the VPN\n"}},
+		{ipc.Stats{SessionSince: "2026-11-16T14:57:00Z", TodayVPNSeconds: 45, TodayBlocks: 1, TodayDrops: 1, Day: "2026-11-16"},
+			[]string{"Session:             VPN disconnected for 3 min\n", "Today:               1 block · VPN dropped 1 time · 45 s on the VPN\n"}},
+		{ipc.Stats{Day: "2026-11-16"},
+			[]string{"Today:               0 blocks · VPN dropped 0 times · 0 s on the VPN\n"}},
+	} {
+		h := newHarness(t, false)
+		st := tc.stats
+		h.env.Socket = fakeDaemon(t, ipc.Status{Protected: true, VPNInterface: "ipsec0", VPNConnected: true,
+			Services: []string{"anthropic"}, LastRun: "2026-11-16T14:59:30Z Protected through ipsec0: anthropic", Stats: &st})
+		code, out, errOut := h.run("status")
+		expect(t, code, out, errOut, 0, tc.want, nil)
+		if tc.stats.SessionSince == "" && strings.Contains(out, "Session:") {
+			t.Errorf("a session without a start is shown:\n%s", out)
+		}
+		if !strings.HasSuffix(out, "Firewall:            PROTECTED\n") {
+			t.Errorf("status no longer ends with the firewall line:\n%s", out)
+		}
+	}
+}
+
+// S3: with sudo, status reads the stats the daemon saved.
+func TestStatusWithRootReadsTheSavedStats(t *testing.T) {
+	h := newHarness(t, true)
+	h.saveConfig(t, anthropicConfig)
+	tr := stats.New(time.UTC)
+	tr.ObserveVPN(fixedNow.Add(-time.Minute), true)
+	tr.CounterReset()
+	tr.ObserveBlocks(fixedNow.Add(-time.Minute), 7)
+	if err := stats.Save(h.path(stats.DefaultPath), tr.State()); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errOut := h.run("status")
+	expect(t, code, out, errOut, 0, []string{
+		"Session:            VPN connected for 1 min\n",
+		"Today:              7 blocks · VPN dropped 0 times · 1 min on the VPN\n",
+		"Firewall:           PROTECTED\n",
+	}, nil)
+	// Without saved stats, there are no stats lines.
+	h2 := newHarness(t, true)
+	h2.saveConfig(t, anthropicConfig)
+	code, out, errOut = h2.run("status")
+	expect(t, code, out, errOut, 0, []string{"Firewall:           PROTECTED\n"}, nil)
+	if strings.Contains(out, "Session:") || strings.Contains(out, "Today:") {
+		t.Fatalf("status shows stats that do not exist:\n%s", out)
 	}
 }

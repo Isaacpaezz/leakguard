@@ -46,6 +46,7 @@ type Env struct {
 	Dial             probe.Dialer
 	DefaultInterface func() (string, error)
 	Now              func() time.Time // nil means time.Now
+	Location         *time.Location   // the local time zone for "today"; nil means time.Local
 
 	// Socket is the daemon socket: "serve" listens on it and "status"
 	// without root asks it. Empty means there is no daemon to ask.
@@ -54,9 +55,12 @@ type Env struct {
 	ChownSocket func(path string, uid, gid int) error
 	// Authorize checks a peer of the socket. Nil means the ipc peer check.
 	Authorize func(net.Conn) error
-	// ApplyEvery is how often "serve" re-applies the rules. Zero means
-	// applyInterval.
+	// ApplyEvery is how often "serve" verifies the rules, and loads them
+	// again when they fail. Zero means applyInterval.
 	ApplyEvery time.Duration
+	// SampleEvery is how often "serve" checks whether the VPN is
+	// connected, for the session stats. Zero means sampleInterval.
+	SampleEvery time.Duration
 	// ServeContext returns the context that stops "serve". Nil means
 	// SIGINT or SIGTERM.
 	ServeContext func() (context.Context, context.CancelFunc)
@@ -78,10 +82,12 @@ Usage:
   sudo leakguard disable
       Turn the protection off. Your choices are kept for the next enable.
   leakguard status
-      Show what is protected and the last background run. Without sudo
-      it asks the background service, which verifies as root that pf is
-      enabled and the firewall rules are loaded; with sudo, or when the
-      service does not answer, it reads the saved settings itself.
+      Show what is protected, the last background run, the VPN session and
+      today's blocks. Without sudo it asks the background service, which
+      verifies as root that pf is enabled and the firewall rules are
+      loaded; with sudo, or when the service does not answer, it reads the
+      saved settings itself. Blocks are packets the firewall rejected: an
+      approximate count of blocked connection attempts.
   leakguard test [--via IFACE]
       Prove that protected services are blocked outside the VPN by
       connecting through your real connection: IFACE, or the interface of
@@ -91,10 +97,13 @@ Usage:
       Re-apply the saved rules now, without the background service.
       Once they are loaded, a pause from the menu-bar app ends.
   sudo leakguard serve
-      Run the background service that enable installs: it re-applies the
-      saved rules at start and every 30 seconds, logs each run to
-      /Library/Logs/leakguard.log, and answers the menu-bar app on
-      /var/run/leakguard.sock. Only administrators can talk to it.
+      Run the background service that enable installs: it loads the saved
+      rules at start, checks them every 30 seconds, and loads them again
+      only when the check fails or the saved choice changed. It logs each
+      run to /Library/Logs/leakguard.log, keeps the session stats in
+      /Library/Application Support/leakguard/stats.json, and answers the
+      menu-bar app on /var/run/leakguard.sock. Only administrators can
+      talk to it.
   leakguard help
       Show this help.
 

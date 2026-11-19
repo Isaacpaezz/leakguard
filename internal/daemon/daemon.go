@@ -1,6 +1,7 @@
 // Package daemon installs the macOS LaunchDaemon that runs "leakguard serve":
-// it re-applies the firewall rules at boot and periodically, because OS
-// updates and VPN clients may flush them, and answers the menu-bar app.
+// it loads the firewall rules at boot, verifies them periodically and loads
+// them again when OS updates or VPN clients flush them, counts what they
+// block, and answers the menu-bar app.
 package daemon
 
 import (

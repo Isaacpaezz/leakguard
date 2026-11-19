@@ -130,6 +130,7 @@ func newHarness(t *testing.T, root bool) *harness {
 		},
 		DefaultInterface: func() (string, error) { return "en0", nil },
 		Now:              func() time.Time { return fixedNow },
+		Location:         time.UTC,
 	}
 	return h
 }
@@ -191,6 +192,9 @@ func TestHelpListsEveryCommand(t *testing.T) {
 			"sudo leakguard enable --vpn ipsec0 anthropic",
 			"It also ends a pause from the menu-bar app.",
 			"Once they are loaded, a pause from the menu-bar app ends.",
+			"the VPN session and\n      today's blocks",
+			"checks them every 30 seconds, and loads them again\n      only when the check fails or the saved choice changed",
+			"/Library/Application Support/leakguard/stats.json",
 		}, nil)
 	}
 }

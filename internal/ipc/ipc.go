@@ -72,6 +72,27 @@ type Status struct {
 	Services     []string  `json:"services"`
 	Catalog      []Service `json:"catalog"`
 	LastRun      string    `json:"last_run,omitempty"`
+	// Stats is how the session is going. Older daemons do not send it, and
+	// older apps ignore it.
+	Stats *Stats `json:"stats,omitempty"`
+}
+
+// Stats is the VPN session and today's totals, kept by the daemon.
+type Stats struct {
+	// Connected is whether the saved VPN is connected now.
+	Connected bool `json:"connected"`
+	// SessionSince is when the VPN connected (Connected) or disconnected,
+	// in RFC 3339; empty when unknown.
+	SessionSince string `json:"session_since,omitempty"`
+	// TodayVPNSeconds is today's time on the VPN.
+	TodayVPNSeconds int64 `json:"today_vpn_seconds"`
+	// TodayBlocks counts the packets the block rule rejected today: an
+	// approximate count of blocked connection attempts.
+	TodayBlocks uint64 `json:"today_blocks"`
+	// TodayDrops counts today's connected-to-disconnected changes.
+	TodayDrops int `json:"today_drops"`
+	// Day is the daemon's local date of the totals, as 2006-01-02.
+	Day string `json:"day"`
 }
 
 // Service is one catalog entry as the apps show it.

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -18,19 +19,25 @@ import (
 	"github.com/Isaacpaezz/leakguard/internal/ipc"
 )
 
-// applyInterval is how often "serve" re-applies the saved rules.
+// applyInterval is how often "serve" verifies the saved rules.
 const applyInterval = 30 * time.Second
 
-// service is the running daemon. One mutex serializes the apply loop and
+// service is the running daemon. One mutex serializes the check loop and
 // every request, so pfctl never runs twice at once.
 type service struct {
 	c  *cli
 	mu sync.Mutex
+	// applied is the choice this daemon loaded last, nil when it loaded
+	// none or paused. A different saved choice is loaded on the next check.
+	applied *config.Config
+	stats   *daemonStats
 }
 
-// serve is what the LaunchDaemon runs: it applies the saved rules at start
-// and every applyInterval unless paused, and answers the menu-bar app on
-// the socket until it is stopped.
+// serve is what the LaunchDaemon runs: it loads the saved rules at start,
+// verifies them every applyInterval and loads them again only when the
+// check fails or the saved choice changed, unless paused. pf resets the
+// rules' counters on each load, so the stats read them first. It answers
+// the menu-bar app on the socket until it is stopped.
 func (c *cli) serve(args []string) error {
 	if _, err := c.parse(flag.NewFlagSet("serve", flag.ContinueOnError), args, false); err != nil {
 		return err
@@ -44,8 +51,9 @@ func (c *cli) serve(args []string) error {
 	ctx, cancel := c.serveContext()
 	defer cancel()
 
-	s := &service{c: c}
-	s.applySaved()
+	s := &service{c: c, stats: c.loadStats()}
+	s.check(true)
+	s.stats.sampleVPN()
 	srv := &ipc.Server{Path: c.env.Socket, Handler: s.handle, Authorize: c.env.Authorize, Chown: c.env.ChownSocket}
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -56,6 +64,7 @@ func (c *cli) serve(args []string) error {
 	err := srv.Serve(ctx)
 	cancel()
 	wg.Wait()
+	s.shutdown()
 	return err
 }
 
@@ -67,35 +76,91 @@ func (c *cli) serveContext() (context.Context, context.CancelFunc) {
 }
 
 func (s *service) loop(ctx context.Context) {
-	every := s.c.env.ApplyEvery
-	if every <= 0 {
-		every = applyInterval
-	}
-	t := time.NewTicker(every)
-	defer t.Stop()
+	check := time.NewTicker(interval(s.c.env.ApplyEvery, applyInterval))
+	defer check.Stop()
+	sample := time.NewTicker(interval(s.c.env.SampleEvery, sampleInterval))
+	defer sample.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-t.C:
-			s.applySaved()
+		case <-check.C:
+			s.check(false)
+			s.stats.save(false)
+		case <-sample.C:
+			s.stats.sampleVPN()
+			s.stats.save(false)
 		}
 	}
 }
 
-// applySaved re-applies the saved rules unless the protection is paused.
-// A failure is logged and leaves the loaded rules in place (fail closed).
-func (s *service) applySaved() {
+func interval(d, def time.Duration) time.Duration {
+	if d <= 0 {
+		return def
+	}
+	return d
+}
+
+// check verifies the saved rules and loads them again when the check fails,
+// when the saved choice is not the one loaded, or when force is set. It
+// does nothing while paused. A failure is logged and leaves the loaded
+// rules in place (fail closed). The block counter is read first, because a
+// load resets it.
+func (s *service) check(force bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cfg, services, err := s.c.loadValid()
 	if err == nil && cfg.Paused {
 		return
 	}
-	if err == nil {
-		err = s.c.firewall().Apply(cfg.VPNInterface, services)
+	if err != nil {
+		s.c.logApply(cfg, err)
+		return
 	}
+	s.stats.countBlocks(s.c.firewall())
+	if !force && s.isApplied(cfg) {
+		verr := s.c.verify(cfg, services)
+		if verr == nil {
+			s.c.logApply(cfg, nil)
+			return
+		}
+		fmt.Fprintf(s.c.stderr, "%s leakguard: rules not verified, loading them again: %v\n", s.c.now().Format(time.RFC3339), verr)
+	}
+	err = s.c.firewall().Apply(cfg.VPNInterface, services)
+	s.loaded(cfg, err)
 	s.c.logApply(cfg, err)
+}
+
+// isApplied reports whether cfg is the choice this daemon loaded last.
+func (s *service) isApplied(cfg config.Config) bool {
+	return s.applied != nil && s.applied.VPNInterface == cfg.VPNInterface && slices.Equal(s.applied.Services, cfg.Services)
+}
+
+// loaded records a load of cfg that ended with err. Only a successful load
+// surely reset pf's counter; after a failed one, a lower reading still
+// counts as a reset, so blocks are never counted twice.
+func (s *service) loaded(cfg config.Config, err error) {
+	if err != nil {
+		return
+	}
+	s.applied = &config.Config{VPNInterface: cfg.VPNInterface, Services: slices.Clone(cfg.Services)}
+	s.stats.counterReset()
+}
+
+// countBlocksIfActive reads the block counter while the saved rules are
+// supposed to be loaded, before a request reloads or flushes them.
+func (s *service) countBlocksIfActive() {
+	if cfg, err := config.Load(s.c.configPath()); err == nil && !cfg.Paused {
+		s.stats.countBlocks(s.c.firewall())
+	}
+}
+
+// shutdown reads the counter one last time and saves the stats.
+func (s *service) shutdown() {
+	s.mu.Lock()
+	s.countBlocksIfActive()
+	s.mu.Unlock()
+	s.stats.save(true)
 }
 
 func (s *service) handle(req ipc.Request) ipc.Response {
@@ -104,14 +169,23 @@ func (s *service) handle(req ipc.Request) ipc.Response {
 	var err error
 	switch req.Cmd {
 	case ipc.CmdSet:
+		s.countBlocksIfActive()
 		err = s.c.set(req.VPNInterface, req.Services)
+		if err == nil {
+			s.loaded(config.Config{VPNInterface: req.VPNInterface, Services: req.Services}, nil)
+		}
 	case ipc.CmdPause:
-		err = s.c.pause()
+		s.countBlocksIfActive()
+		if err = s.c.pause(); err == nil {
+			s.applied = nil
+			s.stats.counterReset()
+		}
 	}
 	if err != nil {
 		return ipc.Response{Error: err.Error()}
 	}
 	st := s.c.daemonStatus()
+	st.Stats = s.stats.ipc()
 	return ipc.Response{OK: true, Status: &st}
 }
 
@@ -216,6 +290,7 @@ func (c *cli) printDaemonStatus(st ipc.Status) error {
 	if st.LastRun != "" {
 		fmt.Fprintf(w, "Last background run:\t%s\n", st.LastRun)
 	}
+	printStats(w, st.Stats, c.now())
 	if !st.Protected {
 		fmt.Fprintf(w, "Firewall:\tNOT PROTECTED: %s\n", st.Reason)
 		w.Flush()
