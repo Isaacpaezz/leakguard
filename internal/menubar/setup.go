@@ -109,15 +109,8 @@ func appleScriptString(s string) string {
 // against the catalog all; anything else is refused before quoting. Every
 // argument is quoted for the shell, then the command for AppleScript.
 func SetupScript(cli string, d Draft, all []catalog.Service, prompt string) (string, error) {
-	unsafe := func(msg string) error { return kindError{ErrUnsafeCLIPath, errors.New(msg)} }
-	if !filepath.IsAbs(cli) {
-		return "", unsafe("the leakguard command needs an absolute path")
-	}
-	if !utf8.ValidString(cli) {
-		return "", unsafe("the path of the leakguard command is not valid UTF-8")
-	}
-	if strings.ContainsFunc(cli, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
-		return "", unsafe("the path of the leakguard command contains control characters")
+	if err := checkCLIPath(cli); err != nil {
+		return "", err
 	}
 	if err := (config.Config{VPNInterface: d.VPNInterface, Services: d.Services}).Validate(all); err != nil {
 		return "", invalidChoice(err)
@@ -126,12 +119,43 @@ func SetupScript(cli string, d Draft, all []catalog.Service, prompt string) (str
 	for _, id := range d.Services {
 		words = append(words, ShellQuote(id))
 	}
-	cmd := strings.Join(words, " ")
-	script := `do shell script "` + appleScriptString(cmd) + `"`
+	return adminScript(words, prompt), nil
+}
+
+// DisableScript is the AppleScript that runs "cli disable" once with
+// administrator rights, for the uninstall: it removes the protection rules
+// and the background service. cli and prompt are checked and quoted like in
+// SetupScript.
+func DisableScript(cli, prompt string) (string, error) {
+	if err := checkCLIPath(cli); err != nil {
+		return "", err
+	}
+	return adminScript([]string{ShellQuote(cli), "disable"}, prompt), nil
+}
+
+// checkCLIPath refuses a leakguard command path that cannot be quoted
+// safely: it must be absolute, valid UTF-8 and without control characters.
+func checkCLIPath(cli string) error {
+	unsafe := func(msg string) error { return kindError{ErrUnsafeCLIPath, errors.New(msg)} }
+	switch {
+	case !filepath.IsAbs(cli):
+		return unsafe("the leakguard command needs an absolute path")
+	case !utf8.ValidString(cli):
+		return unsafe("the path of the leakguard command is not valid UTF-8")
+	case strings.ContainsFunc(cli, func(r rune) bool { return r < 0x20 || r == 0x7f }):
+		return unsafe("the path of the leakguard command contains control characters")
+	}
+	return nil
+}
+
+// adminScript runs the already shell-quoted words once with administrator
+// rights, with prompt as the reason when it is not empty.
+func adminScript(words []string, prompt string) string {
+	script := `do shell script "` + appleScriptString(strings.Join(words, " ")) + `"`
 	if prompt != "" {
 		script += ` with prompt "` + appleScriptString(prompt) + `"`
 	}
-	return script + ` with administrator privileges`, nil
+	return script + ` with administrator privileges`
 }
 
 // Short keeps the first line of s and cuts it to at most max characters,

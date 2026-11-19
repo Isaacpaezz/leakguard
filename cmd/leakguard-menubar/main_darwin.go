@@ -24,6 +24,7 @@ import (
 	"github.com/Isaacpaezz/leakguard/internal/config"
 	"github.com/Isaacpaezz/leakguard/internal/ipc"
 	"github.com/Isaacpaezz/leakguard/internal/menubar"
+	"github.com/Isaacpaezz/leakguard/internal/version"
 )
 
 const (
@@ -39,7 +40,34 @@ func main() {
 		lang:    macLanguage(),
 	}
 	a.catalog, a.catalogErr = catalog.Embedded()
+	a.exe = executable()
+	a.home, _ = os.UserHomeDir()
+	_, inBundle := menubar.AppBundle(a.exe)
+	a.loginItem = inBundle && filepath.IsAbs(a.home)
+	if a.loginItem {
+		// Written, never loaded: launchd opens the app at the next login,
+		// and no second copy starts now.
+		on, err := menubar.SyncLoginItem(a.home, a.exe)
+		a.openAtLogin = on
+		if err != nil {
+			a.errLine = a.lang.Text(menubar.MsgLoginItemFailed, err.Error())
+			a.errFresh = true
+		}
+	}
 	systray.Run(a.ready, func() {})
+}
+
+// executable is the absolute path of this app, with symlinks resolved, or
+// "" when it cannot be known.
+func executable() string {
+	exe, err := os.Executable()
+	if err == nil {
+		exe, err = filepath.EvalSymlinks(exe)
+	}
+	if err != nil {
+		return ""
+	}
+	return exe
 }
 
 // macLanguage is the language of the Mac's first preferred language.
@@ -56,6 +84,9 @@ const (
 	actSetUp
 	actChangeVPN
 	actWizardDone
+	actOpenAtLogin
+	actUninstall
+	actUninstallDone
 )
 
 // action is a click, or the end of the wizard. service is the clicked
@@ -92,6 +123,13 @@ type app struct {
 	catalog    []catalog.Service
 	catalogErr error
 
+	// exe is this app's executable and home the user's home folder.
+	exe, home string
+	// loginItem is set when the app runs from a .app bundle, so it may open
+	// at login (development builds never write the LaunchAgent);
+	// openAtLogin is the user's choice.
+	loginItem, openAtLogin bool
+
 	layout string
 	done   chan struct{}
 	items  items
@@ -100,12 +138,13 @@ type app struct {
 type items struct {
 	status, session, today, errLine *systray.MenuItem
 	setUp, changeVPN, toggle, quit  *systray.MenuItem
+	openAtLogin, uninstall          *systray.MenuItem
 	services                        map[string]*systray.MenuItem
 }
 
 func (a *app) ready() {
 	systray.SetTemplateIcon(iconNotSetUp, iconNotSetUp)
-	systray.SetTooltip("leakguard")
+	systray.SetTooltip("leakguard " + version.String())
 	go a.loop()
 }
 
@@ -163,6 +202,26 @@ func (a *app) handle(act action) {
 		// The wizard already showed a failure in a dialog; the menu keeps
 		// its first line. A cancel clears the line.
 		a.wizardOpen = false
+		a.errLine = menubar.WizardMessage(a.lang, act.err)
+		return
+	case actOpenAtLogin:
+		a.errLine = ""
+		on := !a.openAtLogin
+		if err := menubar.SetOpenAtLogin(a.home, a.exe, on); err != nil {
+			a.errLine = a.lang.Text(menubar.MsgLoginItemFailed, err.Error())
+			return
+		}
+		a.openAtLogin = on
+		return
+	case actUninstall:
+		a.startUninstall()
+		return
+	case actUninstallDone:
+		a.wizardOpen = false
+		if act.err == nil {
+			systray.Quit()
+			return
+		}
 		a.errLine = menubar.WizardMessage(a.lang, act.err)
 		return
 	}
@@ -277,14 +336,7 @@ func install(client ipc.Client, lang menubar.Lang, all []catalog.Service, d menu
 	if !menubar.SetupNeeded(err) {
 		return save(client, d)
 	}
-	exe, err := os.Executable()
-	if err == nil {
-		exe, err = filepath.EvalSymlinks(exe)
-	}
-	if err != nil {
-		exe = ""
-	}
-	cli, err := menubar.FindCLI(exe, menubar.InstalledState(""), isExecutable, menubar.CheckInstalledCLI)
+	cli, err := adminCLI()
 	if err != nil {
 		return err
 	}
@@ -294,6 +346,75 @@ func install(client ipc.Client, lang menubar.Lang, all []catalog.Service, d menu
 	}
 	_, err = runScript(script)
 	return err
+}
+
+// adminCLI is the leakguard command to run as administrator (see
+// menubar.FindCLI), with the quarantine mark cleared when it is the one
+// inside this app's bundle.
+func adminCLI() (string, error) {
+	exe := executable()
+	cli, err := menubar.FindCLI(exe, menubar.InstalledState(""), isExecutable, menubar.CheckInstalledCLI)
+	if err != nil {
+		return "", err
+	}
+	if err := menubar.PrepareCLI(exe, cli, quarantined, clearQuarantine); err != nil {
+		return "", err
+	}
+	return cli, nil
+}
+
+// quarantined reports whether path has the quarantine mark.
+func quarantined(path string) (bool, error) {
+	err := exec.Command("/usr/bin/xattr", "-p", menubar.QuarantineAttr, path).Run()
+	var exit *exec.ExitError
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.As(err, &exit):
+		// xattr exits 1 when the attribute is not there.
+		return false, nil
+	}
+	return false, err
+}
+
+// clearQuarantine removes the quarantine mark from exactly path.
+func clearQuarantine(path string) error {
+	out, err := exec.Command("/usr/bin/xattr", menubar.ClearQuarantineArgs(path)...).CombinedOutput()
+	if err != nil {
+		return menubar.ScriptError(string(out), err)
+	}
+	return nil
+}
+
+// startUninstall runs "Uninstall leakguard…": one administrator prompt for
+// "leakguard disable", then the login item and the preferences go. The app
+// quits once it is done.
+func (a *app) startUninstall() {
+	if a.wizardOpen {
+		return
+	}
+	a.wizardOpen = true
+	lang, home := a.lang, a.home
+	u := menubar.Uninstaller{
+		Lang:    lang,
+		Dialogs: osaDialogs{},
+		Disable: func() error {
+			cli, err := adminCLI()
+			if err != nil {
+				return err
+			}
+			script, err := menubar.DisableScript(cli, menubar.UninstallPrompt(lang))
+			if err != nil {
+				return err
+			}
+			_, err = runScript(script)
+			return err
+		},
+		Cleanup: func() error { return menubar.RemoveLoginItem(home) },
+	}
+	go func() {
+		a.actions <- action{kind: actUninstallDone, err: u.Run()}
+	}()
 }
 
 // osaDialogs draws the wizard with osascript: "display dialog" and "choose
@@ -361,7 +482,7 @@ func connectedVPNCandidates() []string {
 }
 
 func (a *app) draw() {
-	setup := menubar.Setup{Catalog: a.catalog, Lang: a.lang, Now: time.Now()}
+	setup := menubar.Setup{Catalog: a.catalog, Lang: a.lang, Now: time.Now(), Version: version.String()}
 	if a.daemonUnavailable() {
 		setup.Update = menubar.InstalledState("") == menubar.InstallOld
 	}
@@ -414,6 +535,10 @@ func (a *app) draw() {
 	if it.toggle != nil {
 		it.toggle.SetTitle(m.Toggle.Label)
 	}
+	if it.openAtLogin != nil {
+		setChecked(it.openAtLogin, a.openAtLogin)
+	}
+	setEnabled(it.uninstall, !a.wizardOpen)
 }
 
 // layoutKey changes when items must be added or removed.
@@ -480,6 +605,12 @@ func (a *app) rebuild(m menubar.Menu) {
 		a.forward(it.toggle, action{kind: actToggle})
 	}
 	systray.AddSeparator()
+	if a.loginItem {
+		it.openAtLogin = systray.AddMenuItemCheckbox(l.Text(menubar.MsgMenuOpenAtLogin), l.Text(menubar.MsgMenuOpenAtLoginTip), a.openAtLogin)
+		a.forward(it.openAtLogin, action{kind: actOpenAtLogin})
+	}
+	it.uninstall = systray.AddMenuItem(l.Text(menubar.MsgMenuUninstall), l.Text(menubar.MsgMenuUninstallTip))
+	a.forward(it.uninstall, action{kind: actUninstall})
 	it.quit = systray.AddMenuItem(l.Text(menubar.MsgMenuQuit), l.Text(menubar.MsgMenuQuitTip))
 	done := a.done
 	go func() {

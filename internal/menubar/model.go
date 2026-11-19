@@ -65,6 +65,8 @@ type Setup struct {
 	Lang   Lang
 	// Now is the time the session line counts to; zero hides that line.
 	Now time.Time
+	// Version is the app's version; when set, the tooltip ends with it.
+	Version string
 }
 
 // ServiceItem is one catalog service.
@@ -93,6 +95,14 @@ type Request struct {
 // Build describes the menu for a status, or for the error that replaced it.
 // It never reports protected unless the daemon verified it.
 func Build(st *ipc.Status, err error, setup Setup) Menu {
+	m := build(st, err, setup)
+	if setup.Version != "" {
+		m.Tooltip = setup.Lang.Text(msgTooltipVersion, m.Tooltip, setup.Version)
+	}
+	return m
+}
+
+func build(st *ipc.Status, err error, setup Setup) Menu {
 	l := setup.Lang
 	var m Menu
 	switch {
@@ -278,6 +288,9 @@ func explainDetail(l Lang, err error) string {
 func explainKnown(l Lang, err error) (string, bool) {
 	var m Msg
 	switch {
+	// First: the text it keeps may itself be a permission error.
+	case errors.Is(err, ErrQuarantined):
+		m = msgErrQuarantined
 	case errors.Is(err, ipc.ErrDaemonUnavailable):
 		m = msgExplainNotSetUp
 	case errors.Is(err, ipc.ErrNotAuthorized), errors.Is(err, fs.ErrPermission):
