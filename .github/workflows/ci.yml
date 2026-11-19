@@ -45,3 +45,5 @@ jobs:
         run: go build ./cmd/leakguard-menubar
       - name: CLI builds without cgo
         run: CGO_ENABLED=0 go build ./cmd/leakguard
+      - name: App bundle and DMG build (not uploaded)
+        run: scripts/build-macos.sh 0.0.0-ci

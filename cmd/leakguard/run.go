@@ -14,6 +14,7 @@ import (
 	"github.com/Isaacpaezz/leakguard/internal/pf"
 	"github.com/Isaacpaezz/leakguard/internal/probe"
 	"github.com/Isaacpaezz/leakguard/internal/stats"
+	"github.com/Isaacpaezz/leakguard/internal/version"
 )
 
 // Exit codes.
@@ -107,6 +108,8 @@ Usage:
       /Library/Application Support/leakguard/stats.json, and answers the
       menu-bar app on /var/run/leakguard.sock. Only administrators can
       talk to it.
+  leakguard version
+      Show the version of leakguard.
   leakguard help
       Show this help.
 
@@ -146,6 +149,7 @@ var commands = []command{
 	{"status", (*cli).status},
 	{"test", (*cli).test},
 	{"serve", (*cli).serve},
+	{"version", (*cli).version},
 }
 
 type cli struct {
@@ -220,5 +224,14 @@ func (c *cli) requireRoot(command string) error {
 	if !c.env.IsRoot() {
 		return fmt.Errorf("run with sudo: sudo leakguard %s", command)
 	}
+	return nil
+}
+
+// version prints the version of this binary.
+func (c *cli) version(args []string) error {
+	if _, err := c.parse(flag.NewFlagSet("version", flag.ContinueOnError), args, false); err != nil {
+		return err
+	}
+	fmt.Fprintln(c.stdout, "leakguard "+version.String())
 	return nil
 }
