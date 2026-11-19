@@ -196,7 +196,40 @@ vulnerability reporting, create labels `status:needs-triage`,
 5. Self-updating catalog: a scheduled workflow refreshes ranges from their
    sources (ASN prefixes) and opens a PR; the app downloads a signed catalog.
    Domain-aware blocking for CDN-hosted services (OpenAI).
-6. Release pipeline (GoReleaser, Homebrew tap, winget, installers).
+6. 🚧 In review (macOS part, `feat/macos-installer`,
+   `odd/tasks/macos-installer.md`): `leakguard.app` in a DMG on GitHub
+   Releases. `scripts/build-macos.sh VERSION` builds both binaries for arm64
+   and amd64 with `-X internal/version.Version`, merges them with `lipo`,
+   writes `Contents/Info.plist` (`tools/infoplist`: bundle id
+   `dev.leakguard.menubar`, `LSUIElement`, minimum macOS 13; a pre-release
+   keeps only its numbers in the bundle versions), draws `AppIcon.icns`
+   (`tools/genappicon` + `iconutil`), signs ad-hoc (`codesign --deep -s -`;
+   no Developer ID yet, owner choice, so users click "Open Anyway" once) and
+   makes a UDZO DMG with an Applications link and `docs/install-macos.md` as
+   "Cómo abrir leakguard.txt", plus a `.sha256`. The release workflow runs on
+   `v*` tags (pushed only by the maintainer) with `contents: write` at job
+   level, refuses a tag whose version is not the newest CHANGELOG section
+   (`tools/releasenotes`), and marks versions below 1.0 as pre-releases. CI
+   builds the DMG on every pull request. The CLI ships inside the bundle next
+   to the menu-bar binary, where `FindCLI` already looks on first run.
+   Login item: a per-user LaunchAgent (works without a Developer ID, unlike
+   SMAppService) written by the app on launch only when it runs from a
+   `.app` bundle, rewritten when the app moved, never loaded with launchctl
+   (RunAtLoad at the next login; no second copy now). The user's choice
+   lives in `~/Library/Application Support/leakguard/menubar.json`.
+   Uninstall: `menubar.Uninstaller` (confirm with Cancel as default, then
+   `<cli> disable` through the same administrator script builder with its
+   own prompt, then remove the LaunchAgent and `menubar.json`, then quit);
+   cancelling or a failed disable changes nothing else and says so.
+   Quarantine: before running the CLI as administrator, the app clears
+   `com.apple.quarantine` with `xattr -d` on exactly its own bundled CLI when
+   it carries the mark (`menubar.PrepareCLI`); a failure is
+   `ErrQuarantined`, explained in plain words with a link to the guide.
+   Pending (T4): verify the release workflow, a live install from the DMG by
+   the owner, whether a quarantined CLI runs from the administrator prompt
+   at all, and the root uninstall.
+   Later: Homebrew tap, winget, Linux packages, Developer ID signing and
+   notarization (the bundle layout stays the same).
 
 ## Resume prompt
 

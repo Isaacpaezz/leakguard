@@ -16,17 +16,20 @@ VPN Bypass: a tray or menu-bar icon plus service checkboxes.
 | Path | What it is |
 |---|---|
 | `catalog/services/*.json` | Service catalog: IP ranges, domains, sources. One file per service; the file name must equal `<id>.json`. |
-| `cmd/leakguard` | The CLI: `services`, `interfaces`, `enable`, `disable`, `status`, `test`, `apply`, `serve` (the daemon). `main` is a thin wrapper over a testable `run` with an injected `Env`. |
+| `cmd/leakguard` | The CLI: `services`, `interfaces`, `enable`, `disable`, `status`, `test`, `apply`, `serve` (the daemon), `version`. `main` is a thin wrapper over a testable `run` with an injected `Env`. |
 | `internal/ipc` | Socket protocol between the root daemon and the apps: one JSON request and response per connection, strict decoding, peer check (root or group `admin` only). |
 | `internal/catalog` | Loads and validates the catalog, embedded in the binary. The CLI and the future tray app reuse it. |
 | `internal/config` | The user's VPN interface and services; load, save, validate, VPN interface candidates. |
 | `internal/pf` | macOS `pf` backend: renders, applies, flushes and verifies the `com.apple/250.leakguard` anchor, and reads its block counter. |
 | `cmd/leakguard-menubar` | macOS menu-bar app (`fyne.io/systray`, needs cgo): draws `internal/menubar` (status, session and today lines), polls the daemon every 3 s, runs the setup wizard with osascript dialogs, embeds the template icons made by `gen_icons.go`. Other systems get a stub that exits 1. The CLI must never import systray. |
-| `internal/menubar` | The menu-bar app's logic without a GUI: status to menu description, clicks to `set`/`pause` requests, the 3-step setup wizard over an injected `Dialogs` driver, the Spanish/English message catalog (`i18n.go`), plain-language errors, the quoted AppleScript for dialogs and for the administrator setup, which CLI is safe to run as root (current install, root-owned without symlinks, else the one next to the app). |
+| `internal/menubar` | The menu-bar app's logic without a GUI: status to menu description, clicks to `set`/`pause` requests, the 3-step setup wizard and the uninstall flow over an injected `Dialogs` driver, the login item (LaunchAgent `dev.leakguard.menubar`, `menubar.json`), the quarantine decision for the bundled CLI, the Spanish/English message catalog (`i18n.go`), plain-language errors, the quoted AppleScript for dialogs and for the administrator setup, which CLI is safe to run as root (current install, root-owned without symlinks, else the one next to the app). |
+| `internal/version` | The version string, set at link time with `-ldflags -X` (`dev` otherwise). |
 | `internal/daemon` | macOS LaunchDaemon `dev.leakguard` (runs `leakguard serve`, KeepAlive): root-owned binary copy, plist, `launchctl`. |
 | `internal/stats` | Session stats without I/O beyond its JSON file: VPN session start or end, today's VPN time, drops and blocks (pf block-rule packet deltas, never double counted), reset at local midnight. The daemon feeds it; `status` and the menu show it. |
 | `internal/probe` | `leakguard test`: connects to protected addresses outside the VPN and expects a refusal. |
 | `internal/readme`, `tools/readmegen` | Generate the README landing sections. |
+| `scripts/build-macos.sh` | Builds `dist/leakguard.app` (universal, ad-hoc signed) and `dist/leakguard-VERSION-macos.dmg` with its `.sha256`. Uses `tools/infoplist`, `tools/genappicon`; the release workflow also uses `tools/releasenotes`. |
+| `docs/install-macos.md` | The install guide (Spanish, then English), also copied into the DMG. |
 | `prototypes/macos-pf` | Working macOS `pf` prototype. Reference only; do not extend it. |
 | `CHANGELOG.md` | User-visible changes; its newest section feeds "What's new" in the README. |
 | `.github/` | CI, issue and pull request templates, CODEOWNERS. |
@@ -39,6 +42,7 @@ VPN Bypass: a tray or menu-bar icon plus service checkboxes.
 go test ./... && go vet ./... && gofmt -l .
 go run ./tools/readmegen         # after any catalog or CHANGELOG change
 go run ./tools/readmegen -check  # CI gate
+scripts/build-macos.sh 0.0.0-local  # macOS app and DMG into dist/ (macOS only)
 ```
 
 ## Hard rules
@@ -52,7 +56,7 @@ go run ./tools/readmegen -check  # CI gate
 7. **Repository artifacts in English** (code, comments, commits, docs). Issues and discussions may be in Spanish.
 8. **Small pull requests** (about 400 changed lines or fewer) with Conventional Commits, and tests and docs alongside the code.
 9. **No private data or credentials** in commits, issues or logs: no users' real IPs, VPN server names, tokens or keys.
-10. The maintainer decides what gets merged. Do not merge, push to `main`, publish releases or change repository settings.
+10. The maintainer decides what gets merged. Do not merge, push to `main`, push `v*` tags, publish releases or change repository settings.
 
 ## Skills
 
