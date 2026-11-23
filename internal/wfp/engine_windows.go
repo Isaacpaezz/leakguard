@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"slices"
 	"strings"
 	"syscall"
 	"unsafe"
@@ -15,16 +16,53 @@ import (
 )
 
 // session is an Engine over a real, non-dynamic WFP session: what it adds
-// outlives the session and the process.
-type session struct{ s *wf.Session }
+// outlives the session and the process. h is a second session handle that
+// reads what tailscale/wf reads wrong: the filters' weights.
+type session struct {
+	s *wf.Session
+	h windows.Handle
+}
+
+var (
+	fwpuclnt                = windows.NewLazySystemDLL("fwpuclnt.dll")
+	procFwpmEngineOpen0     = fwpuclnt.NewProc("FwpmEngineOpen0")
+	procFwpmEngineClose0    = fwpuclnt.NewProc("FwpmEngineClose0")
+	procFwpmFilterGetByKey0 = fwpuclnt.NewProc("FwpmFilterGetByKey0")
+	procFwpmFreeMemory0     = fwpuclnt.NewProc("FwpmFreeMemory0")
+)
+
+// rpcAuthnWinNT is RPC_C_AUTHN_WINNT, the authentication of a local
+// session.
+const rpcAuthnWinNT = 10
 
 // openEngine connects to the Base Filtering Engine.
 func openEngine() (Engine, error) {
+	const hint = "cannot open the Windows Filtering Platform (is the Base Filtering Engine service running?): %w"
+	if unsafe.Sizeof(uintptr(0)) != 8 {
+		return nil, errors.New("leakguard reads Windows Filtering Platform filters on 64-bit Windows only")
+	}
 	s, err := wf.New(&wf.Options{Name: "leakguard", Description: "leakguard kill switch"})
 	if err != nil {
-		return nil, fmt.Errorf("cannot open the Windows Filtering Platform (is the Base Filtering Engine service running?): %w", err)
+		return nil, fmt.Errorf(hint, err)
 	}
-	return session{s}, nil
+	var h windows.Handle
+	if r, _, _ := procFwpmEngineOpen0.Call(0, rpcAuthnWinNT, 0, 0, uintptr(unsafe.Pointer(&h))); r != 0 {
+		s.Close()
+		return nil, fmt.Errorf(hint, syscall.Errno(r))
+	}
+	return session{s, h}, nil
+}
+
+// filter0 reads the filter with this key as the engine stores it and
+// passes it to read before the engine frees it.
+func (e session) filter0(key GUID, read func(*fwpmFilter0)) error {
+	var p *fwpmFilter0
+	if r, _, _ := procFwpmFilterGetByKey0.Call(uintptr(e.h), uintptr(unsafe.Pointer(&key)), uintptr(unsafe.Pointer(&p))); r != 0 {
+		return syscall.Errno(r)
+	}
+	defer procFwpmFreeMemory0.Call(uintptr(unsafe.Pointer(&p)))
+	read(p)
+	return nil
 }
 
 // is reports whether err is the WFP error code.
@@ -77,9 +115,52 @@ func (e session) Filters() ([]Filter, error) {
 	}
 	var out []Filter
 	for _, r := range rules {
-		if GUID(r.Provider) == ProviderKey {
-			out = append(out, Filter{Key: GUID(r.ID), Rule: fromWF(r)})
+		if GUID(r.Provider) != ProviderKey {
+			continue
 		}
+		rule := fromWF(r)
+		// tailscale/wf's weight is never right (see fwpmFilter0).
+		var other string
+		err := e.filter0(GUID(r.ID), func(f *fwpmFilter0) { rule.Weight, other = weightOf(&f.Weight) })
+		if is(err, windows.FWP_E_FILTER_NOT_FOUND) {
+			continue // deleted since the listing
+		}
+		if err != nil {
+			return nil, fmt.Errorf("cannot read the weight of filter %s: %w", GUID(r.ID), err)
+		}
+		if other != "" {
+			rule.Other = strings.Join(slices.DeleteFunc([]string{rule.Other, other}, func(s string) bool { return s == "" }), ", ")
+		}
+		out = append(out, Filter{Key: GUID(r.ID), Rule: rule})
+	}
+	return out, nil
+}
+
+// dump describes every filter at ALE_AUTH_CONNECT as the engine stores it,
+// leakguard's or not: provider, sublayer, layer, action, weight, effective
+// weight and conditions. It is for diagnostics.
+func (e session) dump() ([]string, error) {
+	rules, err := e.s.Rules()
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, r := range rules {
+		if r.Layer != wf.LayerALEAuthConnectV4 && r.Layer != wf.LayerALEAuthConnectV6 {
+			continue
+		}
+		weight, effective := "unreadable", "unreadable"
+		if err := e.filter0(GUID(r.ID), func(f *fwpmFilter0) {
+			weight, effective = describeWeight(&f.Weight), describeWeight(&f.EffectiveWeight)
+		}); err != nil {
+			weight = err.Error()
+		}
+		var conds []string
+		for _, m := range r.Conditions {
+			conds = append(conds, m.String())
+		}
+		out = append(out, fmt.Sprintf("filter %s %q: provider %s, sublayer %s, layer %s, action %s, hard %v, weight %s, effective weight %s, conditions [%s]",
+			GUID(r.ID), r.Name, GUID(r.Provider), GUID(r.Sublayer), r.Layer, r.Action, r.HardAction, weight, effective, strings.Join(conds, "; ")))
 	}
 	return out, nil
 }
@@ -109,7 +190,12 @@ func (e session) Uninstall() error {
 	return nil
 }
 
-func (e session) Close() error { return e.s.Close() }
+func (e session) Close() error {
+	if r, _, _ := procFwpmEngineClose0.Call(uintptr(e.h)); r != 0 {
+		return errors.Join(syscall.Errno(r), e.s.Close())
+	}
+	return e.s.Close()
+}
 
 // toWF is the WFP filter for f: the remote address must be in the range
 // and, for a permit, the connection must leave on the adapter's LUID.

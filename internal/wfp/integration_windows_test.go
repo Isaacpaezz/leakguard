@@ -22,8 +22,12 @@ const absentVPN = "leakguard test absent VPN"
 // filter, the sublayer and the provider before and after.
 //
 // The protected ranges are 127.0.0.2/32 and ::1/128, each with a listener,
-// plus 192.0.2.1/32 (TEST-NET-1, never answers): an unprotected connect
-// there times out or finds no route, a blocked one fails at once.
+// plus 192.0.2.1/32 (TEST-NET-1, never answers). It proves the arbitration,
+// not only the bookkeeping: with the loopback adapter as the VPN the permit
+// outweighs the block and the connects succeed; with the VPN adapter absent
+// only the blocks load and every connect fails at once with WSAEACCES. On
+// any failure it prints every ALE_AUTH_CONNECT filter as the engine stores
+// it (weight and effective weight included).
 func TestIntegrationRealFilters(t *testing.T) {
 	if os.Getenv("LEAKGUARD_WFP_INTEGRATION") != "1" {
 		t.Skip("set LEAKGUARD_WFP_INTEGRATION=1 in an elevated shell to load real WFP filters")
@@ -44,6 +48,15 @@ func TestIntegrationRealFilters(t *testing.T) {
 		}
 		nothingLeft(t)
 	})
+	dumped := false
+	fail := func(format string, a ...any) {
+		t.Helper()
+		t.Errorf(format, a...)
+		if !dumped {
+			dumped = true
+			dumpFilters(t)
+		}
+	}
 
 	alias, luid := loopback(t)
 	t.Logf("loopback adapter %q, LUID %#x", alias, luid)
@@ -52,37 +65,44 @@ func TestIntegrationRealFilters(t *testing.T) {
 	services := []catalog.Service{{ID: "test", IPv4: []string{"127.0.0.2/32", "192.0.2.1/32"}, IPv6: []string{"::1/128"}}}
 	targets := []string{addr4, addr6}
 
-	// VPN = loopback: the permit for its LUID wins over the block.
+	// VPN = loopback: the stored weights read back as written, and the
+	// permit for its LUID wins over the block.
 	if err := f.Apply(alias, services); err != nil {
-		t.Fatalf("Apply(%q): %v", alias, err)
+		fail("Apply(%q): %v", alias, err)
+		t.FailNow()
 	}
+	weights(t, fail)
 	if err := f.Verify(alias, services); err != nil {
-		t.Fatalf("Verify(%q): %v", alias, err)
+		fail("Verify(%q): %v", alias, err)
 	}
 	for _, a := range targets {
 		if err := connect(a, 2*time.Second); err != nil {
-			dumpFilters(t)
-			t.Errorf("through the VPN (loopback), connect %s: %v", a, err)
+			fail("through the VPN (loopback), connect %s: %s; want connected: the permit must outweigh the block", a, classify(err))
 		}
 	}
 
-	// The VPN is down: blocks only, every connect fails at once.
-	err := f.Apply(absentVPN, services)
-	if err == nil || !strings.Contains(err.Error(), "protected services are blocked on every interface") {
-		t.Fatalf("Apply(%q) = %v, want the blocks loaded and the reason", absentVPN, err)
+	// The VPN is down (its adapter is gone): the blocks only, a success,
+	// and every connect fails at once with WSAEACCES.
+	if err := f.Apply(absentVPN, services); err != nil {
+		fail("Apply(%q) = %v, want nil with the blocks loaded", absentVPN, err)
 	}
-	if err := f.Verify("", services); err != nil {
-		t.Fatalf("Verify(\"\") after the blocks: %v", err)
+	for _, v := range []string{absentVPN, ""} {
+		if err := f.Verify(v, services); err != nil {
+			fail("Verify(%q) with the blocks loaded: %v", v, err)
+		}
 	}
 	for _, a := range append(targets, "192.0.2.1:443") {
 		start := time.Now()
 		err := connect(a, 5*time.Second)
 		took := time.Since(start)
 		t.Logf("blocked connect %s after %v: %s", a, took.Round(time.Millisecond), classify(err))
-		if err == nil {
-			t.Errorf("connect %s succeeded with the VPN down", a)
-		} else if took > 1500*time.Millisecond {
-			t.Errorf("connect %s took %v: blocked connects must fail at once, not time out", a, took)
+		switch {
+		case err == nil:
+			fail("connect %s succeeded with the VPN down", a)
+		case !errors.Is(err, windows.WSAEACCES):
+			fail("connect %s failed with %s, want WSAEACCES (10013)", a, classify(err))
+		case took > 1500*time.Millisecond:
+			fail("connect %s took %v: blocked connects must fail at once, not time out", a, took)
 		}
 	}
 
@@ -104,14 +124,39 @@ func TestIntegrationRealFilters(t *testing.T) {
 	}
 	for _, a := range targets {
 		if err := connect(a, 2*time.Second); err != nil {
-			t.Errorf("after Flush, connect %s: %v", a, err)
+			t.Errorf("after Flush, connect %s: %s", a, classify(err))
 		}
 	}
 	start := time.Now()
-	err = connect("192.0.2.1:443", time.Second)
+	err := connect("192.0.2.1:443", time.Second)
 	t.Logf("unprotected connect 192.0.2.1:443 after %v: %s", time.Since(start).Round(time.Millisecond), classify(err))
 	if errors.Is(err, windows.WSAEACCES) {
 		t.Errorf("after Flush, 192.0.2.1 still fails with WSAEACCES")
+	}
+}
+
+// weights checks that each leakguard filter reads back with the weight
+// Rules gives it, and logs them.
+func weights(t *testing.T, fail func(string, ...any)) {
+	t.Helper()
+	e, err := openEngine()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close()
+	fs, err := e.Filters()
+	if err != nil {
+		t.Fatalf("Filters() = %v", err)
+	}
+	for _, x := range fs {
+		want := BlockWeight
+		if x.Rule.Action == ActionPermit {
+			want = PermitWeight
+		}
+		t.Logf("read back %s", x.Rule)
+		if x.Rule.Weight != want || x.Rule.Other != "" {
+			fail("filter %s read back as %s, want weight %d", x.Key, x.Rule, want)
+		}
 	}
 }
 
@@ -179,6 +224,7 @@ func deleteOne(t *testing.T) {
 	}
 }
 
+// dumpFilters logs every ALE_AUTH_CONNECT filter as the engine stores it.
 func dumpFilters(t *testing.T) {
 	t.Helper()
 	e, err := openEngine()
@@ -187,12 +233,12 @@ func dumpFilters(t *testing.T) {
 		return
 	}
 	defer e.Close()
-	fs, err := e.Filters()
-	for _, x := range fs {
-		t.Logf("loaded %s: %s", x.Key, x.Rule)
+	lines, err := e.(session).dump()
+	for _, l := range lines {
+		t.Log(l)
 	}
 	if err != nil {
-		t.Log(err)
+		t.Logf("cannot list the filters: %v", err)
 	}
 }
 

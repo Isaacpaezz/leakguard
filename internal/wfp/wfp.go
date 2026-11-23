@@ -51,9 +51,16 @@ const (
 	SublayerWeight uint16 = 0xFFFF
 	// BlockWeight and PermitWeight order the filters inside the sublayer:
 	// the permit for the VPN adapter wins over the block of the same range.
-	BlockWeight  uint64 = 0
-	PermitWeight uint64 = 1
+	// Both are written as explicit FWP_UINT64 weights, which the engine
+	// keeps as given, and neither is 0, so a weight that cannot be read
+	// back never matches an expected filter.
+	BlockWeight  uint64 = 1
+	PermitWeight uint64 = 2
 )
+
+// ErrNoAdapter means no network adapter has the VPN's alias: the VPN is
+// down, its adapter removed until it connects again.
+var ErrNoAdapter = errors.New("no network adapter is named")
 
 // Layer is where a filter runs.
 type Layer int
@@ -175,7 +182,8 @@ type Firewall struct {
 	// other systems).
 	Open func() (Engine, error)
 	// Resolve returns the LUID of the network adapter with this alias
-	// (its friendly name); nil means GetAdaptersAddresses.
+	// (its friendly name), or an error wrapping ErrNoAdapter when there
+	// is none; nil means GetAdaptersAddresses.
 	Resolve func(alias string) (uint64, error)
 	// Check reports why an alias cannot be the VPN; nil means
 	// config.CheckVPNInterface.
@@ -209,8 +217,8 @@ func (f Firewall) Enabled() (bool, error) {
 	return true, e.Close()
 }
 
-// allowed returns the LUID of the adapter vpn names, or why it cannot be
-// allowed.
+// allowed returns the LUID of the adapter vpn names, 0 when no adapter has
+// that name (the VPN is down), or why it cannot be allowed.
 func (f Firewall) allowed(vpn string) (uint64, error) {
 	check := f.Check
 	if check == nil {
@@ -224,6 +232,9 @@ func (f Firewall) allowed(vpn string) (uint64, error) {
 		resolve = resolveLUID
 	}
 	luid, err := resolve(vpn)
+	if errors.Is(err, ErrNoAdapter) {
+		return 0, nil
+	}
 	if err != nil {
 		return 0, err
 	}
@@ -249,7 +260,7 @@ func lookup(adapters []Adapter, alias string) (uint64, error) {
 			return a.LUID, nil
 		}
 	}
-	return 0, fmt.Errorf("no network adapter is named %q", alias)
+	return 0, fmt.Errorf("%w %q", ErrNoAdapter, alias)
 }
 
 // Rules returns the filters that keep services on the adapter with this
@@ -349,12 +360,16 @@ func nextGeneration(filters []Filter) uint32 {
 }
 
 // Apply loads the filters and verifies them. An empty vpn loads blocks
-// only, so no interface may carry protected traffic. When vpn is refused
-// or names no adapter, it loads those same blocks and returns the reason.
+// only, so no interface may carry protected traffic. So does a vpn that
+// names no adapter: the VPN is down, which is the normal state on Windows
+// (RAS and WireGuard adapters exist only while connected), so that is a
+// success. When vpn is refused, or the adapters cannot be read, it loads
+// those same blocks and returns the reason.
 //
 // The new filters are added before the old ones are deleted, so protected
 // traffic is never unblocked mid-way; when an add fails, the new filters
-// added so far are deleted and the old ones stay.
+// added so far are deleted and the old ones stay. A filter that cannot be
+// deleted is named in the error, and Verify reports it as unexpected.
 func (f Firewall) Apply(vpn string, services []catalog.Service) error {
 	var luid uint64
 	var refused error
@@ -400,21 +415,23 @@ func (f Firewall) load(rules []Rule) (err error) {
 			err = fmt.Errorf("cannot add filter %s: %w", r, err)
 			for j := i - 1; j >= 0; j-- {
 				if derr := e.Delete(filterKey(gen, uint32(j))); derr != nil {
-					err = errors.Join(err, fmt.Errorf("cannot remove the new filter %d again: %w", j, derr))
+					err = errors.Join(err, fmt.Errorf("cannot remove the new filter %s again: %w", rules[j], derr))
 				}
 			}
 			return err
 		}
 	}
+	// Every old filter is tried, so one that cannot go leaves no others.
+	var errs []error
 	for _, o := range old {
 		if g, ok := generation(o.Key); ok && g == gen {
 			continue
 		}
 		if err := e.Delete(o.Key); err != nil {
-			return fmt.Errorf("cannot delete the old filter %s: %w", o.Rule, err)
+			errs = append(errs, fmt.Errorf("cannot delete the old filter %s: %w", o.Rule, err))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // Flush deletes every leakguard filter, then the sublayer and the
@@ -443,8 +460,9 @@ var ErrNotLoaded = firewall.ErrNotLoaded
 // Verify checks that the loaded filters are exactly what a successful
 // Apply(vpn, services) loads: one block per range and one permit per range
 // for the adapter vpn names now, nothing missing, extra or changed. An empty
-// vpn checks that no interface is permitted. A refused vpn, or one that
-// names no adapter, fails even when the blocks are loaded.
+// vpn, or one that names no adapter (the VPN is down), checks that no
+// interface is permitted. A refused vpn, or adapters that cannot be read,
+// fail even when the blocks are loaded.
 func (f Firewall) Verify(vpn string, services []catalog.Service) (err error) {
 	loaded, err := f.loaded()
 	if err != nil {

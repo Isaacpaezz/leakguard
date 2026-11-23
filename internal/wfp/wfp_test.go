@@ -39,6 +39,7 @@ type fakeEngine struct {
 	failAdd    int // fail the n-th Add (1-based) of this engine; 0 never
 	adds       int
 	failList   error
+	failDelete func(GUID) error // fails Delete of this key when it returns an error
 	opens      int
 	closes     int
 	mustBlock  []netip.Prefix // ranges that must stay blocked
@@ -80,6 +81,11 @@ func (e *fakeEngine) Add(f Filter) error {
 }
 
 func (e *fakeEngine) Delete(k GUID) error {
+	if e.failDelete != nil {
+		if err := e.failDelete(k); err != nil {
+			return err
+		}
+	}
 	e.ops = append(e.ops, "delete")
 	e.filters = slices.DeleteFunc(e.filters, func(f Filter) bool { return f.Key == k })
 	e.checkGap()
@@ -133,7 +139,7 @@ func fw(e *fakeEngine) Firewall {
 			if alias == vpn {
 				return vpnLUID, nil
 			}
-			return 0, fmt.Errorf("no network adapter is named %q", alias)
+			return 0, fmt.Errorf("%w %q", ErrNoAdapter, alias)
 		},
 		Check: func(alias string) error {
 			if alias == "Ethernet" {
@@ -162,7 +168,7 @@ func want(t *testing.T, luid uint64) []Rule {
 		if p.Addr().Is6() {
 			layer = LayerConnectV6
 		}
-		out = append(out, Rule{Layer: layer, Sublayer: SublayerKey, Action: ActionBlock, Remote: p, Weight: 0, Hard: true, Persistent: true})
+		out = append(out, Rule{Layer: layer, Sublayer: SublayerKey, Action: ActionBlock, Remote: p, Weight: BlockWeight, Hard: true, Persistent: true})
 	}
 	if luid != 0 {
 		for _, r := range slices.Clone(out) {
@@ -204,9 +210,20 @@ func TestBlockCountIsUnsupported(t *testing.T) {
 	}
 }
 
+// The permit outweighs the block, and neither is 0: a weight that cannot be
+// read back reads as 0 and must never match an expected filter.
 func TestBlockAndPermitWeights(t *testing.T) {
-	if BlockWeight != 0 || PermitWeight <= BlockWeight {
-		t.Errorf("block weight %d, permit weight %d: the permit must outweigh the block", BlockWeight, PermitWeight)
+	if BlockWeight == 0 || PermitWeight <= BlockWeight {
+		t.Errorf("block weight %d, permit weight %d: the permit must outweigh the block, and neither may be 0", BlockWeight, PermitWeight)
+	}
+	rules, err := Rules(vpnLUID, services)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range rules {
+		if (r.Action == ActionBlock && r.Weight != BlockWeight) || (r.Action == ActionPermit && r.Weight != PermitWeight) {
+			t.Errorf("rule %s has the wrong weight", r)
+		}
 	}
 }
 
@@ -261,13 +278,35 @@ func TestApplyWithRefusedVPNLoadsBlocksOnly(t *testing.T) {
 	sameRules(t, e.rules(), want(t, 0))
 }
 
-func TestApplyWithUnknownAdapterLoadsBlocksOnly(t *testing.T) {
+// S7: a VPN adapter that does not exist (the VPN is down, the normal state
+// on Windows) loads the blocks only, and that is a success.
+func TestApplyWithAbsentAdapterLoadsBlocksOnly(t *testing.T) {
 	e := newFake(t)
-	err := fw(e).Apply("OpenVPN Data Channel Offload", services)
-	if err == nil || !strings.Contains(err.Error(), `protected services are blocked on every interface: no network adapter is named "OpenVPN Data Channel Offload"`) {
-		t.Fatalf("Apply = %v, want the unknown adapter named", err)
+	f := fw(e)
+	if err := f.Apply(vpn, services); err != nil {
+		t.Fatalf("Apply(%q): %v", vpn, err)
+	}
+	if err := f.Apply("OpenVPN Data Channel Offload", services); err != nil {
+		t.Fatalf("Apply with the VPN adapter absent = %v, want nil", err)
 	}
 	sameRules(t, e.rules(), want(t, 0))
+}
+
+// S7: when the adapters cannot be listed, the blocks load and Apply fails.
+func TestApplyWhenTheAdaptersCannotBeListedLoadsBlocksAndFails(t *testing.T) {
+	e := newFake(t)
+	f := fw(e)
+	f.Resolve = func(string) (uint64, error) {
+		return 0, errors.New("cannot list the network adapters: ERROR_NOT_ENOUGH_MEMORY")
+	}
+	err := f.Apply(vpn, services)
+	if err == nil || !strings.Contains(err.Error(), "protected services are blocked on every interface: cannot list the network adapters: ERROR_NOT_ENOUGH_MEMORY") {
+		t.Fatalf("Apply = %v, want the listing failure", err)
+	}
+	sameRules(t, e.rules(), want(t, 0))
+	if err := f.Verify(vpn, services); err == nil || !strings.Contains(err.Error(), "ERROR_NOT_ENOUGH_MEMORY") {
+		t.Errorf("Verify = %v, want the listing failure", err)
+	}
 }
 
 func TestApplyWithDefaultCheckRefusesWhatConfigRefuses(t *testing.T) {
@@ -451,8 +490,8 @@ func TestVerifyFailsOnMissingExtraOrChangedFilters(t *testing.T) {
 		change func(e *fakeEngine)
 		want   string
 	}{
-		{"missing block", func(e *fakeEngine) { e.filters = e.filters[1:] }, "1 missing (first: block 160.79.104.0/23 at ALE_AUTH_CONNECT_V4, weight 0)"},
-		{"missing permit", func(e *fakeEngine) { e.filters = e.filters[:len(e.filters)-1] }, "1 missing (first: permit 2607:6bc0:1::/48 at ALE_AUTH_CONNECT_V6 on interface LUID 0x47000000000005, weight 1)"},
+		{"missing block", func(e *fakeEngine) { e.filters = e.filters[1:] }, "1 missing (first: block 160.79.104.0/23 at ALE_AUTH_CONNECT_V4, weight 1)"},
+		{"missing permit", func(e *fakeEngine) { e.filters = e.filters[:len(e.filters)-1] }, "1 missing (first: permit 2607:6bc0:1::/48 at ALE_AUTH_CONNECT_V6 on interface LUID 0x47000000000005, weight 2)"},
 		{"duplicate", func(e *fakeEngine) {
 			e.filters = append(e.filters, Filter{Key: filterKey(99, 0), Rule: e.filters[0].Rule})
 		}, "1 unexpected (first: block 160.79.104.0/23"},
@@ -461,12 +500,13 @@ func TestVerifyFailsOnMissingExtraOrChangedFilters(t *testing.T) {
 			r.Remote = netip.MustParsePrefix("10.0.0.0/8")
 			e.filters = append(e.filters, Filter{Key: filterKey(99, 0), Rule: r})
 		}, "1 unexpected (first: block 10.0.0.0/8"},
-		{"block turned permit", func(e *fakeEngine) { e.filters[0].Rule.Action = ActionPermit }, "1 unexpected (first: permit 160.79.104.0/23 at ALE_AUTH_CONNECT_V4, weight 0"},
+		{"block turned permit", func(e *fakeEngine) { e.filters[0].Rule.Action = ActionPermit }, "1 unexpected (first: permit 160.79.104.0/23 at ALE_AUTH_CONNECT_V4, weight 1"},
 		{"other LUID", func(e *fakeEngine) { e.filters[len(e.filters)-1].Rule.LUID = 9 }, "on interface LUID 0x9"},
-		{"permit for any interface", func(e *fakeEngine) { e.filters[len(e.filters)-1].Rule.LUID = 0 }, "1 unexpected (first: permit 2607:6bc0:1::/48 at ALE_AUTH_CONNECT_V6, weight 1"},
+		{"permit for any interface", func(e *fakeEngine) { e.filters[len(e.filters)-1].Rule.LUID = 0 }, "1 unexpected (first: permit 2607:6bc0:1::/48 at ALE_AUTH_CONNECT_V6, weight 2"},
 		{"other layer", func(e *fakeEngine) { e.filters[0].Rule.Layer = LayerOther }, "at another layer"},
 		{"other sublayer", func(e *fakeEngine) { e.filters[0].Rule.Sublayer = GUID{Data1: 1} }, "sublayer {00000001-"},
-		{"heavier block", func(e *fakeEngine) { e.filters[0].Rule.Weight = 2 }, "weight 2"},
+		{"heavier block", func(e *fakeEngine) { e.filters[0].Rule.Weight = 3 }, "weight 3"},
+		{"weight read back as 0", func(e *fakeEngine) { e.filters[0].Rule.Weight = 0 }, "1 unexpected (first: block 160.79.104.0/23 at ALE_AUTH_CONNECT_V4, weight 0)"},
 		{"soft block", func(e *fakeEngine) { e.filters[0].Rule.Hard = false }, ", soft"},
 		{"not persistent", func(e *fakeEngine) { e.filters[0].Rule.Persistent = false }, "not persistent"},
 		{"extra condition", func(e *fakeEngine) { e.filters[0].Rule.Other = "condition ALE_APP_ID" }, "condition ALE_APP_ID"},
@@ -539,13 +579,80 @@ func TestVerifyRefusedVPNFailsEvenWithTheBlocksLoaded(t *testing.T) {
 	}
 }
 
-func TestVerifyUnknownAdapterFailsEvenWithTheBlocksLoaded(t *testing.T) {
+// S7: with the VPN adapter absent, the blocks alone verify; permits left
+// for it do not.
+func TestVerifyAbsentAdapterExpectsTheBlocksOnly(t *testing.T) {
 	e := newFake(t)
 	f := fw(e)
-	_ = f.Apply("Gone", services)
-	err := f.Verify("Gone", services)
-	if err == nil || err.Error() != `protected services are blocked on every interface: no network adapter is named "Gone"` {
-		t.Errorf("Verify = %v", err)
+	if err := f.Apply("Gone", services); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if err := f.Verify("Gone", services); err != nil {
+		t.Errorf("Verify with the blocks loaded = %v, want nil", err)
+	}
+	if err := f.Apply(vpn, services); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if err := f.Verify("Gone", services); err == nil || !strings.Contains(err.Error(), "4 unexpected (first: permit") {
+		t.Errorf("Verify with permits loaded = %v, want them reported", err)
+	}
+}
+
+// When a rollback Delete fails after a failed Add, the error names the
+// filter left behind and a later Verify reports it as unexpected.
+func TestApplyReportsAFailedRollback(t *testing.T) {
+	e := newFake(t)
+	f := fw(e)
+	if err := f.Apply(vpn, services); err != nil {
+		t.Fatalf("first Apply: %v", err)
+	}
+	e.mustBlock = prefixes(t, ranges...)
+	e.adds, e.failAdd = 0, 3 // adds blocks 0 and 1 of the new generation, then fails
+	stuck := filterKey(2, 1)
+	e.failDelete = func(k GUID) error {
+		if k == stuck {
+			return errors.New("FWP_E_IN_USE")
+		}
+		return nil
+	}
+	err := f.Apply("", services)
+	if err == nil || !strings.Contains(err.Error(), "FWP_E_OUT_OF_BOUNDS") ||
+		!strings.Contains(err.Error(), "cannot remove the new filter block 160.79.104.0/24 at ALE_AUTH_CONNECT_V4") ||
+		!strings.Contains(err.Error(), "FWP_E_IN_USE") {
+		t.Fatalf("Apply = %v, want the add failure and the filter that could not be removed", err)
+	}
+	e.failDelete = nil
+	if err := f.Verify(vpn, services); err == nil || !strings.Contains(err.Error(), "1 unexpected (first: block 160.79.104.0/24 at ALE_AUTH_CONNECT_V4") {
+		t.Errorf("Verify = %v, want the leftover reported", err)
+	}
+}
+
+// When deleting an old filter fails after the new generation was added,
+// the error names it, the other old filters are still deleted, and a later
+// Verify reports the leftover as unexpected.
+func TestApplyReportsAnOldFilterThatCannotBeDeleted(t *testing.T) {
+	e := newFake(t)
+	f := fw(e)
+	if err := f.Apply(vpn, services); err != nil {
+		t.Fatalf("first Apply: %v", err)
+	}
+	stuck := e.filters[0] // the first block; the 7 old filters after it still go
+	e.failDelete = func(k GUID) error {
+		if k == stuck.Key {
+			return errors.New("FWP_E_IN_USE")
+		}
+		return nil
+	}
+	err := f.Apply("", services)
+	if err == nil || !strings.Contains(err.Error(), "cannot delete the old filter "+stuck.Rule.String()+": FWP_E_IN_USE") {
+		t.Fatalf("Apply = %v, want the old filter named", err)
+	}
+	e.failDelete = nil
+	if n := len(e.filters); n != 5 {
+		t.Errorf("%d filters left, want the 4 new blocks and the stuck old block: %v", n, e.rules())
+	}
+	if err := f.Verify("", services); err == nil || err.Error() != "leakguard filters do not match the protected services: 1 unexpected (first: "+stuck.Rule.String()+")" {
+		t.Errorf("Verify = %v, want the leftover block reported", err)
 	}
 }
 
@@ -601,7 +708,7 @@ func TestLookupMatchesTheExactAlias(t *testing.T) {
 	if luid, err := lookup(adapters, vpn); err != nil || luid != vpnLUID {
 		t.Errorf("lookup(%q) = %#x, %v; want %#x", vpn, luid, err, vpnLUID)
 	}
-	if _, err := lookup(adapters, "WireGuard"); err == nil || err.Error() != `no network adapter is named "WireGuard"` {
+	if _, err := lookup(adapters, "WireGuard"); !errors.Is(err, ErrNoAdapter) || err.Error() != `no network adapter is named "WireGuard"` {
 		t.Errorf("lookup of a missing alias = %v", err)
 	}
 }
