@@ -116,6 +116,17 @@ type match struct {
 	Right json.RawMessage
 }
 
+// isTCP reports whether the right side of a meta l4proto match is TCP:
+// nft 1.1 prints "tcp", nft 1.0.x prints the protocol number 6.
+func isTCP(raw json.RawMessage) bool {
+	var name string
+	if json.Unmarshal(raw, &name) == nil {
+		return name == "tcp"
+	}
+	var n int
+	return json.Unmarshal(raw, &n) == nil && n == 6
+}
+
 // parseRule reads [oifname != X] {ip|ip6} daddr @set [meta l4proto tcp]
 // counter reject; anything else is not a leakguard rule.
 func parseRule(exprs []map[string]json.RawMessage) (rule, bool) {
@@ -128,19 +139,24 @@ func parseRule(exprs []map[string]json.RawMessage) (rule, bool) {
 		switch {
 		case e["match"] != nil:
 			var m match
-			var right string
-			if json.Unmarshal(e["match"], &m) != nil || json.Unmarshal(m.Right, &right) != nil || counted {
+			if json.Unmarshal(e["match"], &m) != nil || counted {
 				return rule{}, false
 			}
 			meta, pl := m.Left.Meta, m.Left.Payload
+			if meta != nil && meta.Key == "l4proto" && m.Op == "==" && isTCP(m.Right) && r.set != "" && !r.tcp {
+				r.tcp = true
+				continue
+			}
+			var right string
+			if json.Unmarshal(m.Right, &right) != nil {
+				return rule{}, false
+			}
 			switch {
 			case meta != nil && meta.Key == "oifname" && m.Op == "!=" && r.oif == "" && r.set == "":
 				r.oif = right
 			case pl != nil && pl.Field == "daddr" && m.Op == "==" && r.set == "" &&
 				(pl.Protocol == "ip" && right == "@"+set4 || pl.Protocol == "ip6" && right == "@"+set6):
 				r.set = right[1:]
-			case meta != nil && meta.Key == "l4proto" && m.Op == "==" && right == "tcp" && r.set != "" && !r.tcp:
-				r.tcp = true
 			default:
 				return rule{}, false
 			}

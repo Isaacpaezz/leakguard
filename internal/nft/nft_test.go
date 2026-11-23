@@ -283,3 +283,59 @@ func TestEmptyVPNBlocksEveryInterface(t *testing.T) {
 		t.Fatalf("Apply(\"\") with a failed load = %v", err)
 	}
 }
+
+// S7: an accept rule inside the leakguard chain, anywhere, would let
+// protected traffic out of the real connection before the reject rules
+// see it. Verify, Apply and BlockCount refuse such a chain, also for the
+// block-all rules.
+func TestAcceptRuleInTheChainFailsVerify(t *testing.T) {
+	const chain = `{"chain": {"family": "inet", "table": "leakguard", "name": "output", "handle": 1, "type": "filter", "hook": "output", "prio": 0, "policy": "accept"}}`
+	accepts := map[string]string{
+		"daddr accept": `{"rule": {"family": "inet", "table": "leakguard", "chain": "output", "expr": [` +
+			`{"match": {"op": "==", "left": {"payload": {"protocol": "ip", "field": "daddr"}}, "right": "@protected4"}}, {"accept": null}]}}`,
+		"oifname accept": `{"rule": {"family": "inet", "table": "leakguard", "chain": "output", "expr": [` +
+			`{"match": {"op": "==", "left": {"meta": {"key": "oifname"}}, "right": "eth0"}}, {"counter": {"packets": 0, "bytes": 0}}, {"accept": null}]}}`,
+	}
+	for name, accept := range accepts {
+		for _, vpn := range []string{"wg0", ""} {
+			// Inserted first, so it runs before every reject rule.
+			out := strings.Replace(listing(vpn, elems4, elems6, true), chain, chain+", "+accept, 1)
+			const want = "chain output has 1 unexpected rules"
+			fw := Firewall{Runner: &fakeRunner{outputs: map[string]string{listCmd: out}}, Check: refuse}
+			if err := fw.Verify(vpn, services); err == nil || !strings.Contains(err.Error(), want) {
+				t.Errorf("%s, vpn %q: Verify() = %v, want %q", name, vpn, err, want)
+			}
+			if err := fw.Apply(vpn, services); err == nil || !strings.Contains(err.Error(), want) {
+				t.Errorf("%s, vpn %q: Apply() = %v, want %q", name, vpn, err, want)
+			}
+			if _, err := fw.BlockCount(); err == nil || !strings.Contains(err.Error(), want) {
+				t.Errorf("%s, vpn %q: BlockCount() = %v, want %q", name, vpn, err, want)
+			}
+		}
+	}
+}
+
+// nft 1.0.x (Debian 12, Ubuntu 22.04 and 24.04) prints "meta l4proto tcp"
+// as the protocol number 6; nft 1.1 prints "tcp". Both are leakguard's
+// rules. Any other number (17 is UDP) is not.
+func TestVerifyReadsTheProtocolNumberOfOlderNft(t *testing.T) {
+	const tcpName = `"left": {"meta": {"key": "l4proto"}}, "right": "tcp"}`
+	for _, vpn := range []string{"wg0", ""} {
+		old := strings.ReplaceAll(listing(vpn, elems4, elems6, true, 3, 1, 5, 2), tcpName, `"left": {"meta": {"key": "l4proto"}}, "right": 6}`)
+		if !strings.Contains(old, `"right": 6}`) {
+			t.Fatal("listing has no l4proto match to rewrite")
+		}
+		fw := Firewall{Runner: &fakeRunner{outputs: map[string]string{listCmd: old}}, Check: refuse}
+		if err := fw.Verify(vpn, services); err != nil {
+			t.Errorf("Verify(%q) with l4proto 6 = %v", vpn, err)
+		}
+		if n, err := fw.BlockCount(); n != 11 || err != nil {
+			t.Errorf("BlockCount(%q) with l4proto 6 = %d, %v", vpn, n, err)
+		}
+		udp := strings.ReplaceAll(old, `"right": 6}`, `"right": 17}`)
+		fw = Firewall{Runner: &fakeRunner{outputs: map[string]string{listCmd: udp}}, Check: refuse}
+		if err := fw.Verify(vpn, services); err == nil || !strings.Contains(err.Error(), "chain output has 2 unexpected rules") {
+			t.Errorf("Verify(%q) with l4proto 17 = %v, want unexpected rules", vpn, err)
+		}
+	}
+}
