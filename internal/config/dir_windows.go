@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -19,13 +20,14 @@ import (
 // without the generic mapping the higher-level calls do.
 const dataDirSDDL = "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FRFX;;;BU)"
 
-// PrepareDir makes dir the data directory that only SYSTEM and
+// prepareDir makes dir the data directory that only SYSTEM and
 // Administrators can write, whoever created it first (see
 // prepareDataDir): a junction is removed and a real directory made, a
 // directory a user created is taken over, and every entry in it someone
-// else could write, or a link, is removed. It fails when that cannot be
-// done: nothing is saved then.
-func PrepareDir(dir string) error { return prepareDataDir(winFS{}, dir) }
+// else could write, or a link, is removed. A directory in use is waited
+// for about 2 s, never removed. It fails when that cannot be done:
+// nothing is saved then.
+func prepareDir(dir string) error { return prepareDataDir(winFS{}, dir) }
 
 // SecureWindowsPath gives the directory at path to the Administrators
 // group with the protected ACL of the data directory, without following a
@@ -205,6 +207,14 @@ func (winFS) mkdir(dir string) error {
 // remove deletes the entry: DeleteFile, then RemoveDirectory, which
 // removes a junction itself, never what it points to.
 func (winFS) remove(path string) error { return os.Remove(path) }
+
+// inUse reports a sharing or lock violation: another handle, such as a
+// rename into the directory, keeps the open out for now.
+func (winFS) inUse(err error) bool {
+	return errors.Is(err, windows.ERROR_SHARING_VIOLATION) || errors.Is(err, windows.ERROR_LOCK_VIOLATION)
+}
+
+func (winFS) sleep(d time.Duration) { time.Sleep(d) }
 
 type winDir struct {
 	h    windows.Handle

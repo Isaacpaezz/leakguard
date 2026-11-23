@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 
 	"github.com/Isaacpaezz/leakguard/internal/catalog"
 )
@@ -138,16 +139,48 @@ func readTrusted(path string) ([]byte, error) {
 	return io.ReadAll(f)
 }
 
+// dataDirMu serializes this process's writers of the data directory. On
+// Windows PrepareDir opens the directory keeping writers out while it
+// checks it, and a rename into the directory opens it for adding a file,
+// so two writers of one process (a pause saved while the daemon saves its
+// stats) would refuse each other with a sharing violation.
+var dataDirMu sync.Mutex
+
+// WithDataDirLock runs fn while no other writer of this process changes the
+// data directory: Save, PrepareDir and other WithDataDirLock calls wait.
+// The daemon saves its session stats through it. fn must not call Save,
+// PrepareDir or WithDataDirLock.
+func WithDataDirLock(fn func() error) error {
+	dataDirMu.Lock()
+	defer dataDirMu.Unlock()
+	return fn()
+}
+
+// PrepareDir makes dir, the data directory, ready for files. On Windows
+// only SYSTEM and Administrators can write it afterwards, whoever created
+// it first: a junction is removed and a real directory made, a directory a
+// user created is taken over, every entry in it someone else could write,
+// or a link, is removed, and a directory in use is waited for about 2 s,
+// never removed. It fails when that cannot be done: nothing is saved then.
+// Elsewhere it creates dir, readable by everyone, when it is missing. It
+// holds the lock of WithDataDirLock.
+func PrepareDir(dir string) error {
+	return WithDataDirLock(func() error { return prepareDir(dir) })
+}
+
 // Save writes the configuration atomically, readable by everyone and writable
 // only by its owner. The directory is made by PrepareDir: on Windows only
 // SYSTEM and Administrators can write it, and the new file replaces
-// whatever had the name (a file a user planted included) by a rename.
+// whatever had the name (a file a user planted included) by a rename. It
+// holds the lock of WithDataDirLock throughout.
 func Save(path string, c Config) error {
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err
 	}
-	if err := PrepareDir(filepath.Dir(path)); err != nil {
+	dataDirMu.Lock()
+	defer dataDirMu.Unlock()
+	if err := prepareDir(filepath.Dir(path)); err != nil {
 		return err
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".config-*.json")

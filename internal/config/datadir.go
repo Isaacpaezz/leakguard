@@ -5,12 +5,41 @@ import (
 	"fmt"
 	"io/fs"
 	"path/filepath"
+	"time"
 )
 
 // ErrUnsafePath means a file or directory leakguard's SYSTEM daemon would
 // trust can be written by someone other than SYSTEM and Administrators,
 // or is a link to somewhere else. Windows only.
 var ErrUnsafePath = errors.New("only SYSTEM and Administrators may write it")
+
+// errInUse means an entry of the data directory stayed in use by another
+// handle whose sharing mode keeps us out (ERROR_SHARING_VIOLATION or
+// ERROR_LOCK_VIOLATION) for the whole retry window.
+var errInUse = errors.New("is in use by another program; try again in a moment")
+
+// inUseDelays are the waits before each new attempt to open an entry that
+// is in use: about 1.9 s in all. Being in use is never a reason to remove
+// anything: it is usually leakguard itself, or another administrator's
+// leakguard, writing a file into the directory.
+var inUseDelays = []time.Duration{
+	10 * time.Millisecond, 20 * time.Millisecond, 40 * time.Millisecond, 80 * time.Millisecond, 160 * time.Millisecond,
+	320 * time.Millisecond, 320 * time.Millisecond, 320 * time.Millisecond, 320 * time.Millisecond, 320 * time.Millisecond,
+}
+
+// whileInUse runs op, and runs it again after each of inUseDelays while it
+// fails because the entry is in use. It returns op's last error.
+func whileInUse(fsys dataFS, op func() error) error {
+	err := op()
+	for _, d := range inUseDelays {
+		if err == nil || !fsys.inUse(err) {
+			return err
+		}
+		fsys.sleep(d)
+		err = op()
+	}
+	return err
+}
 
 // Trusted owners and writers (SIDs): SYSTEM and BUILTIN\Administrators.
 const (
@@ -124,6 +153,11 @@ type dataFS interface {
 	mkdir(dir string) error
 	// remove deletes the entry itself, never what a reparse point names.
 	remove(path string) error
+	// inUse reports whether err says another handle's sharing mode kept
+	// the open out (ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION).
+	inUse(err error) bool
+	// sleep waits d before the next attempt.
+	sleep(d time.Duration)
 }
 
 // dataDir is the open data directory. While it is open nobody else can
@@ -151,6 +185,12 @@ type dataDir interface {
 //     else, or unreadable) is removed, so the daemon never reads a config,
 //     stats or log someone else planted.
 //
+// The directory or an entry in use (another handle's sharing mode keeps
+// us out, often leakguard's own rename into the directory) is opened
+// again for about 2 s, never removed; when it stays in use PrepareDir
+// fails with errInUse, removing nothing more. So a directory someone holds
+// open for writing is still refused.
+//
 // It fails, removing nothing, when the directory cannot be secured, and
 // fails when an unsafe entry cannot be removed.
 func prepareDataDir(fsys dataFS, dir string) error {
@@ -175,9 +215,16 @@ func prepareDataDir(fsys dataFS, dir string) error {
 	}
 	for _, n := range names {
 		p := filepath.Join(dir, n)
-		f, err := fsys.facts(p)
+		var f secFacts
+		err := whileInUse(fsys, func() (err error) {
+			f, err = fsys.facts(p)
+			return err
+		})
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
+		}
+		if err != nil && fsys.inUse(err) {
+			return fmt.Errorf("cannot check %s: it %w (%w)", p, errInUse, err)
 		}
 		if err == nil && unsafeEntry(p, f, f.dir && !f.reparse) == nil {
 			continue
@@ -191,15 +238,19 @@ func prepareDataDir(fsys dataFS, dir string) error {
 
 // openRealDir opens dir, creating it when missing. Whatever else holds
 // the name (a junction, a link, a file, or a directory that cannot be
-// opened) is removed, when it can be, and a real directory made instead.
+// opened for a reason other than being in use) is removed, when it can be,
+// and a real directory made instead. A directory in use is waited for,
+// never removed.
 func openRealDir(fsys dataFS, dir string) (dataDir, error) {
-	d, err := fsys.openDir(dir)
+	d, err := openDirWaiting(fsys, dir)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		if err := fsys.mkdir(dir); err != nil {
 			return nil, err
 		}
-		return fsys.openDir(dir)
+		return openDirWaiting(fsys, dir)
+	case errors.Is(err, errInUse):
+		return nil, err
 	case err != nil:
 		if rerr := fsys.remove(dir); rerr != nil {
 			return nil, fmt.Errorf("cannot open %s: %v; it cannot be removed either: %w", dir, err, rerr)
@@ -217,5 +268,19 @@ func openRealDir(fsys dataFS, dir string) (dataDir, error) {
 	if err := fsys.mkdir(dir); err != nil {
 		return nil, err
 	}
-	return fsys.openDir(dir)
+	return openDirWaiting(fsys, dir)
+}
+
+// openDirWaiting opens dir, waiting while it is in use; when it stays in
+// use the error wraps errInUse and the last open error.
+func openDirWaiting(fsys dataFS, dir string) (dataDir, error) {
+	var d dataDir
+	err := whileInUse(fsys, func() (err error) {
+		d, err = fsys.openDir(dir)
+		return err
+	})
+	if err != nil && fsys.inUse(err) {
+		return nil, fmt.Errorf("cannot open %s: the folder %w (%w)", dir, errInUse, err)
+	}
+	return d, err
 }

@@ -159,7 +159,10 @@ func (d *daemonStats) save(force bool) {
 	if d.c.env.SaveStats != nil {
 		save = d.c.env.SaveStats
 	}
-	err := save(d.path, st)
+	// Never while this process saves the configuration: on Windows both
+	// write into %ProgramData%\leakguard, and a rename into it while
+	// config.PrepareDir checks it fails with a sharing violation.
+	err := config.WithDataDirLock(func() error { return save(d.path, st) })
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if err == nil {

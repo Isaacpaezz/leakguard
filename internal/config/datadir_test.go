@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 const (
@@ -119,13 +120,42 @@ type fakeDataFS struct {
 	failRemove map[string]error
 	failMkdir  error
 	failSecure error
+	// busyOpen and busyFacts are how many more opens, or facts, of a
+	// path fail with errFakeInUse (a sharing violation); -1: every one.
+	busyOpen  map[string]int
+	busyFacts map[string]int
+	// slept is the total of the waits between attempts.
+	slept time.Duration
 	// secured is what secure turns the directory into.
 	secured secFacts
 	calls   []string
 }
 
+// errFakeInUse is the fake's ERROR_SHARING_VIOLATION.
+var errFakeInUse = errors.New("The process cannot access the file because it is being used by another process.")
+
 func newFakeDataFS(entries map[string]secFacts) *fakeDataFS {
-	return &fakeDataFS{entries: entries, unreadable: map[string]bool{}, failOpen: map[string]error{}, failRemove: map[string]error{}, secured: trustedDir()}
+	return &fakeDataFS{entries: entries, unreadable: map[string]bool{}, failOpen: map[string]error{}, failRemove: map[string]error{},
+		busyOpen: map[string]int{}, busyFacts: map[string]int{}, secured: trustedDir()}
+}
+
+// busy reports whether this use of path fails as in use, counting it.
+func busy(left map[string]int, path string) bool {
+	switch n := left[path]; {
+	case n < 0:
+		return true
+	case n > 0:
+		left[path] = n - 1
+		return true
+	}
+	return false
+}
+
+func (f *fakeDataFS) inUse(err error) bool { return errors.Is(err, errFakeInUse) }
+
+func (f *fakeDataFS) sleep(d time.Duration) {
+	f.log("sleep %v", d)
+	f.slept += d
 }
 
 func (f *fakeDataFS) log(format string, a ...any) {
@@ -137,6 +167,9 @@ func (f *fakeDataFS) openDir(dir string) (dataDir, error) {
 	if err := f.failOpen[dir]; err != nil {
 		return nil, err
 	}
+	if busy(f.busyOpen, dir) {
+		return nil, &fs.PathError{Op: "open", Path: dir, Err: errFakeInUse}
+	}
 	if _, ok := f.entries[dir]; !ok {
 		return nil, &fs.PathError{Op: "open", Path: dir, Err: fs.ErrNotExist}
 	}
@@ -146,6 +179,10 @@ func (f *fakeDataFS) openDir(dir string) (dataDir, error) {
 func (f *fakeDataFS) facts(path string) (secFacts, error) {
 	if f.unreadable[path] {
 		return secFacts{}, errors.New("Access is denied.")
+	}
+	if busy(f.busyFacts, path) {
+		f.log("facts %s: in use", path)
+		return secFacts{}, &fs.PathError{Op: "open", Path: path, Err: errFakeInUse}
 	}
 	e, ok := f.entries[path]
 	if !ok {
@@ -339,10 +376,10 @@ func TestPrepareDataDirFailsWhenTheDirectoryStaysUnsafe(t *testing.T) {
 	}
 }
 
-// A directory that cannot be opened (held open for writing by someone
-// else, or denying SYSTEM) is removed when it can be, else refused.
+// A directory that cannot be opened for a reason other than being in use
+// (one denying SYSTEM) is removed when it can be, else refused.
 func TestPrepareDataDirWhenTheDirectoryCannotBeOpened(t *testing.T) {
-	held := errors.New("The process cannot access the file because it is being used by another process.")
+	held := errors.New("Access is denied.")
 	f := newFakeDataFS(map[string]secFacts{dataDirPath: userDir()})
 	f.failOpen[dataDirPath] = held
 	f.failRemove[dataDirPath] = errors.New("The directory is not empty.")
@@ -362,6 +399,93 @@ func TestPrepareDataDirWhenTheDirectoryCannotBeOpened(t *testing.T) {
 	wantCalls := strings.ReplaceAll("openDir {D} | remove {D} | mkdir {D} | openDir {D} | secure {D} | close {D}", "{D}", dataDirPath)
 	if got := f.callsString(); got != wantCalls {
 		t.Fatalf("calls = %s\nwant    %s", got, wantCalls)
+	}
+}
+
+// entriesOf lists the paths f holds, sorted.
+func entriesOf(f *fakeDataFS) string {
+	var left []string
+	for p := range f.entries {
+		left = append(left, p)
+	}
+	sort.Strings(left)
+	return strings.Join(left, " ")
+}
+
+// T14d: a directory in use (a sharing violation: another handle, often
+// the daemon's own rename into it, keeps writers out) is opened again
+// after growing waits, never removed; once free it is prepared as usual
+// and the saved files stay.
+func TestPrepareDataDirWaitsForADirectoryInUse(t *testing.T) {
+	configPath := filepath.Join(dataDirPath, "config.json")
+	f := newFakeDataFS(map[string]secFacts{dataDirPath: trustedDir(), configPath: trustedFile()})
+	f.busyOpen[dataDirPath] = 3
+	if err := prepareDataDir(f, dataDirPath); err != nil {
+		t.Fatalf("prepareDataDir() = %v", err)
+	}
+	want := strings.ReplaceAll("openDir {D} | sleep 10ms | openDir {D} | sleep 20ms | openDir {D} | sleep 40ms | openDir {D} | secure {D} | close {D}", "{D}", dataDirPath)
+	if got := f.callsString(); got != want {
+		t.Fatalf("calls = %s\nwant    %s", got, want)
+	}
+	if got, want := entriesOf(f), dataDirPath+" "+configPath; got != want {
+		t.Fatalf("entries = %s\nwant      %s", got, want)
+	}
+}
+
+// T14d: a directory that stays in use for about 2 s is refused with an
+// error that says so; nothing is removed or made.
+func TestPrepareDataDirRefusesADirectoryStillInUse(t *testing.T) {
+	configPath := filepath.Join(dataDirPath, "config.json")
+	f := newFakeDataFS(map[string]secFacts{dataDirPath: trustedDir(), configPath: trustedFile()})
+	f.busyOpen[dataDirPath] = -1
+	err := prepareDataDir(f, dataDirPath)
+	want := "cannot open " + dataDirPath + ": the folder is in use by another program; try again in a moment (open " + dataDirPath + ": " + errFakeInUse.Error() + ")"
+	if err == nil || err.Error() != want || !errors.Is(err, errInUse) || !errors.Is(err, errFakeInUse) {
+		t.Fatalf("prepareDataDir() = %v\nwant %s (wrapping errInUse and the open error)", err, want)
+	}
+	if got := f.callsString(); strings.Contains(got, "remove") || strings.Contains(got, "mkdir") || strings.Contains(got, "secure") {
+		t.Fatalf("calls = %s, want only opens and waits", got)
+	}
+	if n := strings.Count(f.callsString(), "openDir"); n != 11 {
+		t.Fatalf("opens = %d, want 11: %s", n, f.callsString())
+	}
+	if f.slept < 1500*time.Millisecond || f.slept > 2500*time.Millisecond {
+		t.Fatalf("waited %v in all, want about 2 s", f.slept)
+	}
+	if got, want := entriesOf(f), dataDirPath+" "+configPath; got != want {
+		t.Fatalf("entries = %s\nwant      %s", got, want)
+	}
+}
+
+// T14d: an entry in use while it is checked is looked at again, never
+// removed for it; one still in use refuses, removing nothing.
+func TestPrepareDataDirWaitsForAnEntryInUse(t *testing.T) {
+	statsPath := filepath.Join(dataDirPath, "stats.json")
+	f := newFakeDataFS(map[string]secFacts{dataDirPath: trustedDir(), statsPath: trustedFile()})
+	f.busyFacts[statsPath] = 2
+	if err := prepareDataDir(f, dataDirPath); err != nil {
+		t.Fatalf("prepareDataDir() = %v", err)
+	}
+	want := strings.ReplaceAll("openDir {D} | secure {D} | facts {S}: in use | sleep 10ms | facts {S}: in use | sleep 20ms | close {D}", "{D}", dataDirPath)
+	if got := f.callsString(); got != strings.ReplaceAll(want, "{S}", statsPath) {
+		t.Fatalf("calls = %s\nwant    %s", got, strings.ReplaceAll(want, "{S}", statsPath))
+	}
+	if got, want := entriesOf(f), dataDirPath+" "+statsPath; got != want {
+		t.Fatalf("entries = %s\nwant      %s", got, want)
+	}
+
+	f = newFakeDataFS(map[string]secFacts{dataDirPath: trustedDir(), statsPath: trustedFile()})
+	f.busyFacts[statsPath] = -1
+	err := prepareDataDir(f, dataDirPath)
+	wantErr := "cannot check " + statsPath + ": it is in use by another program; try again in a moment (open " + statsPath + ": " + errFakeInUse.Error() + ")"
+	if err == nil || err.Error() != wantErr || !errors.Is(err, errInUse) {
+		t.Fatalf("prepareDataDir() = %v\nwant %s", err, wantErr)
+	}
+	if strings.Contains(f.callsString(), "remove") {
+		t.Fatalf("removed an entry in use: %s", f.callsString())
+	}
+	if got, want := entriesOf(f), dataDirPath+" "+statsPath; got != want {
+		t.Fatalf("entries = %s\nwant      %s", got, want)
 	}
 }
 

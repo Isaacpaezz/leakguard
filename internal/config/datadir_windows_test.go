@@ -10,6 +10,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/windows"
 )
@@ -283,6 +284,74 @@ func TestPrepareDirRefusesADirectoryHeldOpenForWriting(t *testing.T) {
 	t.Logf("refused: %v", err)
 	if err := PrepareDir(dir); err != nil {
 		t.Fatalf("PrepareDir() after the writer closed = %v", err)
+	}
+	checkSecured(t, dir)
+}
+
+// fileID identifies the directory or file at path itself (volume and
+// file index), so a removed and remade one shows up as a different ID.
+func fileID(t *testing.T, path string) [3]uint32 {
+	t.Helper()
+	h, err := openNoFollow(path, windows.FILE_READ_ATTRIBUTES, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE)
+	if err != nil {
+		t.Fatalf("open %s: %v", path, err)
+	}
+	defer windows.CloseHandle(h)
+	var info windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(h, &info); err != nil {
+		t.Fatal(err)
+	}
+	return [3]uint32{info.VolumeSerialNumber, info.FileIndexHigh, info.FileIndexLow}
+}
+
+// T14d: a directory held open for writing only for a moment (as the
+// daemon's own rename of the stats into it does) is waited for: PrepareDir
+// succeeds once it is released within the retry window, and never removes
+// the directory or the saved configuration.
+func TestPrepareDirWaitsForADirectoryHeldOpenBriefly(t *testing.T) {
+	needElevated(t)
+	dir := filepath.Join(t.TempDir(), "leakguard")
+	path := filepath.Join(dir, "config.json")
+	want := Config{VPNInterface: "WireGuard Tunnel", Services: []string{"anthropic"}}
+	if err := Save(path, want); err != nil {
+		t.Fatalf("Save() = %v", err)
+	}
+	dirID, configID := fileID(t, dir), fileID(t, path)
+	p, err := windows.UTF16PtrFromString(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := windows.CreateFile(p, windows.FILE_WRITE_DATA /* FILE_ADD_FILE */, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+		nil, windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
+	if err != nil {
+		t.Fatalf("CreateFile() = %v", err)
+	}
+	const hold = 300 * time.Millisecond
+	released := make(chan struct{})
+	go func() {
+		time.Sleep(hold)
+		windows.CloseHandle(h)
+		close(released)
+	}()
+	start := time.Now()
+	err = PrepareDir(dir)
+	elapsed := time.Since(start)
+	<-released
+	if err != nil {
+		t.Fatalf("PrepareDir() with the directory released after %v = %v", hold, err)
+	}
+	if elapsed < hold-50*time.Millisecond {
+		t.Fatalf("PrepareDir() returned after %v, before the writer released the directory", elapsed)
+	}
+	t.Logf("PrepareDir() waited %v", elapsed)
+	if got := fileID(t, dir); got != dirID {
+		t.Fatalf("the directory was removed and made again (ID %v, was %v)", got, dirID)
+	}
+	if got := fileID(t, path); got != configID {
+		t.Fatalf("config.json was removed or replaced (ID %v, was %v)", got, configID)
+	}
+	if got, err := Load(path); err != nil || got.VPNInterface != want.VPNInterface {
+		t.Fatalf("Load() = %+v, %v; want the saved configuration", got, err)
 	}
 	checkSecured(t, dir)
 }

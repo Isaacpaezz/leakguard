@@ -200,6 +200,57 @@ func TestServeLoadsTheRulesWithCorruptStats(t *testing.T) {
 	}
 }
 
+// T14d: the daemon's own writers of the data directory never run at once.
+// On Windows PrepareDir keeps writers out of the directory while it checks
+// it, and the stats rename into it is a writer, so a pause saved during a
+// stats save failed with a sharing violation. A pause waits for the stats
+// save in flight, then is saved.
+func TestServeNeverSavesTheConfigDuringAStatsSave(t *testing.T) {
+	h, _ := statefulHarness(t)
+	h.env.SampleEvery = time.Millisecond
+	release := make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	started := make(chan struct{}, 1)
+	h.env.SaveStats = func(path string, st stats.State) error {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-release
+		return stats.Save(path, st)
+	}
+	s := startServe(t, h)
+	t.Cleanup(unblock) // runs before the stop that startServe registered
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no stats save started")
+	}
+	paused := make(chan error, 1)
+	go func() {
+		_, err := s.client.Pause()
+		paused <- err
+	}()
+	select {
+	case err := <-paused:
+		t.Fatalf("Pause() = %v returned while a stats save was writing the data directory", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	unblock()
+	select {
+	case err := <-paused:
+		if err != nil {
+			t.Fatalf("Pause() after the stats save = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Pause() never returned after the stats save")
+	}
+	if got, err := h.loadConfig(t); err != nil || !got.Paused {
+		t.Fatalf("saved config = %+v, %v; want paused", got, err)
+	}
+}
+
 // S5b: a pause whose config save fails flushed the counter; the reload that
 // follows never counts a block twice.
 func TestServePauseWithAFailedSaveNeverDoubleCounts(t *testing.T) {
