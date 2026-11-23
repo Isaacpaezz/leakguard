@@ -1,0 +1,11 @@
+# Installed as /etc/logrotate.d/leakguard. The background service logs one
+# line per check to /var/log/leakguard.log; systemd keeps the file open, so
+# it is copied and truncated instead of moved.
+/var/log/leakguard.log {
+	weekly
+	rotate 4
+	compress
+	missingok
+	notifempty
+	copytruncate
+}

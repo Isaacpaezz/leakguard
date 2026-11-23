@@ -1,0 +1,22 @@
+#!/bin/sh
+# Runs after dpkg installs or upgrades the leakguard package. When the
+# background service is installed (a previous "enable"), it switches the
+# service to the new binary: "leakguard reinstall-service" copies
+# /usr/bin/leakguard to its root-owned place and restarts the service. It
+# never changes the saved choice and never removes the rules: the old
+# service keeps them loaded until the new one loads them again at start.
+#
+# A failure here never fails the package operation: the error is printed
+# with what to run, and the old copy keeps protecting until then.
+set -u
+
+case "${1:-}" in
+configure)
+	if [ -e /etc/systemd/system/leakguard.service ] && [ -x /usr/bin/leakguard ]; then
+		/usr/bin/leakguard reinstall-service ||
+			echo "leakguard: warning: the background service still runs the previous version; update it with: sudo leakguard enable" >&2
+	fi
+	;;
+esac
+
+exit 0

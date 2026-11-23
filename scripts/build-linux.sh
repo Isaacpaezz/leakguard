@@ -98,7 +98,12 @@ for arch in amd64 arm64; do
 		install -D -m 0644 "$work/icon.iconset/$src" \
 			"$root/usr/share/icons/hicolor/${size}x${size}/apps/leakguard.png"
 	done
-	install -D -m 0755 "$pkg/prerm" "$root/DEBIAN/prerm"
+	install -D -m 0644 "$pkg/logrotate" "$root/etc/logrotate.d/leakguard"
+	for script in prerm postinst postrm; do
+		install -D -m 0755 "$pkg/$script" "$root/DEBIAN/$script"
+	done
+	# Every file under /etc must be a conffile.
+	install -D -m 0644 "$pkg/conffiles" "$root/DEBIAN/conffiles"
 	size=$(du -sk --exclude=DEBIAN "$root" | cut -f1)
 	sed -e "s/@VERSION@/$debversion/" -e "s/@ARCH@/$arch/" -e "s/@INSTALLED_SIZE@/$size/" \
 		"$pkg/control" >"$root/DEBIAN/control"

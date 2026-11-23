@@ -1,0 +1,16 @@
+#!/bin/sh
+# Runs after dpkg removes the leakguard package. Only on purge
+# ("apt purge leakguard") it deletes what leakguard keeps outside the
+# package: the saved choice, the session stats and the logs. A plain
+# remove keeps them for a later install. prerm has already turned the
+# protection off.
+set -u
+
+case "${1:-}" in
+purge)
+	rm -rf /etc/leakguard /var/lib/leakguard
+	rm -f /var/log/leakguard.log /var/log/leakguard.log.*
+	;;
+esac
+
+exit 0

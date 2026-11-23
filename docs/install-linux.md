@@ -105,6 +105,19 @@ sudo leakguard disable                        # quita la protección
 Cambia `wg0` por el nombre de tu VPN. `leakguard services` lista lo que
 puedes proteger.
 
+## Actualizar
+
+Descarga el `.deb` nuevo e instálalo igual que la primera vez
+(`sudo apt install ./leakguard_VERSIÓN_amd64.deb`). Si la protección está
+activa, el paquete reinicia el servicio de fondo con la versión nueva y
+conserva lo que elegiste; las reglas siguen cargadas durante la
+actualización, así que nada se escapa. Si no puede reiniciarlo, lo dice y la
+versión anterior sigue protegiendo; ejecuta `sudo leakguard enable` para
+terminar.
+
+El registro `/var/log/leakguard.log` se rota cada semana y se guardan las
+últimas 4 semanas.
+
 ## Desinstalar
 
 1. En el menú del escudo, elige **Desinstalar leakguard…** y confirma.
@@ -115,6 +128,11 @@ puedes proteger.
 
 Si cancelas, no se cambia nada. Si te saltas el paso 1, `sudo apt remove
 leakguard` también quita las reglas y el servicio de fondo.
+
+`sudo apt remove` guarda lo que elegiste por si vuelves a instalar
+leakguard. Para borrar también eso, las estadísticas y el registro
+(`/etc/leakguard`, `/var/lib/leakguard` y `/var/log/leakguard.log`), usa
+`sudo apt purge leakguard`.
 
 Con el `.tar.gz`, después de los pasos 1 y 2 borra los archivos que copiaste:
 `sudo rm /usr/bin/leakguard /usr/bin/leakguard-tray /usr/share/applications/leakguard.desktop /usr/share/icons/hicolor/256x256/apps/leakguard.png`.
@@ -223,6 +241,18 @@ sudo leakguard disable                        # turn the protection off
 Replace `wg0` with your VPN's name. `leakguard services` lists what you can
 protect.
 
+## Update
+
+Download the new `.deb` and install it the same way as the first time
+(`sudo apt install ./leakguard_VERSION_amd64.deb`). If the protection is
+on, the package restarts the background service with the new version and
+keeps your choices; the rules stay loaded during the update, so nothing
+leaks. If it cannot restart it, it says so and the previous version keeps
+protecting; run `sudo leakguard enable` to finish.
+
+The log `/var/log/leakguard.log` is rotated every week, keeping the last 4
+weeks.
+
 ## Uninstall
 
 1. In the shield menu, choose **Uninstall leakguard…** and confirm.
@@ -232,6 +262,11 @@ protect.
 
 If you cancel, nothing changes. If you skip step 1, `sudo apt remove
 leakguard` also removes the rules and the background service.
+
+`sudo apt remove` keeps your choices in case you install leakguard again.
+To delete them too, with the stats and the log (`/etc/leakguard`,
+`/var/lib/leakguard` and `/var/log/leakguard.log`), use
+`sudo apt purge leakguard`.
 
 With the `.tar.gz`, after steps 1 and 2 delete the files you copied:
 `sudo rm /usr/bin/leakguard /usr/bin/leakguard-tray /usr/share/applications/leakguard.desktop /usr/share/icons/hicolor/256x256/apps/leakguard.png`.

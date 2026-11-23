@@ -201,6 +201,8 @@ var commands = []command{
 	{"test", (*cli).test},
 	{"serve", (*cli).serve},
 	{"version", (*cli).version},
+	// Internal, not in the help: the Linux package runs it after an upgrade.
+	{"reinstall-service", (*cli).reinstallService},
 }
 
 type cli struct {
