@@ -4,13 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"net"
 	"syscall"
 	"time"
 )
 
-// ErrDaemonUnavailable means nothing listens on the socket: the daemon is not
-// installed or not running.
+// ErrDaemonUnavailable means nothing listens on the socket or the pipe: the
+// daemon is not installed or not running.
 var ErrDaemonUnavailable = errors.New("the leakguard background service is not running")
 
 // ErrNotAuthorized means the daemon refused the peer: it is not root or an
@@ -19,7 +18,8 @@ var ErrNotAuthorized = errors.New("not authorized")
 
 // Client talks to the daemon.
 type Client struct {
-	// Path is the socket path; empty means DefaultPath.
+	// Path is the socket path (the pipe name on Windows); empty means
+	// DefaultPath.
 	Path string
 }
 
@@ -45,7 +45,7 @@ func (c Client) do(req Request) (Status, error) {
 	if path == "" {
 		path = DefaultPath
 	}
-	conn, err := net.DialTimeout("unix", path, DialTimeout)
+	conn, err := dial(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ECONNREFUSED) {
 			return Status{}, fmt.Errorf("%w (%v)", ErrDaemonUnavailable, err)
