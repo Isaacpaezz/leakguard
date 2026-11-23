@@ -4,22 +4,23 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/netip"
+	"sort"
 )
 
 // state is what "nft -j list table inet leakguard" reports.
 type state struct {
 	sets       map[string][]interval
 	rules      []rule
-	hooked     bool // the output-hook chain exists
-	unexpected int  // rules that are not leakguard reject rules
+	hooks      map[string]string // chain name -> hook
+	unexpected map[string]int    // chain name -> rules that are not leakguard reject rules
 }
 
-// rule is one reject rule: traffic to set, TCP only or not, exempt on oif
-// ("" exempts no interface).
+// rule is one reject rule of chain: traffic to set, TCP only or not, exempt
+// on oif ("" exempts no interface).
 type rule struct {
-	oif, set string
-	tcp      bool
-	packets  uint64
+	chain, oif, set string
+	tcp             bool
+	packets         uint64
 }
 
 func parseState(out string) (state, error) {
@@ -39,11 +40,11 @@ func parseState(out string) (state, error) {
 	if err := json.Unmarshal([]byte(out), &doc); err != nil {
 		return state{}, fmt.Errorf("cannot read the nftables rules: %v", err)
 	}
-	st := state{sets: map[string][]interval{}}
+	st := state{sets: map[string][]interval{}, hooks: map[string]string{}, unexpected: map[string]int{}}
 	for _, o := range doc.Nftables {
 		switch {
 		case o.Chain != nil:
-			st.hooked = st.hooked || (o.Chain.Name == Chain && o.Chain.Hook == "output")
+			st.hooks[o.Chain.Name] = o.Chain.Hook
 		case o.Set != nil:
 			var ivs []interval
 			for _, e := range o.Set.Elem {
@@ -55,10 +56,11 @@ func parseState(out string) (state, error) {
 			}
 			st.sets[o.Set.Name] = merge(ivs)
 		case o.Rule != nil:
-			if r, ok := parseRule(o.Rule.Expr); ok && o.Rule.Chain == Chain {
+			if r, ok := parseRule(o.Rule.Expr); ok && (o.Rule.Chain == Chain || o.Rule.Chain == ForwardChain) {
+				r.chain = o.Rule.Chain
 				st.rules = append(st.rules, r)
 			} else {
-				st.unexpected++
+				st.unexpected[o.Rule.Chain]++
 			}
 		}
 	}
@@ -180,24 +182,49 @@ func parseRule(exprs []map[string]json.RawMessage) (rule, bool) {
 }
 
 // allowed returns the one interface the reject rules exempt ("" for none),
-// or why the rules are not leakguard's.
+// or why the rules are not leakguard's: both chains must sit on their hooks
+// and hold every reject rule, all exempting the same interface, and no
+// chain of the table may hold anything else.
 func (st state) allowed() (string, error) {
-	if !st.hooked {
-		return "", fmt.Errorf("chain %s is not loaded", Chain)
+	for _, c := range chains {
+		if st.hooks[c.name] != c.hook {
+			return "", fmt.Errorf("chain %s is not loaded", c.name)
+		}
 	}
-	if st.unexpected > 0 {
-		return "", fmt.Errorf("chain %s has %d unexpected rules", Chain, st.unexpected)
+	// leakguard's chains first, then any other, by name.
+	names := make([]string, 0, len(st.unexpected))
+	for name := range st.unexpected {
+		names = append(names, name)
+	}
+	rank := func(name string) int {
+		for i, c := range chains {
+			if c.name == name {
+				return i
+			}
+		}
+		return len(chains)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		if ri, rj := rank(names[i]), rank(names[j]); ri != rj {
+			return ri < rj
+		}
+		return names[i] < names[j]
+	})
+	if len(names) > 0 {
+		return "", fmt.Errorf("chain %s has %d unexpected rules", names[0], st.unexpected[names[0]])
 	}
 	have := map[rule]bool{}
 	for _, r := range st.rules {
 		if r.oif != st.rules[0].oif {
 			return "", fmt.Errorf("reject rules allow different interfaces: %q and %q", st.rules[0].oif, r.oif)
 		}
-		have[rule{set: r.set, tcp: r.tcp}] = true
+		have[rule{chain: r.chain, set: r.set, tcp: r.tcp}] = true
 	}
-	for _, s := range []string{set4, set6} {
-		if !have[rule{set: s, tcp: true}] || !have[rule{set: s}] {
-			return "", fmt.Errorf("reject rules for %s are not loaded", s)
+	for _, c := range chains {
+		for _, s := range []string{set4, set6} {
+			if !have[rule{chain: c.name, set: s, tcp: true}] || !have[rule{chain: c.name, set: s}] {
+				return "", fmt.Errorf("reject rules for %s are not loaded in chain %s", s, c.name)
+			}
 		}
 	}
 	return st.rules[0].oif, nil

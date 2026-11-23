@@ -19,14 +19,23 @@ import (
 const (
 	// Table is the inet table that holds every leakguard rule.
 	Table = "leakguard"
-	// Chain is the output-hook chain that rejects protected traffic.
+	// Chain is the output-hook chain that rejects protected traffic this
+	// computer sends.
 	Chain = "output"
-	set4  = "protected4"
-	set6  = "protected6"
+	// ForwardChain is the forward-hook chain that rejects the same traffic
+	// when this computer routes it for others: containers (rootful Docker,
+	// Podman) and virtual machines behind NAT (libvirt). pf filters it on
+	// the way out on macOS; nftables needs its own hook.
+	ForwardChain = "forward"
+	set4         = "protected4"
+	set6         = "protected6"
 	// replace creates the table if needed and deletes it, so the next
 	// definition replaces any old copy in the same transaction.
 	replace = "table inet " + Table + " {}\ndelete table inet " + Table + "\n"
 )
+
+// chains are leakguard's base chains and their hooks, in script order.
+var chains = []struct{ name, hook string }{{Chain, "output"}, {ForwardChain, "forward"}}
 
 // Paths are where nft may live; it is never resolved through $PATH.
 var Paths = []string{"/usr/sbin/nft", "/sbin/nft", "/usr/bin/nft"}
@@ -94,8 +103,10 @@ func (f Firewall) refusal(vpn string) error {
 }
 
 // Script renders the table. Traffic to the services' ranges is rejected
-// unless it leaves on vpn; vpn "" rejects it on every interface. TCP gets a
-// reset and the rest an ICMP port unreachable, so connects fail at once with
+// unless it leaves on vpn; vpn "" rejects it on every interface. The output
+// and forward chains hold the same rules, so traffic this computer routes
+// for containers and virtual machines is held to them too. TCP gets a reset
+// and the rest an ICMP port unreachable, so connects fail at once with
 // "connection refused".
 func Script(vpn string, services []catalog.Service) (string, error) {
 	var cidrs []string
@@ -126,16 +137,19 @@ func Script(vpn string, services []catalog.Service) (string, error) {
 		}
 		b.WriteString("\t}\n")
 	}
-	fmt.Fprintf(&b, "\tchain %s {\n\t\ttype filter hook output priority filter; policy accept;\n", Chain)
 	oif := ""
 	if vpn != "" {
 		oif = fmt.Sprintf("oifname != %q ", vpn)
 	}
-	for _, m := range []string{"ip daddr @" + set4, "ip6 daddr @" + set6} {
-		fmt.Fprintf(&b, "\t\t%s%s meta l4proto tcp counter reject with tcp reset\n", oif, m)
-		fmt.Fprintf(&b, "\t\t%s%s counter reject with icmpx type port-unreachable\n", oif, m)
+	for _, c := range chains {
+		fmt.Fprintf(&b, "\tchain %s {\n\t\ttype filter hook %s priority filter; policy accept;\n", c.name, c.hook)
+		for _, m := range []string{"ip daddr @" + set4, "ip6 daddr @" + set6} {
+			fmt.Fprintf(&b, "\t\t%s%s meta l4proto tcp counter reject with tcp reset\n", oif, m)
+			fmt.Fprintf(&b, "\t\t%s%s counter reject with icmpx type port-unreachable\n", oif, m)
+		}
+		b.WriteString("\t}\n")
 	}
-	b.WriteString("\t}\n}\n")
+	b.WriteString("}\n")
 	return b.String(), nil
 }
 
@@ -186,9 +200,10 @@ func (f Firewall) Enabled() (bool, error) {
 var ErrNotLoaded = firewall.ErrNotLoaded
 
 // Verify checks that the loaded table is what a successful Apply(vpn,
-// services) loads: the sets hold exactly the services' ranges and every
-// reject rule exempts vpn only, and vpn is still accepted. An empty vpn
-// checks that the reject rules exempt no interface.
+// services) loads: the sets hold exactly the services' ranges, the output
+// and forward chains hold every reject rule and nothing else, every reject
+// rule exempts vpn only, and vpn is still accepted. An empty vpn checks
+// that the reject rules exempt no interface.
 func (f Firewall) Verify(vpn string, services []catalog.Service) error {
 	st, err := f.state()
 	if err != nil {
@@ -231,8 +246,8 @@ func (f Firewall) Verify(vpn string, services []catalog.Service) error {
 	return nil
 }
 
-// BlockCount sums the packet counters of the reject rules, which start at
-// zero on every load.
+// BlockCount sums the packet counters of the reject rules of both chains,
+// which start at zero on every load.
 func (f Firewall) BlockCount() (uint64, error) {
 	st, err := f.state()
 	if err != nil {
