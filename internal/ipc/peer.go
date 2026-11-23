@@ -49,11 +49,16 @@ func parseXucred(b []byte) (uid uint32, groups []uint32, err error) {
 // allowed reports whether a peer may talk to the daemon: root, or a member
 // of group admin.
 func allowed(uid uint32, groups []uint32) bool {
+	return allowedGID(uid, groups, AdminGID)
+}
+
+// allowedGID reports whether uid is root or groups contain admin.
+func allowedGID(uid uint32, groups []uint32, admin uint32) bool {
 	if uid == 0 {
 		return true
 	}
 	for _, g := range groups {
-		if g == AdminGID {
+		if g == admin {
 			return true
 		}
 	}
