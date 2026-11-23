@@ -14,8 +14,9 @@ import (
 	"github.com/Isaacpaezz/leakguard/internal/menubar"
 )
 
-// language follows the desktop session's locale (see menubar.EnvLang).
-func language() menubar.Lang { return menubar.EnvLang(os.Getenv) }
+// language follows the desktop session's locale (see menubar.EnvLang) and
+// reads the Linux wording.
+func language() menubar.Lang { return menubar.EnvLang(os.Getenv).ForOS("linux") }
 
 // linuxPlatform is the Linux tray app: zenity or kdialog dialogs, colored
 // icons, the systemd unit, pkexec for the administrator prompt and an XDG

@@ -6,13 +6,28 @@ import (
 )
 
 // Lang is the language of every user-facing string: the dialogs and the menu
-// follow the Mac's first preferred language.
+// follow the Mac's first preferred language, or the Linux session's locale.
+// A Lang made with ForOS("linux") also reads the Linux wording.
 type Lang string
 
 const (
 	Spanish Lang = "es"
 	English Lang = "en"
 )
+
+// linuxSuffix marks a Lang that reads the Linux wording (see ForOS).
+const linuxSuffix = "+linux"
+
+// ForOS returns l with the wording for the operating system goos: "linux"
+// reads linuxMessages where they exist, so no text names a Mac thing; any
+// other system reads the macOS wording.
+func (l Lang) ForOS(goos string) Lang {
+	base := Lang(strings.TrimSuffix(string(l), linuxSuffix))
+	if goos == "linux" {
+		return base + linuxSuffix
+	}
+	return base
+}
 
 // ParseLang returns the language for the output of
 // "defaults read -g AppleLanguages" (a list such as ("es-US", "en-US")) or
@@ -265,15 +280,36 @@ var messages = [msgCount]text{
 	msgErrNoDialogTool:            {"Instala zenity para ver las ventanas de leakguard", "Install zenity to see leakguard's windows"},
 }
 
+// linuxMessages replace the messages that name Mac things (the Mac, the
+// menu bar, Applications, the Trash) on Linux. The move to Applications and
+// quarantine messages have none: the Linux tray never shows them. On Linux
+// uninstalling from the tray keeps the program installed until the user
+// removes the package.
+var linuxMessages = map[Msg]text{
+	MsgMenuOpenAtLoginTip:     {"Abre este menú cada vez que inicias sesión; no pide contraseña", "Opens this menu every time you log in; no password needed"},
+	msgExplainNotSetUp:        {"leakguard no está configurado en esta computadora", "leakguard is not set up on this computer"},
+	msgExplainNotAuthorized:   {"Solo un administrador de esta computadora puede cambiar leakguard", "Only administrators can change leakguard"},
+	msgStep3Password:          {"Activar la protección.\n\nTu computadora te va a pedir tu contraseña de administrador. La necesitamos una sola vez, para instalar el servicio que bloquea %s si tu VPN se cae.", "Turn on the protection.\n\nYour computer will ask for your administrator password. We need it only this once, to install the background service that blocks %s if your VPN drops."},
+	msgDoneShield:             {"El escudo verde en la barra superior significa que estás protegido.", "A green shield in the top bar means you are protected."},
+	msgUninstallConfirm:       {"¿Quieres desinstalar leakguard?\n\nSe quitarán las reglas de protección, el servicio de fondo y la apertura al iniciar sesión. Los servicios que protegías volverán a usar tu conexión normal.\n\nEl programa sigue instalado: después puedes quitarlo con sudo apt remove leakguard. Tu computadora te va a pedir tu contraseña de administrador.", "Do you want to uninstall leakguard?\n\nThis removes the protection rules, the background service and the login item. The services you protected will use your normal connection again.\n\nThe program stays installed: afterwards you can remove it with sudo apt remove leakguard. Your computer will ask for your administrator password."},
+	msgUninstallCleanupFailed: {"leakguard se desinstaló, pero no se pudo quitar la apertura al iniciar sesión: %s\n\nPara quitar el programa, ejecuta: sudo apt remove leakguard", "leakguard was uninstalled, but the login item could not be removed: %s\n\nTo remove the program, run: sudo apt remove leakguard"},
+	msgUninstallDone:          {"leakguard se desinstaló. Para quitar el programa, ejecuta: sudo apt remove leakguard", "leakguard was uninstalled. To remove the program, run: sudo apt remove leakguard"},
+}
+
 // Text returns message m in language l, formatted with args when given.
 // Any language other than Spanish reads English.
 func (l Lang) Text(m Msg, args ...any) string {
 	if m < 0 || m >= msgCount {
 		return ""
 	}
-	s := messages[m].en
-	if l == Spanish {
-		s = messages[m].es
+	t := messages[m]
+	base, linux := strings.CutSuffix(string(l), linuxSuffix)
+	if v, ok := linuxMessages[m]; ok && linux {
+		t = v
+	}
+	s := t.en
+	if Lang(base) == Spanish {
+		s = t.es
 	}
 	if len(args) > 0 {
 		s = fmt.Sprintf(s, args...)
