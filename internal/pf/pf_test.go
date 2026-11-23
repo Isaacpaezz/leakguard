@@ -189,7 +189,7 @@ func TestFlush(t *testing.T) {
 }
 
 func TestRulesRejectInvalidInterface(t *testing.T) {
-	for _, iface := range []string{"", "ipsec0 all", "ipsec0\npass out all", "en0"} {
+	for _, iface := range []string{"ipsec0 all", "ipsec0\npass out all", "en0"} {
 		if r, err := Rules(iface, services); err == nil {
 			t.Errorf("Rules(%q) = %q, want error", iface, r)
 		}

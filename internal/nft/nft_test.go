@@ -154,7 +154,7 @@ func TestApplyLoadErrorIsReturned(t *testing.T) {
 
 // S7: a refused VPN interface loads rules that allow no interface.
 func TestApplyRefusedVPNBlocksEveryInterface(t *testing.T) {
-	for _, vpn := range []string{"eth0", `wg0" accept #`, ""} {
+	for _, vpn := range []string{"eth0", `wg0" accept #`} {
 		r := loaded("")
 		err := (Firewall{Runner: r, Check: refuse}).Apply(vpn, services)
 		if err == nil || !strings.Contains(err.Error(), "blocked on every interface") {
@@ -250,5 +250,36 @@ func TestBlockCountSumsTheRejectRules(t *testing.T) {
 	r.fail = map[string]error{listCmd: errMissing}
 	if _, err := (Firewall{Runner: r}).BlockCount(); !errors.Is(err, firewall.ErrNotLoaded) {
 		t.Fatalf("BlockCount(no table) = %v, want ErrNotLoaded", err)
+	}
+}
+
+// S7: an empty VPN means no interface may carry protected traffic. Apply("")
+// loads the block-all rules and verifies them; Verify("") accepts only them.
+func TestEmptyVPNBlocksEveryInterface(t *testing.T) {
+	r := loaded("")
+	if err := (Firewall{Runner: r, Check: refuse}).Apply("", services); err != nil {
+		t.Fatalf("Apply(\"\") = %v", err)
+	}
+	if got := strings.Join(r.calls, "|"); got != "-f -|"+listCmd {
+		t.Fatalf("calls = %s", got)
+	}
+	if strings.Contains(r.stdin[0], "oifname") || !strings.Contains(r.stdin[0], "ip6 daddr @protected6 counter reject") {
+		t.Fatalf("script = %q, want block-all rules", r.stdin[0])
+	}
+	if err := (Firewall{Runner: loaded(""), Check: refuse}).Verify("", services); err != nil {
+		t.Fatalf("Verify(\"\") = %v", err)
+	}
+	err := (Firewall{Runner: loaded("wg0"), Check: refuse}).Verify("", services)
+	if err == nil || !strings.Contains(err.Error(), `rules allow "wg0"; they should block protected services on every interface`) {
+		t.Fatalf("Verify(\"\") with wg0 allowed = %v", err)
+	}
+	missing := &fakeRunner{fail: map[string]error{listCmd: errMissing}}
+	if err := (Firewall{Runner: missing, Check: refuse}).Verify("", services); !errors.Is(err, firewall.ErrNotLoaded) {
+		t.Fatalf("Verify(\"\") without a table = %v, want ErrNotLoaded", err)
+	}
+	bad := loaded("")
+	bad.fail = map[string]error{"-f -": errors.New("nft -f -: Operation not permitted")}
+	if err := (Firewall{Runner: bad, Check: refuse}).Apply("", services); err == nil || !strings.Contains(err.Error(), "Operation not permitted") {
+		t.Fatalf("Apply(\"\") with a failed load = %v", err)
 	}
 }

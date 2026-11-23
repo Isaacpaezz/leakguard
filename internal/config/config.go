@@ -43,16 +43,23 @@ func ValidInterfaceName(name string) bool {
 // CheckVPNInterface reports why name cannot be used as the VPN interface.
 // The firewall backends call it too, so a bad name never reaches the rules.
 // macOS judges by name; Linux by what the kernel says about the interface;
-// Windows refuses every interface for now.
+// Windows refuses every interface for now. Every refusal wraps ErrVPNRefused.
 func CheckVPNInterface(name string) error {
 	return host.check(name)
 }
 
-// Validate checks the configuration against the service catalog.
+// Validate checks the configuration against the service catalog. A refused
+// VPN interface wraps ErrVPNRefused.
 func (c Config) Validate(services []catalog.Service) error {
 	if err := CheckVPNInterface(c.VPNInterface); err != nil {
 		return err
 	}
+	return c.ValidateServices(services)
+}
+
+// ValidateServices checks everything but the VPN interface: the chosen
+// services against the catalog.
+func (c Config) ValidateServices(services []catalog.Service) error {
 	if len(c.Services) == 0 {
 		return errors.New("no services selected")
 	}

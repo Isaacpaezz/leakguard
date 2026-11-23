@@ -98,6 +98,16 @@ func TestIntegrationRealRules(t *testing.T) {
 	if err := fw.Verify("lo", protected); err == nil || !strings.Contains(err.Error(), "allow no interface") {
 		t.Fatalf("Verify(lo) after a refused VPN = %v, want block-all rules", err)
 	}
+	// An empty VPN asks for the same block-all rules, and they verify.
+	if err := fw.Apply("", protected); err != nil {
+		t.Fatalf("Apply(\"\") = %v", err)
+	}
+	if err := fw.Verify("", protected); err != nil {
+		t.Fatalf("Verify(\"\") = %v", err)
+	}
+	if err := connect(); !errors.Is(err, syscall.ECONNREFUSED) {
+		t.Fatalf("connect with no VPN = %v, want ECONNREFUSED", err)
+	}
 
 	if err := fw.Flush(); err != nil {
 		t.Fatalf("Flush() = %v", err)

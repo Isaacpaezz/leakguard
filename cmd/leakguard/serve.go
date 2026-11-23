@@ -30,6 +30,9 @@ type service struct {
 	// applied is the choice this daemon loaded last, nil when it loaded
 	// none or paused. A different saved choice is loaded on the next check.
 	applied *config.Config
+	// refusal is the refused saved VPN last logged, so the reason is
+	// logged once per change; empty while the saved VPN is accepted.
+	refusal string
 	stats   *daemonStats
 }
 
@@ -137,33 +140,54 @@ func interval(d, def time.Duration) time.Duration {
 // check verifies the saved rules and loads them again when the check fails,
 // when the saved choice is not the one loaded, or when force is set. It
 // does nothing while paused. A failure is logged and leaves the loaded
-// rules in place (fail closed). The block counter is read on each check,
-// right before a load, which resets it.
+// rules in place (fail closed). When only the saved VPN interface is
+// refused, the rules allow no interface, and the reason is logged once per
+// change. The block counter is read on each check, right before a load,
+// which resets it.
 func (s *service) check(force bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cfg, services, err := s.c.loadValid()
-	if err == nil && cfg.Paused {
+	refused, isRefused := asVPNRefused(err)
+	if (err == nil || isRefused) && cfg.Paused {
 		return
 	}
-	if err != nil {
+	target := config.Config{VPNInterface: cfg.VPNInterface, Services: cfg.Services}
+	switch {
+	case isRefused:
+		target.VPNInterface, err = blockAll.VPNInterface, nil
+		if refused.Error() != s.refusal {
+			s.refusal = refused.Error()
+			s.c.logApply(cfg, refused.blocked())
+		}
+	case err != nil:
+		s.refusal = ""
 		s.c.logApply(cfg, err)
 		return
+	default:
+		s.refusal = ""
 	}
-	if !force && s.isApplied(cfg) {
-		verr := s.c.verify(cfg, services)
+	if !force && s.isApplied(target) {
+		verr := s.c.verify(target, services)
 		s.stats.countBlocks(s.c.firewall())
 		if verr == nil {
-			s.c.logApply(cfg, nil)
+			if !isRefused {
+				s.c.logApply(cfg, nil)
+			}
 			return
 		}
 		fmt.Fprintf(s.c.stderr, "%s leakguard: rules not verified, loading them again: %v\n", s.c.now().Format(time.RFC3339), verr)
 	} else {
 		s.stats.countBlocks(s.c.firewall())
 	}
-	err = s.c.firewall().Apply(cfg.VPNInterface, services)
-	s.loaded(cfg, err)
-	s.c.logApply(cfg, err)
+	err = s.c.firewall().Apply(target.VPNInterface, services)
+	s.loaded(target, err)
+	switch {
+	case isRefused && err != nil:
+		s.c.logApply(cfg, refused.notBlocked(err))
+	case !isRefused:
+		s.c.logApply(cfg, err)
+	}
 }
 
 // isApplied reports whether cfg is the choice this daemon loaded last.
@@ -310,9 +334,12 @@ func (c *cli) daemonStatus() ipc.Status {
 	if i, ok := c.findInterface(cfg.VPNInterface); ok && cfg.VPNInterface != "" {
 		st.VPNConnected = i.Connected()
 	}
+	refused, isRefused := asVPNRefused(err)
 	switch {
 	case errors.Is(err, errNotConfigured):
 		st.Reason = ipc.ReasonNotConfigured
+	case isRefused && !cfg.Paused:
+		st.Reason = refused.reason(c.verify(blockAll, services))
 	case err != nil:
 		st.Reason = err.Error()
 	case cfg.Paused:

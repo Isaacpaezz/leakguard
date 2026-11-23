@@ -139,11 +139,14 @@ func Script(vpn string, services []catalog.Service) (string, error) {
 	return b.String(), nil
 }
 
-// Apply replaces the table and verifies it. When vpn is refused, it loads
-// rules that allow no interface, so protected traffic stays blocked, and
-// returns the reason.
+// Apply replaces the table and verifies it. An empty vpn loads rules that
+// allow no interface. When a named vpn is refused, it loads those same
+// rules, so protected traffic stays blocked, and returns the reason.
 func (f Firewall) Apply(vpn string, services []catalog.Service) error {
-	refused := f.refusal(vpn)
+	var refused error
+	if vpn != "" {
+		refused = f.refusal(vpn)
+	}
 	allow := vpn
 	if refused != nil {
 		allow = ""
@@ -184,7 +187,8 @@ var ErrNotLoaded = firewall.ErrNotLoaded
 
 // Verify checks that the loaded table is what a successful Apply(vpn,
 // services) loads: the sets hold exactly the services' ranges and every
-// reject rule exempts vpn only, and vpn is still accepted.
+// reject rule exempts vpn only, and vpn is still accepted. An empty vpn
+// checks that the reject rules exempt no interface.
 func (f Firewall) Verify(vpn string, services []catalog.Service) error {
 	st, err := f.state()
 	if err != nil {
@@ -207,6 +211,12 @@ func (f Firewall) Verify(vpn string, services []catalog.Service) error {
 	oif, err := st.allowed()
 	if err != nil {
 		return err
+	}
+	if vpn == "" {
+		if oif != "" {
+			return fmt.Errorf("rules allow %q; they should block protected services on every interface", oif)
+		}
+		return nil
 	}
 	switch refused := f.refusal(vpn); {
 	case refused != nil && oif == "":

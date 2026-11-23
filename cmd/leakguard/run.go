@@ -13,6 +13,7 @@ import (
 
 	"github.com/Isaacpaezz/leakguard/internal/daemon"
 	"github.com/Isaacpaezz/leakguard/internal/firewall"
+	"github.com/Isaacpaezz/leakguard/internal/nft"
 	"github.com/Isaacpaezz/leakguard/internal/pf"
 	"github.com/Isaacpaezz/leakguard/internal/probe"
 	"github.com/Isaacpaezz/leakguard/internal/stats"
@@ -42,6 +43,7 @@ type Env struct {
 	IsRoot           func() bool
 	Root             string // prefixes every file path; empty means the real file system
 	Pfctl            pf.Runner
+	Nft              nft.Runner
 	Launchctl        daemon.Runner
 	Systemctl        daemon.Runner
 	Secure           func(path string) error // nil means daemon.SecureRootOwned

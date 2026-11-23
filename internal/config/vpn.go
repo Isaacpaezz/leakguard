@@ -56,7 +56,27 @@ func (r rules) validName(name string) bool {
 	return macName.MatchString(name)
 }
 
+// ErrVPNRefused is wrapped by every reason CheckVPNInterface and Validate
+// give for refusing the VPN interface, so callers can tell it from other
+// configuration errors. The messages stay those of the reasons.
+var ErrVPNRefused = errors.New("refused as the VPN interface")
+
+// refusal wraps a reason to refuse the VPN interface in ErrVPNRefused.
+type refusal struct{ reason error }
+
+func (r refusal) Error() string        { return r.reason.Error() }
+func (r refusal) Unwrap() error        { return r.reason }
+func (r refusal) Is(target error) bool { return target == ErrVPNRefused }
+
+// check reports why name cannot be the VPN interface, wrapping ErrVPNRefused.
 func (r rules) check(name string) error {
+	if err := r.reason(name); err != nil {
+		return refusal{err}
+	}
+	return nil
+}
+
+func (r rules) reason(name string) error {
 	switch {
 	case name == "":
 		return errors.New("VPN interface is not set")

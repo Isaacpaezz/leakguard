@@ -5,13 +5,21 @@ import (
 	"runtime"
 
 	"github.com/Isaacpaezz/leakguard/internal/catalog"
+	"github.com/Isaacpaezz/leakguard/internal/config"
 	"github.com/Isaacpaezz/leakguard/internal/daemon"
 	"github.com/Isaacpaezz/leakguard/internal/firewall"
+	"github.com/Isaacpaezz/leakguard/internal/nft"
 	"github.com/Isaacpaezz/leakguard/internal/pf"
 )
 
 // pfFirewall is the macOS firewall: the pf anchor, driven by env.Pfctl.
 func pfFirewall(env Env) firewall.Firewall { return pf.Firewall{Runner: env.Pfctl} }
+
+// nftFirewall is the Linux firewall: the nftables table, driven by env.Nft.
+// It checks the VPN interface itself, so a refused one is never allowed.
+func nftFirewall(env Env) firewall.Firewall {
+	return nft.Firewall{Runner: env.Nft, Check: config.CheckVPNInterface}
+}
 
 // launchdServices is the macOS background service: the LaunchDaemon.
 func launchdServices(env Env) daemon.Manager {

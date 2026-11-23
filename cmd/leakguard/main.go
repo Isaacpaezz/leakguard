@@ -11,6 +11,7 @@ import (
 
 	"github.com/Isaacpaezz/leakguard/internal/daemon"
 	"github.com/Isaacpaezz/leakguard/internal/ipc"
+	"github.com/Isaacpaezz/leakguard/internal/nft"
 	"github.com/Isaacpaezz/leakguard/internal/pf"
 	"github.com/Isaacpaezz/leakguard/internal/probe"
 )
@@ -24,6 +25,7 @@ func systemEnv() Env {
 	return Env{
 		IsRoot:     func() bool { return os.Geteuid() == 0 },
 		Pfctl:      pf.ExecRunner{},
+		Nft:        nft.ExecRunner{},
 		Launchctl:  daemon.ExecRunner{},
 		Systemctl:  daemon.SystemctlRunner{},
 		Firewall:   systemFirewall,
