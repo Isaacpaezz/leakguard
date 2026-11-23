@@ -21,11 +21,12 @@
 <p align="center">
   <a href="https://github.com/Isaacpaezz/leakguard/releases"><strong>⬇️ Download for macOS, Linux or Windows</strong></a><br>
   <sub>0.3.0 is a pre-release. macOS 13 or newer (Apple silicon or Intel), Linux with nftables and systemd (<code>.deb</code> and <code>.tar.gz</code>, amd64 and arm64), or Windows 10 and 11 (<code>setup.exe</code>, amd64 and arm64).</sub><br>
-  <sub>Install guides: <a href="docs/install-macos.md">macOS</a> · <a href="docs/install-linux.md">Linux</a> · <a href="docs/install-windows.md">Windows</a>.</sub>
+  <sub><a href="#which-file-do-i-download">Which file do I download?</a> · Install guides: <a href="docs/install-macos.md">macOS</a> · <a href="docs/install-linux.md">Linux</a> · <a href="docs/install-windows.md">Windows</a>.</sub>
 </p>
 
 <p align="center">
-  <a href="#install-on-macos">Install</a> ·
+  <a href="#which-file-do-i-download">Install</a> ·
+  <a href="#install-on-macos">macOS</a> ·
   <a href="#install-on-linux">Linux</a> ·
   <a href="#install-on-windows">Windows</a> ·
   <a href="#what-you-see">What you see</a> ·
@@ -61,24 +62,37 @@ computer:
 ## How it works
 
 leakguard does **not** wait to "notice" that the VPN dropped; that would leave
-a window where traffic could leak. The firewall allows packets to the
-protected services **only** on the VPN interface:
+a window where traffic could leak. The system firewall allows packets to the
+protected services **only** on the VPN interface. On macOS this is a `pf`
+anchor:
 
 ```
 pass  out quick on <vpn-interface> to <protected-services> keep state
 block return out quick to <protected-services>
 ```
 
+On Linux, an `nftables` table rejects the same destinations outside the VPN,
+both for the computer's own traffic and for the traffic it forwards for
+Docker containers or libvirt virtual machines. On Windows, Windows Filtering
+Platform filters block each protected range and allow it only when the
+connection leaves through the VPN adapter.
+
 If the VPN interface is gone, no allowed path is left and the connection fails
-at once: in about 8 ms in our macOS tests. No detection race, and no leak.
-On macOS this is a `pf` anchor, and on Linux an `nftables` table, kept by a
-background service that loads it at boot and checks it every 30 seconds.
+at once: in about 8 ms in our macOS tests, and in about 1 ms for a blocked
+connection on Windows in CI. No detection race, and no leak. A background
+service (a LaunchDaemon on macOS, a systemd service on Linux, a Windows
+service) keeps the rules loaded from boot and checks them every 30 seconds.
+One exception on Windows: WSL2, Hyper-V virtual machines, Hyper-V containers
+and Docker Desktop do not go through leakguard yet (see
+[Install on Windows](#install-on-windows)).
 
 ## What you see
 
-A shield in the menu bar. Its menu says whether you are protected, how your
+A shield in the macOS menu bar, the Linux top bar (system tray) or the
+Windows notification area. Its menu says whether you are protected, how your
 VPN session is going, and how many times leakguard blocked a protected
-service today:
+service today (Windows does not show the blocks count yet). The pictures
+show macOS:
 
 <p align="center">
   <picture>
@@ -87,7 +101,7 @@ service today:
   </picture>
 </p>
 
-The first time, a 3-step setup opens by itself, in your Mac's language
+The first time, a 3-step setup opens by itself, in your computer's language
 (Spanish or English). You never type interface names such as `utun4` or
 `ipsec0`: leakguard finds your VPN when you disconnect and connect it.
 
@@ -103,6 +117,25 @@ first line of the menu says why); a shield with a slash means leakguard is not
 set up yet. A **block** is a packet to a protected service that leakguard
 rejected because it tried to leave outside the VPN, so it is an approximate
 count of blocked connection attempts. "Today" starts at local midnight.
+
+## Which file do I download?
+
+Get it from [Releases](https://github.com/Isaacpaezz/leakguard/releases).
+`VERSION` is the release number, for example `0.3.0`.
+
+| Your computer | Download |
+|---|---|
+| Mac with Apple silicon or Intel, macOS 13 or newer | `leakguard-VERSION-macos.dmg` |
+| Ubuntu, Debian or Mint PC (most PCs) | `leakguard_VERSION_amd64.deb` |
+| 64-bit ARM Linux, such as a Raspberry Pi | `leakguard_VERSION_arm64.deb` |
+| Other Linux with `nftables` and `systemd` | `leakguard-VERSION-linux-amd64.tar.gz` (`linux-arm64` on ARM) |
+| Windows 10 or 11 PC (most PCs) | `leakguard-VERSION-windows-amd64-setup.exe` |
+| Windows on ARM, such as Snapdragon | `leakguard-VERSION-windows-arm64-setup.exe` |
+
+Optional: each file has a `.sha256` next to it to check the download is
+complete: `shasum -a 256 -c FILE.sha256` on macOS, `sha256sum -c FILE.sha256`
+on Linux, or `Get-FileHash FILE` in PowerShell on Windows (compare it with
+the text of the `.sha256`).
 
 ## Install on macOS
 
@@ -168,8 +201,9 @@ including the command-line route:
    **^** arrow until you pin it. The blocks count is not shown on Windows
    yet.
 
-WSL2, Hyper-V virtual machines and Hyper-V containers do not go through
-leakguard yet: run Claude Code and similar tools directly on Windows.
+WSL2, Hyper-V virtual machines, Hyper-V containers and Docker Desktop do not
+go through leakguard yet: run Claude Code and similar tools directly on
+Windows.
 
 To remove it, uninstall leakguard from Settings > Apps: that also removes
 the protection. Step-by-step guide in Spanish and English, including the
@@ -228,7 +262,15 @@ Design notes and lessons learned: [docs/HANDOFF.md](docs/HANDOFF.md).
 <summary>The <code>leakguard</code> command (contributors)</summary>
 
 > Needs [Go](https://go.dev/dl/) 1.25 or newer. To build the same DMG as a
-> release, see [CONTRIBUTING.md](CONTRIBUTING.md#build-the-macos-app).
+> release, see [CONTRIBUTING.md](CONTRIBUTING.md#build-the-macos-app); for
+> the Linux packages and the Windows installers, see
+> [Build the Linux packages](CONTRIBUTING.md#build-the-linux-packages) and
+> [Build the Windows installers](CONTRIBUTING.md#build-the-windows-installers).
+>
+> The examples below are macOS (interface names such as `ipsec0`, paths and
+> logs). The command-line route on Linux and Windows is in
+> [docs/install-linux.md](docs/install-linux.md) and
+> [docs/install-windows.md](docs/install-windows.md).
 
 ```sh
 go install github.com/Isaacpaezz/leakguard/cmd/leakguard@latest
@@ -338,8 +380,8 @@ service you protect.
 
 **leakguard** bloquea los servicios que elijas, como Claude, cuando tu VPN se
 cae. En lugar de usar tu conexión real y mostrar tu IP, esos servicios se
-quedan sin internet hasta que la VPN vuelve. El resto de tu Mac (correo,
-videos, banco) sigue funcionando con normalidad.
+quedan sin internet hasta que la VPN vuelve. El resto de tu computadora
+(correo, videos, banco) sigue funcionando con normalidad.
 
 Está pensado para países como Venezuela, donde estos servicios están
 restringidos y se usan a través de una VPN con *split tunneling* (por ejemplo,
@@ -349,17 +391,20 @@ versión preliminar. Hoy protege Anthropic (Claude); ChatGPT
 
 **[⬇️ Descargar para macOS, Linux o Windows](https://github.com/Isaacpaezz/leakguard/releases)**
 
-Linux (`.deb` y `.tar.gz`) llega como versión preliminar: mira la
-[guía de instalación para Linux](docs/install-linux.md).
-
-Windows (`setup.exe`) también llega como versión preliminar: mira la
-[guía de instalación para Windows](docs/install-windows.md).
+Ya puedes usarlo en macOS (`.dmg`), Linux (`.deb` y `.tar.gz`) y Windows
+(`setup.exe`). Linux y Windows son más nuevos: su protección se prueba
+automáticamente, pero todavía no se ha probado en una computadora de verdad
+con una VPN real. Mira la [guía para Linux](docs/install-linux.md) y la
+[guía para Windows](docs/install-windows.md). Más abajo te decimos
+[qué archivo descargar](#qué-archivo-descargo).
 
 ### Qué ves
 
-Un escudo en la barra de menú. Su menú te dice si estás protegido, cuánto
-tiempo lleva conectada tu VPN y cuántas veces leakguard bloqueó hoy un
-servicio protegido:
+Un escudo en la barra de menú de macOS, en la barra superior (bandeja del
+sistema) de Linux o en el área de notificación de Windows. Su menú te dice si
+estás protegido, cuánto tiempo lleva conectada tu VPN y cuántas veces
+leakguard bloqueó hoy un servicio protegido (Windows todavía no muestra los
+bloqueos). Las imágenes son de macOS:
 
 <p align="center">
   <picture>
@@ -368,7 +413,8 @@ servicio protegido:
   </picture>
 </p>
 
-La primera vez se abre sola una guía de 3 pasos. No necesitas saber nombres
+La primera vez se abre sola una guía de 3 pasos, en el idioma de tu
+computadora (español o inglés). No necesitas saber nombres
 técnicos de tu VPN: leakguard la encuentra cuando la desconectas y la vuelves
 a conectar.
 
@@ -384,6 +430,25 @@ protegido o que la protección está en pausa (la primera línea del menú dice
 por qué). Un **bloqueo** es un intento de un servicio protegido de salir sin
 la VPN que leakguard detuvo; es un conteo aproximado. "Hoy" empieza a la
 medianoche.
+
+### ¿Qué archivo descargo?
+
+Descárgalo desde [Releases](https://github.com/Isaacpaezz/leakguard/releases).
+`VERSIÓN` es el número de la versión, por ejemplo `0.3.0`.
+
+| Tu computadora | Descarga |
+|---|---|
+| Mac con Apple Silicon o Intel, macOS 13 o más nuevo | `leakguard-VERSIÓN-macos.dmg` |
+| Computadora con Ubuntu, Debian o Mint (la mayoría) | `leakguard_VERSIÓN_amd64.deb` |
+| Linux en ARM de 64 bits, como una Raspberry Pi | `leakguard_VERSIÓN_arm64.deb` |
+| Otro Linux con `nftables` y `systemd` | `leakguard-VERSIÓN-linux-amd64.tar.gz` (`linux-arm64` en ARM) |
+| PC con Windows 10 u 11 (la mayoría) | `leakguard-VERSIÓN-windows-amd64-setup.exe` |
+| Windows en ARM, como Snapdragon | `leakguard-VERSIÓN-windows-arm64-setup.exe` |
+
+Opcional: cada archivo trae al lado un `.sha256` para comprobar que llegó
+completo: `shasum -a 256 -c ARCHIVO.sha256` en macOS,
+`sha256sum -c ARCHIVO.sha256` en Linux, o `Get-FileHash ARCHIVO` en
+PowerShell en Windows (compáralo con el texto del `.sha256`).
 
 ### Instalar en macOS
 
@@ -406,7 +471,7 @@ leakguard se abre sola cada vez que entras a tu Mac (quita la marca de
 solo el menú: la protección sigue activa. Para pausarla, usa **Pausar la
 protección**.
 
-### Desinstalar
+### Desinstalar en macOS
 
 1. En el menú del escudo, elige **Desinstalar leakguard…** y confirma.
 2. Escribe tu contraseña de la Mac. leakguard quita las reglas de protección,
@@ -454,9 +519,9 @@ se han probado en una PC con Windows de verdad. Si algo falla,
    **^** hasta que lo fijes. En Windows todavía no se muestra el número de
    bloqueos.
 
-WSL2, las máquinas virtuales de Hyper-V y los contenedores de Hyper-V
-todavía no pasan por leakguard: usa Claude Code y herramientas parecidas
-directamente en Windows.
+WSL2, las máquinas virtuales de Hyper-V, los contenedores de Hyper-V y
+Docker Desktop todavía no pasan por leakguard: usa Claude Code y
+herramientas parecidas directamente en Windows.
 
 Para quitarlo, desinstala leakguard desde Configuración > Aplicaciones: eso
 también quita la protección. Guía completa, con la ruta por terminal:
