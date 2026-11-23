@@ -15,18 +15,20 @@
   <a href="https://github.com/Isaacpaezz/leakguard/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Isaacpaezz/leakguard/ci.yml?branch=main&style=for-the-badge&label=CI" alt="CI status"></a>
   <a href="https://github.com/Isaacpaezz/leakguard/releases"><img src="https://img.shields.io/github/v/release/Isaacpaezz/leakguard?include_prereleases&style=for-the-badge" alt="Latest release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-2ea44f?style=for-the-badge" alt="MIT license"></a>
-  <img src="https://img.shields.io/badge/platform-macOS%2013%2B%20%C2%B7%20Linux-555555?style=for-the-badge" alt="Platform: macOS 13 or newer, and Linux">
+  <img src="https://img.shields.io/badge/platform-macOS%2013%2B%20%C2%B7%20Linux%20%C2%B7%20Windows-555555?style=for-the-badge" alt="Platform: macOS 13 or newer, Linux and Windows">
 </p>
 
 <p align="center">
   <a href="https://github.com/Isaacpaezz/leakguard/releases"><strong>⬇️ Download for macOS</strong></a><br>
   <sub>0.1.0 is the first public version, a pre-release. macOS 13 or newer, Apple silicon or Intel.</sub><br>
-  <sub>Linux (<code>.deb</code> and <code>.tar.gz</code>) is coming as a pre-release: <a href="docs/install-linux.md">Linux install guide</a>.</sub>
+  <sub>Linux (<code>.deb</code> and <code>.tar.gz</code>) is coming as a pre-release: <a href="docs/install-linux.md">Linux install guide</a>.</sub><br>
+  <sub>Windows (<code>setup.exe</code>) is coming as a pre-release: <a href="docs/install-windows.md">Windows install guide</a>.</sub>
 </p>
 
 <p align="center">
   <a href="#install-on-macos">Install</a> ·
   <a href="#install-on-linux">Linux</a> ·
+  <a href="#install-on-windows">Windows</a> ·
   <a href="#what-you-see">What you see</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="#supported-services">Services</a> ·
@@ -147,6 +149,31 @@ To remove it, choose "Uninstall leakguard…" in its menu, then
 including the command-line route:
 [docs/install-linux.md](docs/install-linux.md).
 
+## Install on Windows
+
+> A pre-release. The firewall is tested automatically with real Windows
+> Filtering Platform filters, but the tray icon, the installer on a real PC
+> and a real VPN drop have not yet been tried on a real Windows PC. Please
+> [report](https://github.com/Isaacpaezz/leakguard/issues/new?template=bug_report.yml)
+> anything that does not work.
+
+1. Download `leakguard-VERSION-windows-amd64-setup.exe` (most PCs) or
+   `leakguard-VERSION-windows-arm64-setup.exe` (ARM, such as Snapdragon)
+   from [Releases](https://github.com/Isaacpaezz/leakguard/releases).
+   Windows 10 or 11, 64-bit.
+2. Open it. It is not signed with a certificate yet, so Windows shows
+   "Windows protected your PC": click **More info**, then **Run anyway**,
+   and **Yes** at the administrator prompt.
+3. Open leakguard from the Start menu and follow the same 3-step setup. The
+   shield lives in the notification area; Windows may hide it behind the
+   **^** arrow until you pin it. The blocks count is not shown on Windows
+   yet.
+
+To remove it, uninstall leakguard from Settings > Apps: that also removes
+the protection. Step-by-step guide in Spanish and English, including the
+command-line route:
+[docs/install-windows.md](docs/install-windows.md).
+
 ## Supported services
 
 IP ranges live in [`catalog/services/`](catalog/services/), one file per
@@ -189,7 +216,7 @@ Full history: [CHANGELOG.md](CHANGELOG.md).
 |---|---|---|
 | 0.1.0 | macOS: menu-bar app, 3-step setup, Claude protection, DMG installer | ✅ First public version (pre-release) |
 | 1.0 | [Milestone 1.0](https://github.com/Isaacpaezz/leakguard/milestone/1): ChatGPT/OpenAI ([#14](https://github.com/Isaacpaezz/leakguard/issues/14)), self-updating IP ranges ([#16](https://github.com/Isaacpaezz/leakguard/issues/16)), signed and notarized app ([#15](https://github.com/Isaacpaezz/leakguard/issues/15)), menu polish ([#8](https://github.com/Isaacpaezz/leakguard/issues/8)) | 🚧 Next |
-| 1.1 | Windows: Windows Filtering Platform backend and tray app | 🗓️ Planned |
+| 1.1 | Windows: Windows Filtering Platform backend, Windows service, tray app, `setup.exe` installer ([guide](docs/install-windows.md)) | 🧪 Built, not released yet; the tray app and the installer are not yet tried on a real PC |
 | 1.2 | Linux: `nftables` backend, systemd service, tray app, `.deb` and `.tar.gz` ([guide](docs/install-linux.md)) | 🧪 Built, not released yet; the tray app is not yet tried on a real desktop |
 
 Design notes and lessons learned: [docs/HANDOFF.md](docs/HANDOFF.md).
@@ -324,6 +351,9 @@ todavía es una versión preliminar. Hoy protege Anthropic (Claude); ChatGPT
 Linux (`.deb` y `.tar.gz`) llega como versión preliminar: mira la
 [guía de instalación para Linux](docs/install-linux.md).
 
+Windows (`setup.exe`) también llega como versión preliminar: mira la
+[guía de instalación para Windows](docs/install-windows.md).
+
 ### Qué ves
 
 Un escudo en la barra de menú. Su menú te dice si estás protegido, cuánto
@@ -402,11 +432,37 @@ VPN todavía no se han probado en un escritorio Linux de verdad. Si algo falla,
 Guía completa, con el `.tar.gz` para otras distribuciones y la ruta por
 terminal: [docs/install-linux.md](docs/install-linux.md).
 
+### Instalar en Windows
+
+Es una versión preliminar: el cortafuegos se prueba automáticamente con
+filtros reales de la Plataforma de filtrado de Windows, pero el ícono de la
+bandeja, el instalador en una PC real y una caída real de la VPN todavía no
+se han probado en una PC con Windows de verdad. Si algo falla,
+[cuéntanos](https://github.com/Isaacpaezz/leakguard/issues/new?template=bug_report.yml).
+
+1. Descarga `leakguard-VERSIÓN-windows-amd64-setup.exe` (la mayoría de las
+   PC) o `leakguard-VERSIÓN-windows-arm64-setup.exe` (ARM, como Snapdragon)
+   desde [Releases](https://github.com/Isaacpaezz/leakguard/releases).
+   Windows 10 u 11 de 64 bits.
+2. Ábrelo. Como todavía no está firmado con un certificado, Windows muestra
+   "Windows protegió tu PC": haz clic en **Más información**, luego en
+   **Ejecutar de todas formas**, y en **Sí** cuando Windows pida permiso de
+   administrador.
+3. Abre leakguard desde el menú Inicio y sigue los 3 pasos. El escudo vive
+   en el área de notificación; Windows puede esconderlo detrás de la flecha
+   **^** hasta que lo fijes. En Windows todavía no se muestra el número de
+   bloqueos.
+
+Para quitarlo, desinstala leakguard desde Configuración > Aplicaciones: eso
+también quita la protección. Guía completa, con la ruta por terminal:
+[docs/install-windows.md](docs/install-windows.md).
+
 ### Enlaces
 
 - Guía completa de instalación, también dentro del DMG:
   [docs/install-macos.md](docs/install-macos.md)
 - Guía de instalación para Linux: [docs/install-linux.md](docs/install-linux.md)
+- Guía de instalación para Windows: [docs/install-windows.md](docs/install-windows.md)
 - Descargas: [Releases](https://github.com/Isaacpaezz/leakguard/releases)
 - ¿Algo no funciona? [Reporta un problema](https://github.com/Isaacpaezz/leakguard/issues/new?template=bug_report.yml)
   (puedes escribir en español).
