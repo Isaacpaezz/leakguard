@@ -52,6 +52,33 @@ jobs:
           go test -c -o "$RUNNER_TEMP/nft.test" ./internal/nft/
           sudo LEAKGUARD_NFT_INTEGRATION=1 "$RUNNER_TEMP/nft.test" -test.count=1 -test.run Integration -test.v
 
+  test-windows-wfp:
+    name: Windows WFP integration (real filters, elevated)
+    runs-on: windows-latest
+    steps:
+      - name: The shell is elevated
+        shell: pwsh
+        run: |
+          $principal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+          if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+            Write-Error "The WFP integration test needs an elevated shell"
+            exit 1
+          }
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - name: Unit tests
+        run: go test ./internal/catalog/... ./internal/firewall/... ./internal/wfp/...
+      # Loads real filters, probes them and flushes them at the end.
+      - name: Load real WFP filters and probe them
+        env:
+          LEAKGUARD_WFP_INTEGRATION: "1"
+        run: go test -count=1 -run Integration -v ./internal/wfp/
+
   package-linux:
     name: Linux packages build (not uploaded)
     runs-on: ubuntu-latest
