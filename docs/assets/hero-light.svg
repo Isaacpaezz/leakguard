@@ -27,7 +27,7 @@
 <line x1="41" y1="118" x2="239" y2="118" stroke="#d0d7de"/>
 <g transform="translate(222 107) scale(.55)"><path d="M0,-14 L12,-9 V1 C12,9 6,13 0,16 C-6,13 -12,9 -12,1 V-9 Z" fill="#1f2328"/></g>
 <text x="208" y="111" font-size="10" fill="#656d76" text-anchor="end">leakguard</text>
-<text x="56" y="111" font-size="10" fill="#656d76" font-weight="600">Your Mac</text>
+<text x="56" y="111" font-size="10" fill="#656d76" font-weight="600">Your computer</text>
 <rect x="56" y="128" width="168" height="24" rx="6" fill="#ddf4ff"/>
 <text x="140" y="145" font-size="13" fill="#1f2328" font-weight="600" text-anchor="middle">Claude</text>
 <rect x="56" y="173" width="168" height="24" rx="6" fill="#ddf4ff" opacity=".55"/>

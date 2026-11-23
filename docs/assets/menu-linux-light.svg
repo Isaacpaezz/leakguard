@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 408" width="420" height="408" role="img" aria-labelledby="t d" font-family="Cantarell, Ubuntu, 'Noto Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+<title id="t">The leakguard menu in the GNOME top bar on Linux</title>
+<desc id="d">The green shield in the GNOME top bar opens the leakguard menu: Protected; VPN connected for 2 h 15 min; Today: 14 blocks · VPN dropped 2 times. Protect these services: Anthropic (Claude) ticked, OpenAI (ChatGPT, Codex) coming soon. Then Change VPN…, Pause protection, Open at login (ticked), Uninstall leakguard… and Quit.</desc>
+<style>
+.n13{opacity:0;animation:n13 6s steps(1) infinite}
+.n14{opacity:1;animation:n14 6s steps(1) infinite}
+.hl{opacity:0;animation:hl 6s infinite}
+@keyframes n13{0%{opacity:1}50%,100%{opacity:0}}
+@keyframes n14{0%{opacity:0}50%,100%{opacity:1}}
+@keyframes hl{0%,48%{opacity:0}52%,70%{opacity:.35}85%,100%{opacity:0}}
+@media (prefers-reduced-motion: reduce){*{animation:none!important}}</style>
+<defs><filter id="sh" x="-10%" y="-10%" width="120%" height="125%"><feDropShadow dx="0" dy="6" stdDeviation="8" flood-opacity=".3"/></filter></defs>
+<rect x="0" y="0" width="420" height="30" fill="#000000"/>
+<rect x="10" y="10" width="22" height="10" rx="5" fill="#ffffff"/>
+<circle cx="40" cy="15" r="3" fill="#ffffff" opacity=".5"/>
+<circle cx="50" cy="15" r="3" fill="#ffffff" opacity=".5"/>
+<rect x="300" y="3" width="32" height="24" rx="12" fill="#ffffff" opacity=".22"/>
+<g transform="translate(307 6) scale(.5625)"><path d="M4 2.5H28V15A12 14.5 0 0 1 4 15Z" fill="#1b7a35" stroke="#ffffff" stroke-width="2.6" stroke-linejoin="round" paint-order="stroke"/></g>
+<path d="M346 21L338.5 12.6A11 11 0 0 1 353.5 12.6Z" fill="#ffffff"/>
+<path d="M362 12.5h3l4-3.5v12l-4-3.5h-3z" fill="#ffffff"/>
+<path d="M372 12a5 5 0 0 1 0 7" fill="none" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round"/>
+<rect x="384" y="10" width="20" height="11" rx="3" fill="none" stroke="#ffffff" stroke-width="1.3"/>
+<rect x="386" y="12" width="13" height="7" rx="1.5" fill="#ffffff"/>
+<rect x="405" y="13.5" width="2" height="4" rx="1" fill="#ffffff"/>
+<rect x="52" y="36" width="360" height="343" rx="12" fill="#ffffff" stroke="#d4d4d4" filter="url(#sh)"/>
+<text x="86" y="63" font-size="13.5" fill="#8a8a8a">Protected</text>
+<text x="86" y="89" font-size="13.5" fill="#8a8a8a">VPN connected for 2 h 15 min</text>
+<rect class="hl" x="58" y="98" width="348" height="24" rx="6" fill="#1a7f37"/>
+<text x="86" y="115" font-size="13.5" fill="#8a8a8a" class="n13">Today: 13 blocks · VPN dropped 2 times</text>
+<text x="86" y="115" font-size="13.5" fill="#8a8a8a" class="n14">Today: 14 blocks · VPN dropped 2 times</text>
+<line x1="64" y1="129.5" x2="400" y2="129.5" stroke="#e3e3e3"/>
+<text x="86" y="154" font-size="13.5" fill="#8a8a8a">Protect these services:</text>
+<text x="67" y="180" font-size="13.5" fill="#1e1e1e" font-weight="700">✓</text>
+<text x="86" y="180" font-size="13.5" fill="#1e1e1e">Anthropic (Claude)</text>
+<text x="86" y="206" font-size="13.5" fill="#8a8a8a">OpenAI (ChatGPT, Codex) (coming soon)</text>
+<line x1="64" y1="220.5" x2="400" y2="220.5" stroke="#e3e3e3"/>
+<text x="86" y="245" font-size="13.5" fill="#1e1e1e">Change VPN…</text>
+<text x="86" y="271" font-size="13.5" fill="#1e1e1e">Pause protection</text>
+<line x1="64" y1="285.5" x2="400" y2="285.5" stroke="#e3e3e3"/>
+<text x="67" y="310" font-size="13.5" fill="#1e1e1e" font-weight="700">✓</text>
+<text x="86" y="310" font-size="13.5" fill="#1e1e1e">Open at login</text>
+<text x="86" y="336" font-size="13.5" fill="#1e1e1e">Uninstall leakguard…</text>
+<text x="86" y="362" font-size="13.5" fill="#1e1e1e">Quit</text>
+</svg>
