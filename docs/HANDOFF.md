@@ -90,7 +90,7 @@ setup; light and dark; English and Spanish), drawn from the real strings in
 **1.0** is GitHub milestone 1
 (https://github.com/Isaacpaezz/leakguard/milestone/1): #14 ChatGPT/OpenAI,
 #16 self-updating IP ranges, #15 Developer ID signing and notarization, #8
-menu polish. Windows follows in 1.1 and Linux in 1.2. The numbered list below
+menu polish. Owner, 2026-11-23: Linux ships as the 0.2.0 pre-release and Windows as 0.3.0 (both before 1.0). The numbered list below
 is the original work breakdown.
 
 0. ✅ Open source foundation: CONTRIBUTING, templates, CODEOWNERS, SECURITY,
@@ -204,7 +204,7 @@ is the original work breakdown.
    no drop. "Today" resets at local midnight, also across DST. Stats
    errors are logged once and never change protection.
 3. 🧪 Built on `feat/linux-support`, not released (`odd/tasks/linux-windows.md`).
-   Linux `nftables` backend and tray app (release 1.2). Exists: per-OS VPN
+   Linux `nftables` backend and tray app (release 0.2.0). Exists: per-OS VPN
    rules (sysfs facts; Ethernet, Wi-Fi, Docker, bridges, veth, loopback
    refused), `internal/firewall` and `daemon.Manager` interfaces picked only
    in `main`, `internal/nft` (table `inet leakguard`, reject outside the VPN
@@ -235,7 +235,7 @@ is the original work breakdown.
    the systemd service at boot, and a real VPN dropping.
 4. 🧪 Built on `feat/windows-support` (draft PR #19, stacked on the Linux
    PR #18), not released (`odd/tasks/linux-windows.md`). Windows backend
-   and tray app (release 1.1). Exists: `internal/wfp` on tailscale/wf
+   and tray app (release 0.3.0). Exists: `internal/wfp` on tailscale/wf
    (persistent provider and sublayer, block weight 1 and permit-by-LUID
    weight 2 per protected range at `ALE_AUTH_CONNECT_V4/V6`, add-then-delete
    swap, `BlockCount` unsupported so the menu omits blocks), Windows
