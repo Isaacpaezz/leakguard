@@ -14,3 +14,14 @@ var (
 	//go:embed icons/notsetup.png
 	iconNotSetUp []byte
 )
+
+// Linux tray icons: the same shapes in color inside a white halo, because
+// Linux panels do not recolor icons and may be light or dark.
+var (
+	//go:embed icons/linux-protected.png
+	linuxIconProtected []byte
+	//go:embed icons/linux-outline.png
+	linuxIconOutline []byte
+	//go:embed icons/linux-notsetup.png
+	linuxIconNotSetUp []byte
+)

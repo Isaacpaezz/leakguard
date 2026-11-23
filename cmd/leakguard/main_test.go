@@ -111,6 +111,8 @@ func newHarness(t *testing.T, root bool) *harness {
 		Pfctl:     h.pfctl,
 		Launchctl: h.launchctl,
 		Secure:    func(string) error { return nil },
+		Firewall:  pfFirewall,
+		Services:  launchdServices,
 		Interfaces: func() ([]Interface, error) {
 			return []Interface{
 				{Name: "en0", Up: true, HasAddress: true},
@@ -181,6 +183,7 @@ func expect(t *testing.T, code int, stdout, stderr string, wantCode int, wantOut
 }
 
 func TestHelpListsEveryCommand(t *testing.T) {
+	withUsage(t, "darwin")
 	h := newHarness(t, false)
 	for _, args := range [][]string{{"help"}, {"-h"}, {"--help"}} {
 		code, out, errOut := h.run(args...)
@@ -443,10 +446,12 @@ func TestApplyFailsClosedWithoutAValidConfig(t *testing.T) {
 	}
 	os.MkdirAll(filepath.Dir(h.path(config.DefaultPath)), 0o755)
 	os.WriteFile(h.path(config.DefaultPath), []byte(`{"vpn_interface":"en0","services":["anthropic"]}`), 0o644)
+	h.pfctl.outputs["-a "+pf.Anchor+" -s rules"] = "block return out quick from any to <leakguard>\n"
 	code, out, errOut = h.run("apply")
-	expect(t, code, out, errOut, 1, nil, []string{`leakguard: invalid configuration: "en0" is not a VPN interface`})
-	if len(h.pfctl.calls) != 0 {
-		t.Fatalf("apply touched pf with an invalid config (it must never flush): %v", h.pfctl.calls)
+	// S7: a refused saved VPN loads the block-all rules; it never flushes.
+	expect(t, code, out, errOut, 1, nil, []string{`leakguard: invalid configuration: "en0" is not a VPN interface; it carries your real connection; protected services are blocked on every interface`})
+	if countCalls(h.pfctl.calls, loadAnchor) != 1 || countCalls(h.pfctl.calls, flushAnchor) != 0 {
+		t.Fatalf("apply with a refused VPN must load the block-all rules and never flush: %v", h.pfctl.calls)
 	}
 }
 

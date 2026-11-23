@@ -15,16 +15,17 @@
   <a href="https://github.com/Isaacpaezz/leakguard/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Isaacpaezz/leakguard/ci.yml?branch=main&style=for-the-badge&label=CI" alt="CI status"></a>
   <a href="https://github.com/Isaacpaezz/leakguard/releases"><img src="https://img.shields.io/github/v/release/Isaacpaezz/leakguard?include_prereleases&style=for-the-badge" alt="Latest release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-2ea44f?style=for-the-badge" alt="MIT license"></a>
-  <img src="https://img.shields.io/badge/platform-macOS%2013%2B-555555?style=for-the-badge" alt="Platform: macOS 13 or newer">
+  <img src="https://img.shields.io/badge/platform-macOS%2013%2B%20%C2%B7%20Linux-555555?style=for-the-badge" alt="Platform: macOS 13 or newer, and Linux">
 </p>
 
 <p align="center">
-  <a href="https://github.com/Isaacpaezz/leakguard/releases"><strong>⬇️ Download for macOS</strong></a><br>
-  <sub>0.1.0 is the first public version, a pre-release. macOS 13 or newer, Apple silicon or Intel.</sub>
+  <a href="https://github.com/Isaacpaezz/leakguard/releases"><strong>⬇️ Download for macOS or Linux</strong></a><br>
+  <sub>0.2.0 is a pre-release. macOS 13 or newer (Apple silicon or Intel), or Linux with nftables and systemd (<code>.deb</code> and <code>.tar.gz</code>, amd64 and arm64): <a href="docs/install-linux.md">Linux install guide</a>.</sub>
 </p>
 
 <p align="center">
   <a href="#install-on-macos">Install</a> ·
+  <a href="#install-on-linux">Linux</a> ·
   <a href="#what-you-see">What you see</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="#supported-services">Services</a> ·
@@ -68,8 +69,8 @@ block return out quick to <protected-services>
 
 If the VPN interface is gone, no allowed path is left and the connection fails
 at once: in about 8 ms in our macOS tests. No detection race, and no leak.
-On macOS this is a `pf` anchor kept by a background service that loads it at
-boot and checks it every 30 seconds.
+On macOS this is a `pf` anchor, and on Linux an `nftables` table, kept by a
+background service that loads it at boot and checks it every 30 seconds.
 
 ## What you see
 
@@ -103,7 +104,7 @@ count of blocked connection attempts. "Today" starts at local midnight.
 
 ## Install on macOS
 
-> 0.1.0 is a pre-release. macOS 13 or newer, Apple silicon or Intel, and an
+> 0.2.0 is a pre-release. macOS 13 or newer, Apple silicon or Intel, and an
 > administrator account on the Mac.
 
 1. Download `leakguard-VERSION-macos.dmg` from
@@ -121,6 +122,29 @@ that). "Quit" closes only the menu; the protection keeps running. To remove
 leakguard, choose "Uninstall leakguard…" in its menu, enter your password,
 then drag the app to the Trash. Step-by-step guide in Spanish and English,
 also inside the DMG: [docs/install-macos.md](docs/install-macos.md).
+
+## Install on Linux
+
+> A pre-release. The firewall is tested automatically with real `nftables`
+> rules, but the tray icon and a real VPN drop have not yet been tried on a
+> real Linux desktop. Please
+> [report](https://github.com/Isaacpaezz/leakguard/issues/new?template=bug_report.yml)
+> anything that does not work.
+
+1. Download `leakguard_VERSION_amd64.deb` (most PCs) or
+   `leakguard_VERSION_arm64.deb` (ARM, such as a Raspberry Pi) from
+   [Releases](https://github.com/Isaacpaezz/leakguard/releases).
+2. Install it: `sudo apt install ./leakguard_VERSION_amd64.deb` (Ubuntu,
+   Debian, Mint). Other distributions use the `.tar.gz`; they need
+   `nftables` and `systemd`.
+3. Open leakguard from the applications menu and follow the same 3-step
+   setup. The tray icon shows out of the box on Ubuntu; other GNOME desktops
+   need the AppIndicator extension.
+
+To remove it, choose "Uninstall leakguard…" in its menu, then
+`sudo apt remove leakguard`. Step-by-step guide in Spanish and English,
+including the command-line route:
+[docs/install-linux.md](docs/install-linux.md).
 
 ## Supported services
 
@@ -140,20 +164,20 @@ Missing a service? [Request it](https://github.com/Isaacpaezz/leakguard/issues/n
 ## What's new
 
 <!-- BEGIN GENERATED: whats-new -->
-**v0.1.0** · 2026-11-19
+**v0.2.0** · 2026-11-23
 
-The first public version, for macOS (pre-release).
+leakguard for Linux (pre-release). Its firewall is tested automatically with
+real nftables rules, but the tray app and a real VPN drop have not yet been
+tried on a real Linux desktop: please report any problem.
 
 **Added**
-- `leakguard.app` for macOS 13 or newer (Apple silicon and Intel) in a DMG on GitHub Releases, with a SHA-256 checksum and an install guide in Spanish and English ([docs/install-macos.md](docs/install-macos.md)). It is not signed with an Apple certificate yet, so macOS asks you to allow it once ("Open Anyway").
-- A shield in the menu bar shows whether you are protected. The menu has one checkbox per service, "Change VPN…", "Pause protection" and "Quit"; changes need no password.
-- A guided 3-step setup in Spanish or English: choose what to protect, find your VPN by disconnecting and connecting it, and turn the protection on with one password prompt. No terminal needed; cancelling any step changes nothing.
-- Protection for Anthropic (Claude), IPv4 and IPv6. When the VPN is down, Claude fails at once instead of using your real connection; the rest of the Mac keeps working. OpenAI is planned.
-- Session stats in the menu and in `leakguard status`: "VPN connected for 2 h 15 min" and "Today: 14 blocks · VPN dropped 2 times".
-- The app opens at login when it runs from Applications ("Open at login" in the menu turns that off), and "Uninstall leakguard…" removes the rules, the background service and the login item with one password prompt.
-- A background service loads the rules at boot, checks them every 30 seconds, loads them again when the check fails, and logs to `/Library/Logs/leakguard.log`.
-- `leakguard` command for macOS: `services`, `interfaces`, `enable`, `disable`, `status`, `test`, `apply` and `version`. `leakguard test` proves that each protected address is refused outside the VPN.
-- Service catalog with sources for every range, a README that updates itself from the catalog and this file, a contributor guide, issue templates, a security policy and agent rules.
+- Linux support: a `.deb` for Ubuntu, Debian and Mint (amd64 and arm64) and a `.tar.gz` for other distributions, each with a SHA-256 checksum and an install guide in Spanish and English ([docs/install-linux.md](docs/install-linux.md)). Removing the package also removes the rules and the background service; purging it also deletes your choices, the stats and the log. Upgrading the package restarts the background service with the new version, keeping your choices and the rules loaded.
+- On Linux, an nftables firewall (table `inet leakguard`) rejects protected destinations outside the VPN at once, also for the traffic the computer forwards for containers and virtual machines (Docker, libvirt), and only real tunnels are accepted as the VPN: Ethernet, Wi-Fi, USB tethering, Docker, bridges and loopback never are.
+- On Linux, a systemd service (`leakguard.service`) loads the rules before the network starts, checks them every 30 seconds and logs to `/var/log/leakguard.log` (rotated weekly, 4 weeks kept); only root and the administrators group (`sudo`, `wheel` or `admin`) can change the protection through it.
+- On Linux, the tray app with the same menu, 3-step setup, session stats, "Open at login" and uninstall as on macOS, with zenity (or kdialog) windows and one administrator prompt per change through pkexec (never remembered for other programs).
+
+**Changed**
+- Fail closed when the saved VPN turns out to be a real connection (for example a phone's USB tethering, which cannot be told apart from a VPN by its name while it is unplugged): the protected services are blocked on every interface until you choose your VPN again, instead of keeping rules that allowed it. `leakguard status` says why and `sudo leakguard apply` exits with an error.
 <!-- END GENERATED: whats-new -->
 
 Full history: [CHANGELOG.md](CHANGELOG.md).
@@ -163,9 +187,9 @@ Full history: [CHANGELOG.md](CHANGELOG.md).
 | Version | What | Status |
 |---|---|---|
 | 0.1.0 | macOS: menu-bar app, 3-step setup, Claude protection, DMG installer | ✅ First public version (pre-release) |
+| 0.2.0 | Linux: `nftables` backend, systemd service, tray app, `.deb` and `.tar.gz` ([guide](docs/install-linux.md)) | ✅ Pre-release; the firewall is tested with real rules, the tray app not yet on a real desktop |
+| 0.3.0 | Windows: Windows Filtering Platform backend, Windows service, tray app, `.exe` installer | 🧪 Built and tested in CI, not released yet |
 | 1.0 | [Milestone 1.0](https://github.com/Isaacpaezz/leakguard/milestone/1): ChatGPT/OpenAI ([#14](https://github.com/Isaacpaezz/leakguard/issues/14)), self-updating IP ranges ([#16](https://github.com/Isaacpaezz/leakguard/issues/16)), signed and notarized app ([#15](https://github.com/Isaacpaezz/leakguard/issues/15)), menu polish ([#8](https://github.com/Isaacpaezz/leakguard/issues/8)) | 🚧 Next |
-| 1.1 | Windows: Windows Filtering Platform backend and tray app | 🗓️ Planned |
-| 1.2 | Linux: `nftables` backend and tray app | 🗓️ Planned |
 
 Design notes and lessons learned: [docs/HANDOFF.md](docs/HANDOFF.md).
 
@@ -290,11 +314,14 @@ videos, banco) sigue funcionando con normalidad.
 
 Está pensado para países como Venezuela, donde estos servicios están
 restringidos y se usan a través de una VPN con *split tunneling* (por ejemplo,
-VPN Bypass). La versión 0.1.0 es la primera versión pública, para macOS, y
-todavía es una versión preliminar. Hoy protege Anthropic (Claude); ChatGPT
+VPN Bypass). La versión 0.2.0, para macOS y Linux, todavía es una versión
+preliminar. Hoy protege Anthropic (Claude); ChatGPT
 (OpenAI) llegará en la versión 1.0.
 
 **[⬇️ Descargar para macOS](https://github.com/Isaacpaezz/leakguard/releases)**
+
+Linux (`.deb` y `.tar.gz`) llega como versión preliminar: mira la
+[guía de instalación para Linux](docs/install-linux.md).
 
 ### Qué ves
 
@@ -356,10 +383,29 @@ protección**.
 
 Si cancelas, no se cambia nada.
 
+### Instalar en Linux
+
+Es una versión preliminar: el cortafuegos se prueba automáticamente con
+reglas reales de nftables, pero el ícono de la bandeja y una caída real de la
+VPN todavía no se han probado en un escritorio Linux de verdad. Si algo falla,
+[cuéntanos](https://github.com/Isaacpaezz/leakguard/issues/new?template=bug_report.yml).
+
+1. Descarga `leakguard_VERSIÓN_amd64.deb` (la mayoría de las computadoras) o
+   `leakguard_VERSIÓN_arm64.deb` (ARM, como una Raspberry Pi) desde
+   [Releases](https://github.com/Isaacpaezz/leakguard/releases).
+2. Instálalo: `sudo apt install ./leakguard_VERSIÓN_amd64.deb`.
+3. Abre leakguard desde el menú de aplicaciones y sigue los 3 pasos. En
+   Ubuntu el escudo aparece solo; otros escritorios GNOME necesitan la
+   extensión AppIndicator.
+
+Guía completa, con el `.tar.gz` para otras distribuciones y la ruta por
+terminal: [docs/install-linux.md](docs/install-linux.md).
+
 ### Enlaces
 
 - Guía completa de instalación, también dentro del DMG:
   [docs/install-macos.md](docs/install-macos.md)
+- Guía de instalación para Linux: [docs/install-linux.md](docs/install-linux.md)
 - Descargas: [Releases](https://github.com/Isaacpaezz/leakguard/releases)
 - ¿Algo no funciona? [Reporta un problema](https://github.com/Isaacpaezz/leakguard/issues/new?template=bug_report.yml)
   (puedes escribir en español).

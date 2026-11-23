@@ -1,0 +1,23 @@
+#!/bin/sh
+# Runs before dpkg removes the leakguard package. On remove or purge it turns
+# the protection off the same way "Uninstall leakguard…" does: it stops and
+# removes the systemd service and its root-owned copy, then removes the
+# nftables rules, so removing the package never leaves either behind. The
+# user's choices in /etc/leakguard stay until a purge (see postrm).
+# Upgrades keep everything running; postinst then restarts the service
+# with the new binary.
+#
+# A failure here never stops the removal: the package goes away anyway and
+# the error is printed for the user.
+set -u
+
+case "${1:-}" in
+remove | purge)
+	if [ -e /etc/systemd/system/leakguard.service ] && [ -x /usr/bin/leakguard ]; then
+		/usr/bin/leakguard disable ||
+			echo "leakguard: could not turn the protection off; install the package again and run: sudo leakguard disable" >&2
+	fi
+	;;
+esac
+
+exit 0

@@ -221,11 +221,13 @@ func TestServerAndClient(t *testing.T) {
 	if err != nil || info.Mode()&os.ModeSocket == 0 {
 		t.Fatalf("socket = %v, %v", info, err)
 	}
-	if info.Mode().Perm() != 0o660 {
-		t.Fatalf("socket mode = %v, want 0660", info.Mode().Perm())
+	// macOS: root:admin (80) 0660; Linux: root and its administrators group.
+	want := systemSocketOwner()
+	if info.Mode().Perm() != want.mode {
+		t.Fatalf("socket mode = %v, want %v", info.Mode().Perm(), want.mode)
 	}
-	if got := strings.Join(rec.calls, "|"); got != "s.sock 0:80" {
-		t.Fatalf("chown calls = %q, want root:admin", got)
+	if got := strings.Join(rec.calls, "|"); got != "s.sock 0:"+strconv.Itoa(want.gid) {
+		t.Fatalf("chown calls = %q, want root:%s", got, want.group)
 	}
 
 	c := Client{Path: path}

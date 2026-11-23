@@ -52,13 +52,8 @@ func AppBundle(exe string) (string, bool) {
 // LoginItemPlist is the LaunchAgent that runs exe, the absolute path of the
 // app executable, when the user logs in to the Mac's desktop.
 func LoginItemPlist(exe string) ([]byte, error) {
-	switch {
-	case !filepath.IsAbs(exe):
-		return nil, errors.New("the app executable needs an absolute path")
-	case !utf8.ValidString(exe):
-		return nil, errors.New("the path of the app executable is not valid UTF-8")
-	case strings.ContainsFunc(exe, func(r rune) bool { return r < 0x20 || r == 0x7f }):
-		return nil, errors.New("the path of the app executable contains control characters")
+	if err := checkExe(exe); err != nil {
+		return nil, err
 	}
 	var path bytes.Buffer
 	if err := xml.EscapeText(&path, []byte(exe)); err != nil {
@@ -83,6 +78,48 @@ func LoginItemPlist(exe string) ([]byte, error) {
 </dict>
 </plist>
 `), nil
+}
+
+// checkExe refuses an app executable path that a login item cannot hold
+// safely: it must be absolute, valid UTF-8 and without control characters.
+func checkExe(exe string) error {
+	switch {
+	case !filepath.IsAbs(exe):
+		return errors.New("the app executable needs an absolute path")
+	case !utf8.ValidString(exe):
+		return errors.New("the path of the app executable is not valid UTF-8")
+	case strings.ContainsFunc(exe, func(r rune) bool { return r < 0x20 || r == 0x7f }):
+		return errors.New("the path of the app executable contains control characters")
+	}
+	return nil
+}
+
+// loginItem is where one system keeps the login item and the app's
+// choices, and how it writes the login item. The macOS LaunchAgent and the
+// Linux autostart entry share every rule below.
+type loginItem struct {
+	// base is the folder both files live under (the home folder, or the XDG
+	// config folder); it must be absolute.
+	base, path, prefs string
+	// content renders the login item that runs exe.
+	content func(exe string) ([]byte, error)
+	// manages reports whether the login item may be touched for exe at all
+	// (DecideLoginItem); canChange whether it may change now (apply).
+	manages, canChange func(exe string) bool
+}
+
+func macLoginItem(home string, readOnly ReadOnlyFunc) loginItem {
+	return loginItem{
+		base:    home,
+		path:    LoginItemPath(home),
+		prefs:   PrefsPath(home),
+		content: LoginItemPlist,
+		manages: func(exe string) bool {
+			_, ok := AppBundle(exe)
+			return ok
+		},
+		canChange: func(exe string) bool { return CanOpenAtLogin(exe, readOnly) },
+	}
 }
 
 // LoginAction is what to do with the LaunchAgent.
@@ -113,7 +150,11 @@ func (a LoginAction) String() string {
 // touches it; otherwise it writes it when it is missing or differs, for
 // example because the app moved, and removes it when the user turned it off.
 func DecideLoginItem(exe string, wanted bool, data []byte, exists bool) LoginAction {
-	if _, ok := AppBundle(exe); !ok {
+	return macLoginItem("", nil).decide(exe, wanted, data, exists)
+}
+
+func (li loginItem) decide(exe string, wanted bool, data []byte, exists bool) LoginAction {
+	if !li.manages(exe) {
 		return LoginKeep
 	}
 	if !wanted {
@@ -122,7 +163,7 @@ func DecideLoginItem(exe string, wanted bool, data []byte, exists bool) LoginAct
 		}
 		return LoginKeep
 	}
-	want, err := LoginItemPlist(exe)
+	want, err := li.content(exe)
 	if err != nil {
 		return LoginKeep
 	}
@@ -152,8 +193,12 @@ const (
 // LoadPrefs reads the choices in home. A missing or damaged file, or
 // anything that is not a regular file, reads as the defaults.
 func LoadPrefs(home string) Prefs {
+	return macLoginItem(home, nil).loadPrefs()
+}
+
+func (li loginItem) loadPrefs() Prefs {
 	p := Prefs{OpenAtLogin: true}
-	data, err := readRegular(PrefsPath(home), maxPrefs)
+	data, err := readRegular(li.prefs, maxPrefs)
 	if err != nil {
 		return p
 	}
@@ -166,14 +211,18 @@ func LoadPrefs(home string) Prefs {
 
 // SavePrefs writes the choices in home, readable only by the user.
 func SavePrefs(home string, p Prefs) error {
-	if err := checkHome(home); err != nil {
+	return macLoginItem(home, nil).savePrefs(p)
+}
+
+func (li loginItem) savePrefs(p Prefs) error {
+	if err := checkHome(li.base); err != nil {
 		return err
 	}
 	data, err := json.Marshal(prefsFile{OpenAtLogin: &p.OpenAtLogin})
 	if err != nil {
 		return err
 	}
-	path := PrefsPath(home)
+	path := li.prefs
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
@@ -186,21 +235,25 @@ func SavePrefs(home string, p Prefs) error {
 // (see LoginMenu), the LaunchAgent is left as it is: it may open the copy
 // in Applications.
 func SyncLoginItem(home, exe string, readOnly ReadOnlyFunc) (bool, error) {
-	if err := checkHome(home); err != nil {
-		return true, err
-	}
-	on := LoadPrefs(home).OpenAtLogin
-	return on, applyLoginItem(home, exe, on, readOnly)
+	return macLoginItem(home, readOnly).sync(exe)
 }
 
-// applyLoginItem makes the LaunchAgent in home match on for the app
+func (li loginItem) sync(exe string) (bool, error) {
+	if err := checkHome(li.base); err != nil {
+		return true, err
+	}
+	on := li.loadPrefs().OpenAtLogin
+	return on, li.apply(exe, on)
+}
+
+// apply makes the LaunchAgent in home match on for the app
 // executable exe (see DecideLoginItem), unless the app runs from where a
 // login item would not survive a restart (see LoginMenu).
-func applyLoginItem(home, exe string, on bool, readOnly ReadOnlyFunc) error {
-	if !CanOpenAtLogin(exe, readOnly) {
+func (li loginItem) apply(exe string, on bool) error {
+	if !li.canChange(exe) {
 		return nil
 	}
-	path := LoginItemPath(home)
+	path := li.path
 	data, err := readRegular(path, maxLoginItem)
 	exists := err == nil
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -208,9 +261,9 @@ func applyLoginItem(home, exe string, on bool, readOnly ReadOnlyFunc) error {
 		// should be there.
 		data, exists = nil, true
 	}
-	switch DecideLoginItem(exe, on, data, exists) {
+	switch li.decide(exe, on, data, exists) {
 	case LoginWrite:
-		want, err := LoginItemPlist(exe)
+		want, err := li.content(exe)
 		if err != nil {
 			return err
 		}
@@ -233,17 +286,21 @@ func applyLoginItem(home, exe string, on bool, readOnly ReadOnlyFunc) error {
 // agent and the saved choice stay as they were, so the menu keeps its old
 // checkbox. No password is needed: everything is in the user's home folder.
 func SetOpenAtLogin(home, exe string, on bool, readOnly ReadOnlyFunc) error {
-	if err := checkHome(home); err != nil {
+	return macLoginItem(home, readOnly).set(exe, on)
+}
+
+func (li loginItem) set(exe string, on bool) error {
+	if err := checkHome(li.base); err != nil {
 		return err
 	}
-	p := LoadPrefs(home)
+	p := li.loadPrefs()
 	was := p.OpenAtLogin
-	if err := applyLoginItem(home, exe, on, readOnly); err != nil {
+	if err := li.apply(exe, on); err != nil {
 		return err
 	}
 	p.OpenAtLogin = on
-	if err := SavePrefs(home, p); err != nil {
-		return errors.Join(err, applyLoginItem(home, exe, was, readOnly))
+	if err := li.savePrefs(p); err != nil {
+		return errors.Join(err, li.apply(exe, was))
 	}
 	return nil
 }
@@ -251,17 +308,21 @@ func SetOpenAtLogin(home, exe string, on bool, readOnly ReadOnlyFunc) error {
 // RemoveLoginItem removes the LaunchAgent and menubar.json, for the
 // uninstall. Files already gone are fine.
 func RemoveLoginItem(home string) error {
-	if err := checkHome(home); err != nil {
+	return macLoginItem(home, nil).remove()
+}
+
+func (li loginItem) remove() error {
+	if err := checkHome(li.base); err != nil {
 		return err
 	}
 	var errs []error
-	for _, p := range []string{LoginItemPath(home), PrefsPath(home)} {
+	for _, p := range []string{li.path, li.prefs} {
 		if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			errs = append(errs, err)
 		}
 	}
 	// The leakguard folder goes too when nothing else is in it.
-	os.Remove(filepath.Dir(PrefsPath(home)))
+	os.Remove(filepath.Dir(li.prefs))
 	return errors.Join(errs...)
 }
 
@@ -406,9 +467,13 @@ func GuardMoveToApplications(l Lang, d Dialogs, exe string, readOnly ReadOnlyFun
 
 // LoginItemPresent reports whether the LaunchAgent exists in home.
 func LoginItemPresent(home string) bool {
-	if checkHome(home) != nil {
+	return macLoginItem(home, nil).present()
+}
+
+func (li loginItem) present() bool {
+	if checkHome(li.base) != nil {
 		return false
 	}
-	_, err := os.Lstat(LoginItemPath(home))
+	_, err := os.Lstat(li.path)
 	return err == nil
 }

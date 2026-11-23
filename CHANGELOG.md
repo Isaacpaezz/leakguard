@@ -6,7 +6,20 @@ All notable changes to leakguard are documented here. The format follows
 
 The newest section is shown automatically on the README landing page.
 
-## [Unreleased]
+## [0.2.0] - 2026-11-23
+
+leakguard for Linux (pre-release). Its firewall is tested automatically with
+real nftables rules, but the tray app and a real VPN drop have not yet been
+tried on a real Linux desktop: please report any problem.
+
+### Added
+- Linux support: a `.deb` for Ubuntu, Debian and Mint (amd64 and arm64) and a `.tar.gz` for other distributions, each with a SHA-256 checksum and an install guide in Spanish and English ([docs/install-linux.md](docs/install-linux.md)). Removing the package also removes the rules and the background service; purging it also deletes your choices, the stats and the log. Upgrading the package restarts the background service with the new version, keeping your choices and the rules loaded.
+- On Linux, an nftables firewall (table `inet leakguard`) rejects protected destinations outside the VPN at once, also for the traffic the computer forwards for containers and virtual machines (Docker, libvirt), and only real tunnels are accepted as the VPN: Ethernet, Wi-Fi, USB tethering, Docker, bridges and loopback never are.
+- On Linux, a systemd service (`leakguard.service`) loads the rules before the network starts, checks them every 30 seconds and logs to `/var/log/leakguard.log` (rotated weekly, 4 weeks kept); only root and the administrators group (`sudo`, `wheel` or `admin`) can change the protection through it.
+- On Linux, the tray app with the same menu, 3-step setup, session stats, "Open at login" and uninstall as on macOS, with zenity (or kdialog) windows and one administrator prompt per change through pkexec (never remembered for other programs).
+
+### Changed
+- Fail closed when the saved VPN turns out to be a real connection (for example a phone's USB tethering, which cannot be told apart from a VPN by its name while it is unplugged): the protected services are blocked on every interface until you choose your VPN again, instead of keeping rules that allowed it. `leakguard status` says why and `sudo leakguard apply` exits with an error.
 
 ## [0.1.0] - 2026-11-19
 

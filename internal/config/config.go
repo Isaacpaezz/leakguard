@@ -11,15 +11,16 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
-	"strings"
+	"runtime"
 
 	"github.com/Isaacpaezz/leakguard/internal/catalog"
 )
 
 // DefaultPath is where the configuration lives. It is owned by root and
 // readable by everyone, so status and test work without sudo.
-const DefaultPath = "/Library/Application Support/leakguard/config.json"
+// macOS: /Library/Application Support/leakguard/config.json; Linux:
+// /etc/leakguard/config.json; Windows: %ProgramData%\leakguard\config.json.
+var DefaultPath = pathFor(runtime.GOOS, os.Getenv("ProgramData"))
 
 // ErrNotConfigured means no configuration file exists yet.
 var ErrNotConfigured = errors.New("leakguard is not configured yet")
@@ -33,40 +34,32 @@ type Config struct {
 	Paused bool `json:"paused,omitempty"`
 }
 
-// The name is pasted into firewall rules, so only plain interface names pass.
-var interfaceName = regexp.MustCompile(`^[a-z][a-z0-9]{0,14}$`)
-
-// Prefixes of interfaces that carry the real connection, never a VPN.
-var nonVPNPrefixes = []string{"lo", "en", "bridge", "awdl", "llw", "ap", "anpi", "gif", "stf"}
-
-// Prefixes of interfaces that VPN clients create.
-var vpnPrefixes = []string{"utun", "ipsec", "ppp", "tun", "tap", "wg"}
-
 // ValidInterfaceName reports whether name is a plain interface name, safe to
 // paste into firewall rules.
 func ValidInterfaceName(name string) bool {
-	return interfaceName.MatchString(name)
+	return host.validName(name)
 }
 
 // CheckVPNInterface reports why name cannot be used as the VPN interface.
 // The firewall backends call it too, so a bad name never reaches the rules.
+// macOS judges by name; Linux by what the kernel says about the interface;
+// Windows refuses every interface for now. Every refusal wraps ErrVPNRefused.
 func CheckVPNInterface(name string) error {
-	switch {
-	case name == "":
-		return errors.New("VPN interface is not set")
-	case !ValidInterfaceName(name):
-		return fmt.Errorf("%q is not a valid interface name", name)
-	case hasPrefix(name, nonVPNPrefixes):
-		return fmt.Errorf("%q is not a VPN interface; it carries your real connection", name)
-	}
-	return nil
+	return host.check(name)
 }
 
-// Validate checks the configuration against the service catalog.
+// Validate checks the configuration against the service catalog. A refused
+// VPN interface wraps ErrVPNRefused.
 func (c Config) Validate(services []catalog.Service) error {
 	if err := CheckVPNInterface(c.VPNInterface); err != nil {
 		return err
 	}
+	return c.ValidateServices(services)
+}
+
+// ValidateServices checks everything but the VPN interface: the chosen
+// services against the catalog.
+func (c Config) ValidateServices(services []catalog.Service) error {
 	if len(c.Services) == 0 {
 		return errors.New("no services selected")
 	}
@@ -88,22 +81,7 @@ func (c Config) Validate(services []catalog.Service) error {
 
 // VPNCandidates keeps the interface names that look like VPN tunnels.
 func VPNCandidates(names []string) []string {
-	var out []string
-	for _, n := range names {
-		if hasPrefix(n, vpnPrefixes) {
-			out = append(out, n)
-		}
-	}
-	return out
-}
-
-func hasPrefix(name string, prefixes []string) bool {
-	for _, p := range prefixes {
-		if strings.HasPrefix(name, p) {
-			return true
-		}
-	}
-	return false
+	return host.candidates(names)
 }
 
 // Load reads the configuration at path. A missing file returns ErrNotConfigured.

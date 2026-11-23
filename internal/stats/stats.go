@@ -34,13 +34,16 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"time"
 )
 
 // DefaultPath is where the daemon keeps the stats: root-owned, readable by
-// everyone, like the configuration next to it.
-const DefaultPath = "/Library/Application Support/leakguard/stats.json"
+// everyone, like the configuration. macOS: /Library/Application
+// Support/leakguard/stats.json; Linux: /var/lib/leakguard/stats.json;
+// Windows: %ProgramData%\leakguard\stats.json.
+var DefaultPath = pathFor(runtime.GOOS, os.Getenv("ProgramData"))
 
 // MaxGap is the longest time between two VPN samples that still counts as
 // watched. A longer gap (the Mac slept, the daemon was stopped) adds no VPN

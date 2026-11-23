@@ -1,4 +1,4 @@
-//go:build !darwin
+//go:build !darwin && !linux
 
 package main
 
@@ -12,7 +12,7 @@ func TestRunIsNotSupportedYet(t *testing.T) {
 	if code := run(&stderr); code != 1 {
 		t.Errorf("exit code = %d, want 1", code)
 	}
-	if got, want := stderr.String(), "leakguard-menubar: not supported yet on this system; it runs on macOS only\n"; got != want {
+	if got, want := stderr.String(), "leakguard-menubar: not supported yet on this system; it runs on macOS and Linux\n"; got != want {
 		t.Errorf("stderr = %q, want %q", got, want)
 	}
 }

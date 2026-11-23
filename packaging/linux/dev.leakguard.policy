@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!--
+  The administrator prompt of the leakguard tray app. The app runs
+  "pkexec /usr/bin/leakguard enable|disable ..." for the first setup and the
+  uninstall, and the root-owned copy the systemd service runs once it is
+  installed. Only administrators can authorize it, once per change, like
+  the macOS administrator prompt: auth_admin, never auth_admin_keep, so no
+  authorization is cached for other programs to reuse.
+-->
+<policyconfig>
+  <vendor>leakguard</vendor>
+  <vendor_url>https://github.com/Isaacpaezz/leakguard</vendor_url>
+  <icon_name>leakguard</icon_name>
+
+  <action id="dev.leakguard.cli">
+    <description>Change leakguard's protection</description>
+    <description xml:lang="es">Cambiar la protección de leakguard</description>
+    <message>leakguard needs your password to turn the protection on or off.</message>
+    <message xml:lang="es">leakguard necesita tu contraseña para activar o quitar la protección.</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/leakguard</annotate>
+  </action>
+
+  <action id="dev.leakguard.installed-cli">
+    <description>Change leakguard's protection</description>
+    <description xml:lang="es">Cambiar la protección de leakguard</description>
+    <message>leakguard needs your password to turn the protection on or off.</message>
+    <message xml:lang="es">leakguard necesita tu contraseña para activar o quitar la protección.</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/local/libexec/leakguard/leakguard</annotate>
+  </action>
+</policyconfig>

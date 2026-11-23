@@ -4,7 +4,9 @@
 //
 // Only administrators may talk to the daemon: the socket belongs to
 // root:admin with mode 0660, and the server also checks the peer's
-// credentials and refuses anyone who is not root or in group admin.
+// credentials and refuses anyone who is not root or in group admin. On
+// Linux the group is the first of sudo, wheel and admin that exists; without
+// one, the socket is root:root 0600 and only root is accepted.
 package ipc
 
 import (
@@ -18,8 +20,6 @@ import (
 )
 
 const (
-	// DefaultPath is where the daemon listens.
-	DefaultPath = "/var/run/leakguard.sock"
 	// MaxMessage bounds a request or response, in bytes, newline included.
 	MaxMessage = 64 << 10
 	// Deadline bounds one connection: request, handling and response.

@@ -30,7 +30,7 @@ func TestParseLang(t *testing.T) {
 		{"()", English},
 	}
 	for _, tc := range tests {
-		if got := ParseLang(tc.in); got != tc.want {
+		if got := ParseLang(tc.in); got.String() != tc.want.String() {
 			t.Errorf("ParseLang(%q) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
@@ -49,7 +49,7 @@ func TestMessagesComplete(t *testing.T) {
 			t.Errorf("message %d: %d placeholders in es, %d in en", m, a, b)
 		}
 	}
-	if got := Lang("fr").Text(MsgMenuQuit); got != "Quit" {
+	if got := ParseLang("fr").Text(MsgMenuQuit); got != "Quit" {
 		t.Errorf("unknown language reads %q, want English", got)
 	}
 	if got := Spanish.Text(msgCount); got != "" {

@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=leakguard
+GenericName=VPN kill switch
+GenericName[es]=Bloqueo por caída de VPN
+Comment=Shows whether your chosen services are protected
+Comment[es]=Muestra si los servicios que elegiste están protegidos
+Exec=/usr/bin/leakguard-tray
+Icon=leakguard
+Terminal=false
+Categories=Network;Security;
+Keywords=VPN;kill switch;firewall;privacy;
+Keywords[es]=VPN;bloqueo;cortafuegos;privacidad;
+StartupNotify=false

@@ -1,4 +1,5 @@
-// Package daemon installs the macOS LaunchDaemon that runs "leakguard serve":
+// Package daemon installs the background service that runs "leakguard serve"
+// (the macOS LaunchDaemon, the Linux systemd unit):
 // it loads the firewall rules at boot, verifies them periodically and loads
 // them again when OS updates or VPN clients flush them, counts what they
 // block, and answers the menu-bar app.
@@ -87,6 +88,24 @@ func (ExecRunner) Run(args ...string) (string, error) {
 	return stdout.String(), nil
 }
 
+// Manager installs and inspects the background service that runs
+// "leakguard serve". Each OS has its own; only package main picks one.
+type Manager interface {
+	// Install copies the executable at src to a root-owned place and
+	// (re)starts the service with it.
+	Install(src string) error
+	// Uninstall stops the service and removes its files.
+	Uninstall() error
+	// Installed reports whether the service is installed.
+	Installed() bool
+	// LegacyInstalled reports whether an older kill switch is installed.
+	LegacyInstalled() bool
+	// LastLogLine returns the last line the service logged.
+	LastLogLine() (string, bool)
+}
+
+var _ Manager = Daemon{}
+
 // Daemon installs and removes the LaunchDaemon.
 type Daemon struct {
 	// Root prefixes every file path; empty means the real file system.
@@ -102,8 +121,12 @@ type Daemon struct {
 
 // LastLogLine returns the last non-empty line of the daemon log, reading only
 // its tail. A missing or empty log returns false.
-func (d Daemon) LastLogLine() (string, bool) {
-	f, err := os.Open(d.path(LogPath))
+func (d Daemon) LastLogLine() (string, bool) { return lastLogLine(d.path(LogPath)) }
+
+// lastLogLine returns the last non-empty line of the log at path, reading
+// only its tail. A missing or empty log returns false.
+func lastLogLine(path string) (string, bool) {
+	f, err := os.Open(path)
 	if err != nil {
 		return "", false
 	}
@@ -228,6 +251,13 @@ func (d Daemon) LegacyInstalled() bool {
 
 // writeFile replaces path atomically with data and the given mode.
 func writeFile(path string, data []byte, mode os.FileMode) error {
+	return writeFileChecked(path, data, mode, nil)
+}
+
+// writeFileChecked replaces path atomically with data and the given mode.
+// check, when set, runs on the complete temporary file before the rename;
+// if it fails, path is left untouched and the temporary file is removed.
+func writeFileChecked(path string, data []byte, mode os.FileMode, check func(tmp string) error) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -250,6 +280,11 @@ func writeFile(path string, data []byte, mode os.FileMode) error {
 	}
 	if err := tmp.Close(); err != nil {
 		return err
+	}
+	if check != nil {
+		if err := check(tmp.Name()); err != nil {
+			return err
+		}
 	}
 	return os.Rename(tmp.Name(), path)
 }

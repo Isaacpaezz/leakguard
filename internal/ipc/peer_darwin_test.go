@@ -53,7 +53,7 @@ func TestPeerCredentialsOnDarwin(t *testing.T) {
 	if !slices.Contains(groups, uint32(os.Getgid())) {
 		t.Fatalf("peer groups %v do not contain the primary group %d", groups, os.Getgid())
 	}
-	err = authorizePeer(server)
+	err = authorizePeer(server, socketOwner{"admin", AdminGID, 0o660, true})
 	switch {
 	case isAdmin(t):
 		if err != nil {
@@ -70,7 +70,7 @@ func TestPeerCredentialsRejectNonUnixConns(t *testing.T) {
 	a, b := net.Pipe()
 	defer a.Close()
 	defer b.Close()
-	if err := authorizePeer(a); err == nil {
+	if err := authorizePeer(a, socketOwner{"admin", AdminGID, 0o660, true}); err == nil {
 		t.Fatal("authorizePeer(net.Pipe) = nil")
 	}
 }

@@ -1,6 +1,7 @@
-//go:build !darwin
+//go:build !darwin && !linux
 
-// Command leakguard-menubar is the menu-bar app. Only macOS is supported yet.
+// Command leakguard-menubar is the menu-bar app. Only macOS and Linux are
+// supported yet.
 package main
 
 import (
@@ -14,6 +15,6 @@ func main() {
 }
 
 func run(stderr io.Writer) int {
-	fmt.Fprintln(stderr, "leakguard-menubar: not supported yet on this system; it runs on macOS only")
+	fmt.Fprintln(stderr, "leakguard-menubar: not supported yet on this system; it runs on macOS and Linux")
 	return 1
 }

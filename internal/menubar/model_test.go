@@ -55,7 +55,7 @@ func services(l Lang, checked ...string) []ServiceItem {
 		is[id] = true
 	}
 	soon := "OpenAI (coming soon)"
-	if l == Spanish {
+	if l.IsSpanish() {
 		soon = "OpenAI (próximamente)"
 	}
 	return []ServiceItem{

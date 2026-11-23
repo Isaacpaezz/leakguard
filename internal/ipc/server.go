@@ -7,6 +7,8 @@ import (
 	"io/fs"
 	"net"
 	"os"
+	"os/user"
+	"runtime"
 	"sync"
 	"time"
 )
@@ -21,16 +23,23 @@ type Server struct {
 	// Handler runs every authorized, well-formed request.
 	Handler Handler
 	// Authorize accepts or refuses a peer before anything is read from it.
-	// Nil means the platform check: root or group admin on macOS, and
-	// nobody elsewhere (fail closed).
+	// Nil means the platform check: root or group admin on macOS, root or
+	// the socket's administrators group on Linux, and nobody elsewhere
+	// (fail closed).
 	Authorize func(net.Conn) error
 	// Chown and Chmod set the socket's owner and mode. Nil means os.Chown
 	// and os.Chmod; tests replace Chown so they run without root.
 	Chown func(path string, uid, gid int) error
 	Chmod func(path string, mode os.FileMode) error
 
-	deadline time.Duration // zero means Deadline; tests shorten it
-	ready    func()        // called once the socket accepts connections
+	owner     func() socketOwner                // nil means systemSocketOwner
+	peerCheck func(net.Conn, socketOwner) error // nil means authorizePeer
+	deadline  time.Duration                     // zero means Deadline; tests shorten it
+	ready     func()                            // called once the socket accepts connections
+
+	// socket is the owner resolved when the socket was created; the
+	// default peer check uses its group.
+	socket socketOwner
 }
 
 // Serve creates the socket and answers requests until ctx is cancelled. It
@@ -70,8 +79,13 @@ func (s *Server) Serve(ctx context.Context) error {
 	}
 }
 
+// systemSocketOwner is the socket's owner on this computer.
+func systemSocketOwner() socketOwner {
+	return socketOwnership(runtime.GOOS, user.LookupGroup)
+}
+
 // listen replaces a stale socket, never any other file, and restricts the
-// new socket to root:admin 0660.
+// new socket to its owner (see socketOwnership).
 func (s *Server) listen() (*net.UnixListener, error) {
 	info, err := os.Lstat(s.Path)
 	switch {
@@ -106,11 +120,17 @@ func (s *Server) listen() (*net.UnixListener, error) {
 	if chmod == nil {
 		chmod = os.Chmod
 	}
-	if err := chown(s.Path, 0, AdminGID); err != nil {
-		ln.Close()
-		return nil, fmt.Errorf("could not give %s to root:admin: %w", s.Path, err)
+	owner := systemSocketOwner
+	if s.owner != nil {
+		owner = s.owner
 	}
-	if err := chmod(s.Path, 0o660); err != nil {
+	o := owner()
+	s.socket = o
+	if err := chown(s.Path, 0, o.gid); err != nil {
+		ln.Close()
+		return nil, fmt.Errorf("could not give %s to root:%s: %w", s.Path, o.group, err)
+	}
+	if err := chmod(s.Path, o.mode); err != nil {
 		ln.Close()
 		return nil, fmt.Errorf("could not restrict %s: %w", s.Path, err)
 	}
@@ -126,7 +146,11 @@ func (s *Server) handle(conn net.Conn) {
 	conn.SetDeadline(time.Now().Add(d))
 	authorize := s.Authorize
 	if authorize == nil {
-		authorize = authorizePeer
+		check := s.peerCheck
+		if check == nil {
+			check = authorizePeer
+		}
+		authorize = func(c net.Conn) error { return check(c, s.socket) }
 	}
 	if err := authorize(conn); err != nil {
 		// ErrNotAuthorized is all an unauthorized peer learns.

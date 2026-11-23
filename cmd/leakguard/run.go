@@ -7,10 +7,13 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"runtime"
 	"strings"
 	"time"
 
 	"github.com/Isaacpaezz/leakguard/internal/daemon"
+	"github.com/Isaacpaezz/leakguard/internal/firewall"
+	"github.com/Isaacpaezz/leakguard/internal/nft"
 	"github.com/Isaacpaezz/leakguard/internal/pf"
 	"github.com/Isaacpaezz/leakguard/internal/probe"
 	"github.com/Isaacpaezz/leakguard/internal/stats"
@@ -40,7 +43,9 @@ type Env struct {
 	IsRoot           func() bool
 	Root             string // prefixes every file path; empty means the real file system
 	Pfctl            pf.Runner
+	Nft              nft.Runner
 	Launchctl        daemon.Runner
+	Systemctl        daemon.Runner
 	Secure           func(path string) error // nil means daemon.SecureRootOwned
 	Interfaces       func() ([]Interface, error)
 	Executable       func() (string, error)
@@ -68,9 +73,19 @@ type Env struct {
 	// ServeContext returns the context that stops "serve". Nil means
 	// SIGINT or SIGTERM.
 	ServeContext func() (context.Context, context.CancelFunc)
+	// Firewall builds the firewall backend from the Env, for example
+	// pfFirewall. Nil means this system has none: changes fail closed.
+	Firewall func(Env) firewall.Firewall
+	// Services builds the background-service manager from the Env, for
+	// example launchdServices. Nil means this system has none.
+	Services func(Env) daemon.Manager
+	// NotifySocket is systemd's $NOTIFY_SOCKET: "serve" sends READY=1
+	// there once it has loaded the rules. Empty means no notification.
+	NotifySocket string
 }
 
-const usage = `leakguard keeps the services you choose off your real connection:
+// darwinUsage is the macOS help.
+const darwinUsage = `leakguard keeps the services you choose off your real connection:
 they work only through your VPN, and go offline when the VPN drops.
 
 Usage:
@@ -123,6 +138,42 @@ Examples:
 Exit status: 0 on success, 1 on failure, 2 on a usage error.
 `
 
+// linuxText turns the macOS help into the Linux one: nftables, systemd's
+// paths and the tray app.
+var linuxText = strings.NewReplacer(
+	"that pf is enabled and the firewall rules are\n", "that the nftables firewall rules are\n",
+	`run to /Library/Logs/leakguard.log, keeps the session stats in
+      /Library/Application Support/leakguard/stats.json, and answers the
+      menu-bar app on /var/run/leakguard.sock. Only administrators can
+      talk to it.
+`, `run to /var/log/leakguard.log, keeps the session stats in
+      /var/lib/leakguard/stats.json, and answers the tray app on
+      /run/leakguard.sock. Only administrators can talk to it.
+`,
+	"menu-bar app", "tray app",
+	"--vpn ipsec0", "--vpn wg0",
+)
+
+// usageFor returns the help for the operating system goos. Systems without
+// their own text yet get the macOS one.
+func usageFor(goos string) string {
+	if goos == "linux" {
+		return linuxText.Replace(darwinUsage)
+	}
+	return darwinUsage
+}
+
+// usage is the help for this system.
+var usage = usageFor(runtime.GOOS)
+
+// viaExampleFor names a typical real-connection interface on goos.
+func viaExampleFor(goos string) string {
+	if goos == "linux" {
+		return "eth0"
+	}
+	return "en0"
+}
+
 // usageError is a mistake in the command line; it exits with status 2.
 type usageError struct{ msg string }
 
@@ -150,6 +201,8 @@ var commands = []command{
 	{"test", (*cli).test},
 	{"serve", (*cli).serve},
 	{"version", (*cli).version},
+	// Internal, not in the help: the Linux package runs it after an upgrade.
+	{"reinstall-service", (*cli).reinstallService},
 }
 
 type cli struct {

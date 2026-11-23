@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -14,7 +15,6 @@ import (
 	"github.com/Isaacpaezz/leakguard/internal/config"
 	"github.com/Isaacpaezz/leakguard/internal/daemon"
 	"github.com/Isaacpaezz/leakguard/internal/ipc"
-	"github.com/Isaacpaezz/leakguard/internal/pf"
 	"github.com/Isaacpaezz/leakguard/internal/probe"
 )
 
@@ -25,13 +25,49 @@ var errNotConfigured = errors.New("not configured yet; run: sudo leakguard enabl
 
 func (c *cli) configPath() string { return filepath.Join(c.env.Root, config.DefaultPath) }
 
-func (c *cli) firewall() pf.Firewall { return pf.Firewall{Runner: c.env.Pfctl} }
-
-func (c *cli) daemon() daemon.Daemon {
-	return daemon.Daemon{Root: c.env.Root, Launchctl: c.env.Launchctl, Secure: c.env.Secure}
+// vpnRefusedError is a saved configuration that is valid except for its VPN
+// interface, which is refused (for example a real connection that now
+// exists under that name). Its rules allow no interface: fail closed.
+type vpnRefusedError struct {
+	vpn string
+	err error // the refusal; it wraps config.ErrVPNRefused
 }
 
+func (e vpnRefusedError) Error() string { return "invalid configuration: " + e.err.Error() }
+func (e vpnRefusedError) Unwrap() error { return e.err }
+
+// blocked is what the daemon and apply log once the block-all rules load.
+func (e vpnRefusedError) blocked() error {
+	return fmt.Errorf("%v; protected services are blocked on every interface", e)
+}
+
+// notBlocked is what they log when the block-all rules fail to load.
+func (e vpnRefusedError) notBlocked(err error) error {
+	return fmt.Errorf("%v, and protected services could not be blocked: %w", e, err)
+}
+
+// reason is what status says, given how the block-all rules verified.
+func (e vpnRefusedError) reason(verr error) string {
+	if verr != nil {
+		return fmt.Sprintf("the saved VPN %q is not a VPN interface, and protected services are not blocked: %v", e.vpn, verr)
+	}
+	return fmt.Sprintf("protected services are blocked: the saved VPN %q is not a VPN interface; choose yours with: sudo leakguard enable --vpn IFACE", e.vpn)
+}
+
+// asVPNRefused reports whether err is a loadValid error for a configuration
+// that is valid except for its VPN interface.
+func asVPNRefused(err error) (vpnRefusedError, bool) {
+	var e vpnRefusedError
+	return e, errors.As(err, &e)
+}
+
+// blockAll is the choice whose rules allow no interface (Firewall with an
+// empty VPN).
+var blockAll = config.Config{}
+
 // loadValid loads the saved configuration and checks it against the catalog.
+// When only the VPN interface is refused, it also returns the services with
+// a vpnRefusedError, so the caller can block them on every interface.
 func (c *cli) loadValid() (config.Config, []catalog.Service, error) {
 	all, err := catalog.Embedded()
 	if err != nil {
@@ -45,6 +81,9 @@ func (c *cli) loadValid() (config.Config, []catalog.Service, error) {
 		return cfg, nil, err
 	}
 	if err := cfg.Validate(all); err != nil {
+		if errors.Is(err, config.ErrVPNRefused) && cfg.ValidateServices(all) == nil {
+			return cfg, selected(cfg, all), vpnRefusedError{vpn: cfg.VPNInterface, err: err}
+		}
 		return cfg, nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 	return cfg, selected(cfg, all), nil
@@ -193,6 +232,9 @@ func (c *cli) enable(args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := c.requireSupported(); err != nil {
+		return err
+	}
 	if err := c.requireRoot("enable"); err != nil {
 		return err
 	}
@@ -269,25 +311,43 @@ func (c *cli) disable(args []string) error {
 }
 
 // apply loads the saved rules. Without a valid configuration it fails and
-// leaves any loaded rules in place (fail closed). Once the rules are loaded
-// it ends a pause from the menu-bar app, so the daemon loads them again
-// after a reboot.
+// leaves any loaded rules in place (fail closed); when only the saved VPN
+// interface is refused, it loads rules that block protected services on
+// every interface and fails with the reason. Once the rules are loaded it
+// ends a pause from the menu-bar app, so the daemon loads them again after a
+// reboot.
 func (c *cli) apply(args []string) error {
 	if _, err := c.parse(flag.NewFlagSet("apply", flag.ContinueOnError), args, false); err != nil {
+		return err
+	}
+	if err := c.requireSupported(); err != nil {
 		return err
 	}
 	if err := c.requireRoot("apply"); err != nil {
 		return err
 	}
 	cfg, services, err := c.loadValid()
+	vpn := cfg.VPNInterface
+	refused, isRefused := asVPNRefused(err)
+	if isRefused {
+		vpn, err = blockAll.VPNInterface, nil
+	}
 	if err == nil {
-		err = c.firewall().Apply(cfg.VPNInterface, services)
+		if err = c.firewall().Apply(vpn, services); err != nil && isRefused {
+			return c.logApply(cfg, refused.notBlocked(err))
+		}
 	}
 	if err == nil && cfg.Paused {
 		cfg.Paused = false
 		if serr := config.Save(c.configPath(), cfg); serr != nil {
+			if isRefused {
+				return c.logApply(cfg, fmt.Errorf("%v; the pause could not be cleared: %w", refused.blocked(), serr))
+			}
 			err = fmt.Errorf("the rules are loaded, but the pause could not be cleared: %w", serr)
 		}
+	}
+	if err == nil && isRefused {
+		err = refused.blocked()
 	}
 	return c.logApply(cfg, err)
 }
@@ -327,7 +387,10 @@ func (c *cli) status(args []string) error {
 		fmt.Fprintf(c.stdout, "leakguard is not configured yet.\n%s\n", notConfiguredHelp)
 		return nil
 	}
-	if err != nil {
+	// Root can tell whether a refused VPN left protected services blocked.
+	refused, isRefused := asVPNRefused(err)
+	isRefused = isRefused && c.env.IsRoot() && !cfg.Paused
+	if err != nil && !isRefused {
 		return err
 	}
 	vpnState := "not connected"
@@ -350,6 +413,11 @@ func (c *cli) status(args []string) error {
 		fmt.Fprintf(w, "Firewall:\trun \"sudo leakguard status\" to verify the rules\n")
 		return w.Flush()
 	}
+	if isRefused {
+		fmt.Fprintf(w, "Firewall:\tNOT PROTECTED: %s\n", refused.reason(c.verify(blockAll, services)))
+		w.Flush()
+		return exitError{exitFailure}
+	}
 	if verr := c.verify(cfg, services); verr != nil {
 		fmt.Fprintf(w, "Firewall:\tNOT PROTECTED: %v\n", verr)
 		w.Flush()
@@ -359,19 +427,17 @@ func (c *cli) status(args []string) error {
 	return w.Flush()
 }
 
-// verify checks, as root, that pf is enabled and the anchor protects services.
+// verify checks, as root, that the firewall is enabled and its rules
+// protect services.
 func (c *cli) verify(cfg config.Config, services []catalog.Service) error {
-	switch on, err := c.firewall().Enabled(); {
+	fw := c.firewall()
+	switch on, err := fw.Enabled(); {
 	case err != nil:
 		return err
 	case !on:
-		return errors.New("pf is disabled; turn it back on with: sudo leakguard apply")
+		return fmt.Errorf("%s is disabled; turn it back on with: sudo leakguard apply", fw.Name())
 	}
-	state, err := c.firewall().Status()
-	if err != nil {
-		return err
-	}
-	return state.Verify(cfg.VPNInterface, services)
+	return fw.Verify(cfg.VPNInterface, services)
 }
 
 func isVPN(iface string, cfg config.Config) bool {
@@ -458,7 +524,7 @@ func (c *cli) test(args []string) error {
 	iface := *via
 	if iface != "" {
 		if isVPN(iface, cfg) {
-			return fmt.Errorf("%s is a VPN interface; name your Wi-Fi or Ethernet interface with --via IFACE, for example --via en0", iface)
+			return fmt.Errorf("%s is a VPN interface; name your Wi-Fi or Ethernet interface with --via IFACE, for example --via %s", iface, viaExampleFor(runtime.GOOS))
 		}
 		if err := c.checkVia(iface, cfg); err != nil {
 			return err

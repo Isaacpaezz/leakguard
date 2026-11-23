@@ -1,4 +1,4 @@
-//go:build !darwin
+//go:build !darwin && !linux
 
 package ipc
 
@@ -12,7 +12,7 @@ func TestAuthorizePeerFailsClosed(t *testing.T) {
 	a, b := net.Pipe()
 	defer a.Close()
 	defer b.Close()
-	if err := authorizePeer(a); err == nil {
+	if err := authorizePeer(a, socketOwner{"root", 0, 0o600, false}); err == nil {
 		t.Fatal("authorizePeer() = nil on a platform without peer credentials")
 	}
 }

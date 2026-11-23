@@ -26,9 +26,52 @@ jobs:
             echo "Run gofmt -w on:"; echo "$unformatted"; exit 1
           fi
       - run: go vet ./...
+      - name: Linux and Windows keep compiling
+        run: |
+          GOOS=linux go vet ./...
+          GOOS=windows go vet ./...
       - run: go test ./...
       - name: README landing page is up to date
         run: go run ./tools/readmegen -check
+
+  test-linux-nftables:
+    name: Linux nftables integration (real rules, root)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Install nftables and iproute2
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq nftables iproute2
+      # Local traffic, and traffic forwarded through network namespaces.
+      - name: Load real rules and probe them
+        run: |
+          go test -c -o "$RUNNER_TEMP/nft.test" ./internal/nft/
+          sudo LEAKGUARD_NFT_INTEGRATION=1 "$RUNNER_TEMP/nft.test" -test.count=1 -test.run Integration -test.v
+
+  package-linux:
+    name: Linux packages build (not uploaded)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Build the .deb and .tar.gz packages
+        run: scripts/build-linux.sh 0.0.0-ci
+      - name: The .deb installs, runs and removes cleanly
+        run: |
+          dpkg-deb --info dist/leakguard_0.0.0-ci_amd64.deb
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends ./dist/leakguard_0.0.0-ci_amd64.deb
+          leakguard version
+          leakguard services
+          sudo apt-get remove -y -qq leakguard
 
   test-macos:
     name: Test on macOS (real pfctl and plutil checks)

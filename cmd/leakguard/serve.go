@@ -30,6 +30,11 @@ type service struct {
 	// applied is the choice this daemon loaded last, nil when it loaded
 	// none or paused. A different saved choice is loaded on the next check.
 	applied *config.Config
+	// refusal is the refused saved VPN whose block-all rules were last
+	// logged as loaded, so that is logged once per change; empty while the
+	// saved VPN is accepted, and after a failed load of the block-all
+	// rules, so the next load that works is logged again.
+	refusal string
 	stats   *daemonStats
 }
 
@@ -44,6 +49,9 @@ func (c *cli) serve(args []string) error {
 	if _, err := c.parse(flag.NewFlagSet("serve", flag.ContinueOnError), args, false); err != nil {
 		return err
 	}
+	if err := c.requireSupported(); err != nil {
+		return err
+	}
 	if err := c.requireRoot("serve"); err != nil {
 		return err
 	}
@@ -55,6 +63,11 @@ func (c *cli) serve(args []string) error {
 
 	s := &service{c: c, stats: c.newStats()}
 	s.check(true)
+	// systemd holds network-pre.target until now. A failed first load
+	// still lets the boot go on: what loaded, or nothing, fails closed.
+	if err := notifyReady(c.env.NotifySocket); err != nil {
+		fmt.Fprintf(c.stderr, "%s leakguard: could not tell systemd the service is ready: %v\n", c.now().Format(time.RFC3339), err)
+	}
 	s.stats.load()
 	s.stats.sampleVPN()
 	srv := &ipc.Server{Path: c.env.Socket, Handler: s.handle, Authorize: c.env.Authorize, Chown: c.env.ChownSocket}
@@ -129,33 +142,66 @@ func interval(d, def time.Duration) time.Duration {
 // check verifies the saved rules and loads them again when the check fails,
 // when the saved choice is not the one loaded, or when force is set. It
 // does nothing while paused. A failure is logged and leaves the loaded
-// rules in place (fail closed). The block counter is read on each check,
-// right before a load, which resets it.
+// rules in place (fail closed). When only the saved VPN interface is
+// refused, the rules allow no interface: each failed load of them is
+// logged, and that they block protected services is logged once per
+// change, only after they loaded or verified. The block counter is read on
+// each check, right before a load, which resets it.
 func (s *service) check(force bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cfg, services, err := s.c.loadValid()
-	if err == nil && cfg.Paused {
+	refused, isRefused := asVPNRefused(err)
+	if (err == nil || isRefused) && cfg.Paused {
 		return
 	}
-	if err != nil {
+	target := config.Config{VPNInterface: cfg.VPNInterface, Services: cfg.Services}
+	switch {
+	case isRefused:
+		target.VPNInterface, err = blockAll.VPNInterface, nil
+	case err != nil:
+		s.refusal = ""
 		s.c.logApply(cfg, err)
 		return
+	default:
+		s.refusal = ""
 	}
-	if !force && s.isApplied(cfg) {
-		verr := s.c.verify(cfg, services)
+	if !force && s.isApplied(target) {
+		verr := s.c.verify(target, services)
 		s.stats.countBlocks(s.c.firewall())
 		if verr == nil {
-			s.c.logApply(cfg, nil)
+			s.logLoaded(cfg, refused, isRefused)
 			return
 		}
 		fmt.Fprintf(s.c.stderr, "%s leakguard: rules not verified, loading them again: %v\n", s.c.now().Format(time.RFC3339), verr)
 	} else {
 		s.stats.countBlocks(s.c.firewall())
 	}
-	err = s.c.firewall().Apply(cfg.VPNInterface, services)
-	s.loaded(cfg, err)
-	s.c.logApply(cfg, err)
+	err = s.c.firewall().Apply(target.VPNInterface, services)
+	s.loaded(target, err)
+	switch {
+	case err == nil:
+		s.logLoaded(cfg, refused, isRefused)
+	case isRefused:
+		s.refusal = ""
+		s.c.logApply(cfg, refused.notBlocked(err))
+	default:
+		s.c.logApply(cfg, err)
+	}
+}
+
+// logLoaded logs rules that loaded or verified: the saved choice each
+// time, or, for a refused saved VPN, that protected services are blocked,
+// once per change.
+func (s *service) logLoaded(cfg config.Config, refused vpnRefusedError, isRefused bool) {
+	if !isRefused {
+		s.c.logApply(cfg, nil)
+		return
+	}
+	if refused.Error() != s.refusal {
+		s.refusal = refused.Error()
+		s.c.logApply(cfg, refused.blocked())
+	}
 }
 
 // isApplied reports whether cfg is the choice this daemon loaded last.
@@ -302,9 +348,12 @@ func (c *cli) daemonStatus() ipc.Status {
 	if i, ok := c.findInterface(cfg.VPNInterface); ok && cfg.VPNInterface != "" {
 		st.VPNConnected = i.Connected()
 	}
+	refused, isRefused := asVPNRefused(err)
 	switch {
 	case errors.Is(err, errNotConfigured):
 		st.Reason = ipc.ReasonNotConfigured
+	case isRefused && !cfg.Paused:
+		st.Reason = refused.reason(c.verify(blockAll, services))
 	case err != nil:
 		st.Reason = err.Error()
 	case cfg.Paused:

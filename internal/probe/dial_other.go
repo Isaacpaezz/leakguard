@@ -1,4 +1,4 @@
-//go:build !darwin
+//go:build !darwin && !linux
 
 package probe
 
@@ -7,7 +7,7 @@ import (
 	"net/netip"
 )
 
-// BoundDial is only implemented on macOS.
+// BoundDial is only implemented on macOS and Linux.
 func BoundDial(context.Context, string, netip.AddrPort) error {
 	return ErrNotSupported
 }
