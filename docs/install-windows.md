@@ -140,6 +140,12 @@ El registro del servicio está en `C:\ProgramData\leakguard\leakguard.log`.
    el programa, el acceso del menú Inicio y la apertura al iniciar sesión.
    Los servicios que protegías vuelven a usar tu conexión normal.
 
+Si el desinstalador no logra quitar la protección, te avisa y no borra
+nada, para que puedas intentarlo otra vez: vuelve a desinstalar desde
+Configuración, o abre una terminal como administrador y ejecuta
+`& "$env:ProgramFiles\leakguard\leakguard.exe" disable`. Mientras tanto,
+los servicios protegidos pueden seguir bloqueados.
+
 También puedes elegir primero **Desinstalar leakguard…** en el menú del
 escudo: quita la protección, el servicio de fondo y la apertura al iniciar
 sesión; después quita el programa desde Configuración como arriba.
@@ -280,6 +286,12 @@ The service's log is `C:\ProgramData\leakguard\leakguard.log`.
 3. The uninstaller removes the protection (the rules and the background
    service), the program, the Start menu entry and the login item. The
    services you protected use your normal connection again.
+
+If the uninstaller cannot remove the protection, it tells you and removes
+nothing, so you can try again: uninstall again from Settings, or open a
+terminal as administrator and run
+`& "$env:ProgramFiles\leakguard\leakguard.exe" disable`. Until then, the
+protected services may stay blocked.
 
 You can also first choose **Uninstall leakguard…** in the shield menu: it
 removes the protection, the background service and the login item; then

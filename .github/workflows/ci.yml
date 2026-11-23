@@ -79,13 +79,21 @@ jobs:
       # wiring. Required: they gate merges. Every package is run, then the
       # step fails if one failed. Each name or pattern between the | of a
       # -run must match a test that passed, so a typo or a renamed test
-      # fails the step instead of running nothing.
+      # fails the step instead of running nothing. Every -run must have the
+      # shape ^(a|b|c)$: one group anchored at both ends whose alternatives
+      # are split on |, with no group inside it. Any other shape fails the
+      # step, because its alternatives could not be checked one by one.
       - name: Windows-only tests (required)
         shell: bash
         run: |
           failed=0
           t() {
             local out rc=0 alt alts
+            if [[ $1 != '^('*')$' || $1 == '^('*[\(\)]*')$' ]]; then
+              echo "::error::$2: -run '$1' must have the shape ^(a|b)$"
+              failed=1
+              return
+            fi
             out=$(go test -count=1 -v -run "$1" "$2" 2>&1) || rc=$?
             printf '%s\n' "$out"
             if [ "$rc" -ne 0 ]; then
@@ -184,6 +192,9 @@ jobs:
     runs-on: windows-latest
     env:
       SETUP: leakguard-0.0.0-ci-windows-amd64-setup.exe
+      # The leakguard WFP provider's GUID. Source of truth: ProviderKey in
+      # internal/wfp/wfp.go; change both together.
+      WFP_PROVIDER: 1511ab70-ff32-4b5e-b8f5-2a0ca949c9e2
     steps:
       - name: The shell is elevated
         shell: pwsh
@@ -293,7 +304,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $dir = Join-Path $env:ProgramFiles 'leakguard'
-          $provider = '1511ab70-ff32-4b5e-b8f5-2a0ca949c9e2'
+          $provider = $env:WFP_PROVIDER
           function Get-LeakguardService {
             Get-CimInstance Win32_Service -Filter "Name='leakguard'"
           }
@@ -333,6 +344,47 @@ jobs:
           if (-not ($status -match 'anthropic' -and $status -match 'WireGuard Tunnel')) { throw 'the saved choice is not kept after the upgrade' }
           # Only the checks above decide; not the exit status of status.
           exit 0
+      # disable stops and deletes the service, then cannot remove its copy
+      # while this step holds it open without FILE_SHARE_DELETE, so it fails
+      # before the filters are flushed. The uninstaller must then remove
+      # nothing and exit with 2. enable then reinstalls the service, so the
+      # next step retries the uninstall over a running service.
+      - name: A failed disable keeps everything, so the uninstall can be retried
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dir = Join-Path $env:ProgramFiles 'leakguard'
+          $uninstallKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\leakguard'
+          $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+          $lnk = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\leakguard.lnk'
+          # The runner's user may have no Run key; -Force on an existing key would empty it.
+          if (-not (Test-Path -LiteralPath $runKey)) { New-Item -Path $runKey -Force | Out-Null }
+          New-ItemProperty -LiteralPath $runKey -Name leakguard -Value "`"$dir\leakguard-tray.exe`"" -Force | Out-Null
+          $lock = [IO.File]::Open((Join-Path $dir 'service\leakguard.exe'), [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+          try {
+            # _?= runs the uninstaller in place and waits for it, so its exit
+            # code is the uninstall's. It must come last, unquoted.
+            $p = Start-Process -FilePath (Join-Path $dir 'uninstall.exe') -ArgumentList "/S _?=$dir" -Wait -PassThru
+            if ($p.ExitCode -ne 2) { throw "the uninstaller exited with $($p.ExitCode), want 2" }
+          } finally {
+            $lock.Dispose()
+          }
+          foreach ($f in 'leakguard.exe', 'leakguard-tray.exe', 'uninstall.exe', 'LICENSE.txt', 'install-windows.md') {
+            if (-not (Test-Path -LiteralPath (Join-Path $dir $f) -PathType Leaf)) { throw "$f was removed" }
+          }
+          if (-not (Test-Path -LiteralPath $uninstallKey)) { throw 'the uninstall entry was removed' }
+          if (-not (Test-Path -LiteralPath $lnk)) { throw 'the Start menu shortcut was removed' }
+          if ($null -eq (Get-ItemProperty -LiteralPath $runKey -Name leakguard -ErrorAction SilentlyContinue)) { throw 'the Run value was removed' }
+          $xml = Join-Path $env:RUNNER_TEMP 'filters-failed.xml'
+          netsh wfp show filters file="$xml" | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "netsh wfp show filters exited with $LASTEXITCODE" }
+          if (-not (Select-String -LiteralPath $xml -Pattern $env:WFP_PROVIDER -SimpleMatch -Quiet)) { throw 'the filters were removed although disable failed' }
+          & (Join-Path $dir 'leakguard.exe') enable
+          if ($LASTEXITCODE -ne 0) { throw "enable exited with $LASTEXITCODE" }
+          for ($i = 0; $i -lt 60 -and (Get-Service -Name leakguard).Status -ne 'Running'; $i++) {
+            Start-Sleep -Seconds 1
+          }
+          if ((Get-Service -Name leakguard).Status -ne 'Running') { throw 'the leakguard service is not running after enable' }
       - name: Uninstall silently, everything is gone
         shell: pwsh
         run: |
@@ -340,7 +392,9 @@ jobs:
           $dir = Join-Path $env:ProgramFiles 'leakguard'
           $uninstallKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\leakguard'
           $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
-          New-ItemProperty -Path $runKey -Name leakguard -Value "`"$dir\leakguard-tray.exe`"" -Force | Out-Null
+          # The runner's user may have no Run key; -Force on an existing key would empty it.
+          if (-not (Test-Path -LiteralPath $runKey)) { New-Item -Path $runKey -Force | Out-Null }
+          New-ItemProperty -LiteralPath $runKey -Name leakguard -Value "`"$dir\leakguard-tray.exe`"" -Force | Out-Null
           $p = Start-Process -FilePath (Join-Path $dir 'uninstall.exe') -ArgumentList '/S' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "the uninstaller exited with $($p.ExitCode)" }
           # The uninstaller runs from a copy in %TEMP%: wait for it to finish.
@@ -356,7 +410,7 @@ jobs:
           $xml = Join-Path $env:RUNNER_TEMP 'filters-after.xml'
           netsh wfp show filters file="$xml" | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "netsh wfp show filters exited with $LASTEXITCODE" }
-          if (Select-String -LiteralPath $xml -Pattern '1511ab70-ff32-4b5e-b8f5-2a0ca949c9e2' -SimpleMatch -Quiet) { throw 'leakguard filters are still loaded' }
+          if (Select-String -LiteralPath $xml -Pattern $env:WFP_PROVIDER -SimpleMatch -Quiet) { throw 'leakguard filters are still loaded' }
 
   test-macos:
     name: Test on macOS (real pfctl and plutil checks)

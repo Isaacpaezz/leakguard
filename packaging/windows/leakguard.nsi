@@ -7,6 +7,13 @@
 ; leakguard.exe reinstall-service, so the service runs the new copy with
 ; the saved choice. The uninstaller runs leakguard.exe disable first.
 ;
+; Exit codes: 0 done. The installer exits with 3 when it installed the
+; files but could not update the background service. The uninstaller
+; exits with 2 when disable failed: it then removes nothing (the CLI, the
+; uninstaller and the Settings entry stay, so the user can retry). A plain
+; uninstall.exe returns before its copy in %TEMP% finishes; run it as
+; uninstall.exe /S _?=DIR (last, unquoted) to wait for its exit code.
+;
 ; Defines (makensis -D): VERSION (0.2.0 or 0.2.0-beta.1), VIVERSION (its
 ; numeric form, 0.2.0.0), ARCH (amd64 or arm64), BINDIR (leakguard.exe and
 ; leakguard-tray.exe), LICENSEFILE, OUTFILE, and GUIDE (optional:
@@ -77,12 +84,14 @@ LangString ClosingTray ${LANG_ENGLISH} "Closing the leakguard icon so it can be 
 LangString ClosingTray ${LANG_SPANISH} "Cerrando el icono de leakguard para poder actualizarlo"
 LangString UpdatingService ${LANG_ENGLISH} "Updating the leakguard background service (your choice of services is kept)"
 LangString UpdatingService ${LANG_SPANISH} "Actualizando el servicio de leakguard (se conservan los servicios que elegiste)"
-LangString ServiceNotUpdated ${LANG_ENGLISH} "leakguard was installed, but its background service could not be updated (code $0). Your protection keeps working with the previous version.$\r$\n$\r$\nTo update it, open a terminal as administrator and run:$\r$\n$\"$INSTDIR\leakguard.exe$\" reinstall-service"
-LangString ServiceNotUpdated ${LANG_SPANISH} "leakguard se instaló, pero su servicio en segundo plano no se pudo actualizar (código $0). Tu protección sigue funcionando con la versión anterior.$\r$\n$\r$\nPara actualizarlo, abre una terminal como administrador y ejecuta:$\r$\n$\"$INSTDIR\leakguard.exe$\" reinstall-service"
+LangString ServiceNotUpdated ${LANG_ENGLISH} "leakguard was installed, but its background service could not be updated (code $0). It still runs, so it still protects you with the previous version.$\r$\n$\r$\nTo update it, open a terminal as administrator and run:$\r$\n$\"$INSTDIR\leakguard.exe$\" reinstall-service"
+LangString ServiceNotUpdated ${LANG_SPANISH} "leakguard se instaló, pero su servicio en segundo plano no se pudo actualizar (código $0). Sigue en marcha, así que te sigue protegiendo con la versión anterior.$\r$\n$\r$\nPara actualizarlo, abre una terminal como administrador y ejecuta:$\r$\n$\"$INSTDIR\leakguard.exe$\" reinstall-service"
+LangString ServiceNotRunning ${LANG_ENGLISH} "leakguard was installed, but its background service could not be updated (code $0) and is not running. Its firewall filters stay, but nothing keeps them up to date, so the protected services may stop working, even through your VPN.$\r$\n$\r$\nTo fix it, open a terminal as administrator and run:$\r$\n$\"$INSTDIR\leakguard.exe$\" enable"
+LangString ServiceNotRunning ${LANG_SPANISH} "leakguard se instaló, pero su servicio en segundo plano no se pudo actualizar (código $0) y no está en marcha. Sus filtros del firewall siguen, pero nada los mantiene al día, así que los servicios protegidos pueden dejar de funcionar, incluso por tu VPN.$\r$\n$\r$\nPara arreglarlo, abre una terminal como administrador y ejecuta:$\r$\n$\"$INSTDIR\leakguard.exe$\" enable"
 LangString RemovingService ${LANG_ENGLISH} "Removing the leakguard background service and its firewall filters"
 LangString RemovingService ${LANG_SPANISH} "Quitando el servicio de leakguard y sus filtros del firewall"
-LangString ServiceNotRemoved ${LANG_ENGLISH} "The leakguard background service and its firewall filters could not be removed (code $0), so the protected services may stay blocked. The uninstall continues.$\r$\n$\r$\nTo remove them, open a terminal as administrator and run:$\r$\n$\"$INSTDIR\service\leakguard.exe$\" disable"
-LangString ServiceNotRemoved ${LANG_SPANISH} "No se pudo quitar el servicio de leakguard ni sus filtros del firewall (código $0), así que los servicios protegidos pueden seguir bloqueados. La desinstalación continúa.$\r$\n$\r$\nPara quitarlos, abre una terminal como administrador y ejecuta:$\r$\n$\"$INSTDIR\service\leakguard.exe$\" disable"
+LangString ServiceNotRemoved ${LANG_ENGLISH} "leakguard could not remove its protection (code $0), so the protected services may stay blocked. Nothing was uninstalled.$\r$\n$\r$\nTo retry, uninstall leakguard again from Settings > Apps, or open a terminal as administrator and run:$\r$\n$\"$INSTDIR\leakguard.exe$\" disable"
+LangString ServiceNotRemoved ${LANG_SPANISH} "leakguard no pudo quitar su protección (código $0), así que los servicios protegidos pueden seguir bloqueados. No se desinstaló nada.$\r$\n$\r$\nPara reintentarlo, desinstala leakguard otra vez desde Configuración > Aplicaciones, o abre una terminal como administrador y ejecuta:$\r$\n$\"$INSTDIR\leakguard.exe$\" disable"
 
 VIProductVersion "${VIVERSION}"
 VIFileVersion "${VIVERSION}"
@@ -125,8 +134,36 @@ Function LaunchTray
   Exec '"$WINDIR\explorer.exe" "$INSTDIR\leakguard-tray.exe"'
 FunctionEnd
 
+; Leaves the leakguard service's current state in $1 (SERVICE_RUNNING is
+; 4), or 0 when the service is missing or cannot be queried. Uses $2-$5.
+Function ServiceState
+  StrCpy $1 0
+  ; SC_MANAGER_CONNECT, then SERVICE_QUERY_STATUS.
+  System::Call 'advapi32::OpenSCManagerW(p 0, p 0, i 1) p.r2'
+  ${If} $2 != 0
+    System::Call 'advapi32::OpenServiceW(p r2, w "leakguard", i 4) p.r3'
+    ${If} $3 != 0
+      ; SERVICE_STATUS: seven DWORDs, dwCurrentState is the second.
+      System::Alloc 28
+      Pop $4
+      System::Call 'advapi32::QueryServiceStatus(p r3, p r4) i.r5'
+      ${If} $5 != 0
+        System::Call '*$4(i, i .r1)'
+      ${EndIf}
+      System::Free $4
+      System::Call 'advapi32::CloseServiceHandle(p r3)'
+    ${EndIf}
+    System::Call 'advapi32::CloseServiceHandle(p r2)'
+  ${EndIf}
+FunctionEnd
+
 ; The running tray holds its file: close it before the files are replaced
-; or removed. Nothing to do when it is not running.
+; or removed. Nothing to do when it is not running. It closes every
+; user's tray, not only this session's (taskkill /FI "SESSION eq N"
+; would be simple): another signed-in user's tray would keep its file
+; locked, so an upgrade could not replace it and an uninstall would leave
+; it behind. The tray holds no state and the service keeps protecting;
+; that user's icon comes back at their next sign-in.
 !macro CloseTray
   DetailPrint "$(ClosingTray)"
   nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM leakguard-tray.exe'
@@ -166,7 +203,8 @@ Section "leakguard" SecMain
   ; An upgrade: the service runs its own copy in $INSTDIR\service, which
   ; reinstall-service replaces with the new leakguard.exe before it
   ; restarts the service. The filters stay loaded meanwhile. A failure
-  ; never fails the install: the old service keeps protecting.
+  ; keeps the new files but exits with 3, and the message says whether
+  ; the service still runs (the previous version) or not.
   ClearErrors
   ReadRegStr $0 HKLM "${SERVICEKEY}" "ImagePath"
   ${IfNot} ${Errors}
@@ -174,7 +212,13 @@ Section "leakguard" SecMain
     nsExec::ExecToLog '"$INSTDIR\leakguard.exe" reinstall-service'
     Pop $0
     ${If} $0 != "0"
-      MessageBox MB_OK|MB_ICONEXCLAMATION "$(ServiceNotUpdated)" /SD IDOK
+      Call ServiceState
+      ${If} $1 == 4
+        MessageBox MB_OK|MB_ICONEXCLAMATION "$(ServiceNotUpdated)" /SD IDOK
+      ${Else}
+        MessageBox MB_OK|MB_ICONSTOP "$(ServiceNotRunning)" /SD IDOK
+      ${EndIf}
+      SetErrorLevel 3
     ${EndIf}
   ${EndIf}
 SectionEnd
@@ -182,18 +226,22 @@ SectionEnd
 Section "Uninstall"
   SetRegView 64
   SetShellVarContext all
-  !insertmacro CloseTray
 
   ; disable stops and deletes the service, removes its copy and the
   ; filters. It runs even without a service: persistent WFP filters left
   ; behind would keep the protected services blocked with no app to lift
-  ; them. A failure is shown, and the uninstall goes on.
+  ; them. When it fails nothing is removed, not even the tray, so the user
+  ; can retry from Settings or with the kept CLI; the uninstall fails.
   DetailPrint "$(RemovingService)"
   nsExec::ExecToLog '"$INSTDIR\leakguard.exe" disable'
   Pop $0
   ${If} $0 != "0"
-    MessageBox MB_OK|MB_ICONEXCLAMATION "$(ServiceNotRemoved)" /SD IDOK
+    MessageBox MB_OK|MB_ICONSTOP "$(ServiceNotRemoved)" /SD IDOK
+    SetErrorLevel 2
+    Abort
   ${EndIf}
+
+  !insertmacro CloseTray
 
   Delete "$INSTDIR\leakguard.exe"
   Delete "$INSTDIR\leakguard-tray.exe"
