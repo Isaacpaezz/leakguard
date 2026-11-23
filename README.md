@@ -19,9 +19,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Isaacpaezz/leakguard/releases"><strong>⬇️ Download for macOS or Linux</strong></a><br>
-  <sub>0.2.0 is a pre-release. macOS 13 or newer (Apple silicon or Intel), or Linux with nftables and systemd (<code>.deb</code> and <code>.tar.gz</code>, amd64 and arm64): <a href="docs/install-linux.md">Linux install guide</a>.</sub><br>
-  <sub>Windows (<code>setup.exe</code>) comes next as the 0.3.0 pre-release: <a href="docs/install-windows.md">Windows install guide</a>.</sub>
+  <a href="https://github.com/Isaacpaezz/leakguard/releases"><strong>⬇️ Download for macOS, Linux or Windows</strong></a><br>
+  <sub>0.3.0 is a pre-release. macOS 13 or newer (Apple silicon or Intel), Linux with nftables and systemd (<code>.deb</code> and <code>.tar.gz</code>, amd64 and arm64), or Windows 10 and 11 (<code>setup.exe</code>, amd64 and arm64).</sub><br>
+  <sub>Install guides: <a href="docs/install-macos.md">macOS</a> · <a href="docs/install-linux.md">Linux</a> · <a href="docs/install-windows.md">Windows</a>.</sub>
 </p>
 
 <p align="center">
@@ -106,7 +106,7 @@ count of blocked connection attempts. "Today" starts at local midnight.
 
 ## Install on macOS
 
-> 0.2.0 is a pre-release. macOS 13 or newer, Apple silicon or Intel, and an
+> 0.3.0 is a pre-release. macOS 13 or newer, Apple silicon or Intel, and an
 > administrator account on the Mac.
 
 1. Download `leakguard-VERSION-macos.dmg` from
@@ -194,20 +194,19 @@ Missing a service? [Request it](https://github.com/Isaacpaezz/leakguard/issues/n
 ## What's new
 
 <!-- BEGIN GENERATED: whats-new -->
-**v0.2.0** · 2026-11-23
+**v0.3.0** · 2026-11-23
 
-leakguard for Linux (pre-release). Its firewall is tested automatically with
-real nftables rules, but the tray app and a real VPN drop have not yet been
-tried on a real Linux desktop: please report any problem.
+leakguard for Windows (pre-release). Its firewall is tested
+automatically with real Windows Filtering Platform filters, but the tray app,
+the installer on a real PC and a real VPN drop have not yet been tried on a
+real Windows PC: please report any problem.
 
 **Added**
-- Linux support: a `.deb` for Ubuntu, Debian and Mint (amd64 and arm64) and a `.tar.gz` for other distributions, each with a SHA-256 checksum and an install guide in Spanish and English ([docs/install-linux.md](docs/install-linux.md)). Removing the package also removes the rules and the background service; purging it also deletes your choices, the stats and the log. Upgrading the package restarts the background service with the new version, keeping your choices and the rules loaded.
-- On Linux, an nftables firewall (table `inet leakguard`) rejects protected destinations outside the VPN at once, also for the traffic the computer forwards for containers and virtual machines (Docker, libvirt), and only real tunnels are accepted as the VPN: Ethernet, Wi-Fi, USB tethering, Docker, bridges and loopback never are.
-- On Linux, a systemd service (`leakguard.service`) loads the rules before the network starts, checks them every 30 seconds and logs to `/var/log/leakguard.log` (rotated weekly, 4 weeks kept); only root and the administrators group (`sudo`, `wheel` or `admin`) can change the protection through it.
-- On Linux, the tray app with the same menu, 3-step setup, session stats, "Open at login" and uninstall as on macOS, with zenity (or kdialog) windows and one administrator prompt per change through pkexec (never remembered for other programs).
-
-**Changed**
-- Fail closed when the saved VPN turns out to be a real connection (for example a phone's USB tethering, which cannot be told apart from a VPN by its name while it is unplugged): the protected services are blocked on every interface until you choose your VPN again, instead of keeping rules that allowed it. `leakguard status` says why and `sudo leakguard apply` exits with an error.
+- Windows support: `setup.exe` installers for Windows 10 and 11 (amd64 and arm64), each with a SHA-256 checksum and an install guide in Spanish and English ([docs/install-windows.md](docs/install-windows.md)). They always install to Program Files, which only administrators can change (another folder is refused), with a Start menu entry; uninstalling from Settings > Apps also removes the protection, and running a newer installer restarts the background service with the new version, keeping your choices. Not signed with a certificate yet, so Windows asks you to allow it once ("More info", then "Run anyway").
+- On Windows, a Windows Filtering Platform firewall blocks protected destinations outside the VPN at once; its filters stay loaded across restarts of the background service, and only VPN adapters are accepted as the VPN: Ethernet, Wi-Fi, loopback and virtual machine adapters never are.
+- On Windows, a Windows service (`leakguard`, run as SYSTEM, started at boot and restarted when it fails) checks the rules every 30 seconds and as soon as the VPN connects or drops, and logs to `C:\ProgramData\leakguard\leakguard.log`; only administrators can change the protection through it, also from the tray app without elevation.
+- On Windows, the tray app with the same menu, 3-step setup, session stats, "Open at login" and uninstall as on macOS, in Spanish or English like Windows, with one administrator prompt (UAC) per change; when a change fails, it shows the reason. The blocks count is not shown on Windows yet.
+- Known limit on Windows: WSL2, Hyper-V virtual machines and Hyper-V containers do not go through leakguard yet, so if the VPN drops a program inside them can reach the protected services over the real connection; run Claude Code and similar tools directly on Windows.
 <!-- END GENERATED: whats-new -->
 
 Full history: [CHANGELOG.md](CHANGELOG.md).
@@ -218,7 +217,7 @@ Full history: [CHANGELOG.md](CHANGELOG.md).
 |---|---|---|
 | 0.1.0 | macOS: menu-bar app, 3-step setup, Claude protection, DMG installer | ✅ First public version (pre-release) |
 | 0.2.0 | Linux: `nftables` backend, systemd service, tray app, `.deb` and `.tar.gz` ([guide](docs/install-linux.md)) | ✅ Pre-release; the firewall is tested with real rules, the tray app not yet on a real desktop |
-| 0.3.0 | Windows: Windows Filtering Platform backend, Windows service, tray app, `setup.exe` installer ([guide](docs/install-windows.md)) | 🧪 Built and tested in CI, not released yet; the tray app and the installer are not yet tried on a real PC |
+| 0.3.0 | Windows: Windows Filtering Platform backend, Windows service, tray app, `setup.exe` installer ([guide](docs/install-windows.md)) | ✅ Pre-release; the firewall is tested with real filters in CI, the tray app and the installer not yet on a real PC |
 | 1.0 | [Milestone 1.0](https://github.com/Isaacpaezz/leakguard/milestone/1): ChatGPT/OpenAI ([#14](https://github.com/Isaacpaezz/leakguard/issues/14)), self-updating IP ranges ([#16](https://github.com/Isaacpaezz/leakguard/issues/16)), signed and notarized app ([#15](https://github.com/Isaacpaezz/leakguard/issues/15)), menu polish ([#8](https://github.com/Isaacpaezz/leakguard/issues/8)) | 🚧 Next |
 
 Design notes and lessons learned: [docs/HANDOFF.md](docs/HANDOFF.md).
@@ -344,11 +343,11 @@ videos, banco) sigue funcionando con normalidad.
 
 Está pensado para países como Venezuela, donde estos servicios están
 restringidos y se usan a través de una VPN con *split tunneling* (por ejemplo,
-VPN Bypass). La versión 0.2.0, para macOS y Linux, todavía es una versión
-preliminar. Hoy protege Anthropic (Claude); ChatGPT
+VPN Bypass). La versión 0.3.0, para macOS, Linux y Windows, todavía es una
+versión preliminar. Hoy protege Anthropic (Claude); ChatGPT
 (OpenAI) llegará en la versión 1.0.
 
-**[⬇️ Descargar para macOS](https://github.com/Isaacpaezz/leakguard/releases)**
+**[⬇️ Descargar para macOS, Linux o Windows](https://github.com/Isaacpaezz/leakguard/releases)**
 
 Linux (`.deb` y `.tar.gz`) llega como versión preliminar: mira la
 [guía de instalación para Linux](docs/install-linux.md).

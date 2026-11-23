@@ -6,9 +6,9 @@ All notable changes to leakguard are documented here. The format follows
 
 The newest section is shown automatically on the README landing page.
 
-## [Unreleased]
+## [0.3.0] - 2026-11-23
 
-leakguard for Windows (pre-release, planned as 0.3.0). Its firewall is tested
+leakguard for Windows (pre-release). Its firewall is tested
 automatically with real Windows Filtering Platform filters, but the tray app,
 the installer on a real PC and a real VPN drop have not yet been tried on a
 real Windows PC: please report any problem.
