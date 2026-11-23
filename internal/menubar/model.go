@@ -363,20 +363,27 @@ func sessionLine(l Lang, s ipc.Stats, now time.Time) string {
 }
 
 // todayLine is "Today: 14 blocks · VPN dropped 2 times"; without drops only
-// the blocks, and without blocks "Today: no blocks".
+// the blocks, and without blocks "Today: no blocks". Windows cannot count
+// blocks yet, so there it shows only the drops, and nothing without drops.
 func todayLine(l Lang, s ipc.Stats) string {
-	parts := []string{l.Text(msgNoBlocks)}
-	switch {
-	case s.TodayBlocks == 1:
-		parts[0] = l.Text(msgOneBlock)
-	case s.TodayBlocks > 1:
-		parts[0] = l.Text(msgBlocks, s.TodayBlocks)
+	var parts []string
+	if !l.windows {
+		parts = append(parts, l.Text(msgNoBlocks))
+		switch {
+		case s.TodayBlocks == 1:
+			parts[0] = l.Text(msgOneBlock)
+		case s.TodayBlocks > 1:
+			parts[0] = l.Text(msgBlocks, s.TodayBlocks)
+		}
 	}
 	switch {
 	case s.TodayDrops == 1:
 		parts = append(parts, l.Text(msgOneDrop))
 	case s.TodayDrops > 1:
 		parts = append(parts, l.Text(msgDrops, s.TodayDrops))
+	}
+	if len(parts) == 0 {
+		return ""
 	}
 	return l.Text(msgToday, strings.Join(parts, " · "))
 }
