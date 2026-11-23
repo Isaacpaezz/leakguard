@@ -45,8 +45,9 @@ contraseña de una).
 3. Windows pregunta **"¿Quieres permitir que esta aplicación haga cambios en
    el dispositivo?"** (el editor aparece como desconocido). Haz clic en
    **Sí**.
-4. Sigue el instalador. Instala leakguard en `C:\Program Files\leakguard` y
-   lo agrega al menú Inicio.
+4. Sigue el instalador. Instala leakguard siempre en
+   `C:\Program Files\leakguard` (la carpeta no se puede cambiar: solo los
+   administradores pueden modificarla) y lo agrega al menú Inicio.
 
 ## 3. Configura en 3 pasos
 
@@ -92,8 +93,10 @@ tareas.
 ### Pausar
 
 En el menú del escudo, **Pausar la protección** deja que los servicios usen
-tu conexión normal hasta que elijas **Reanudar la protección**. No pide
-permiso de administrador.
+tu conexión normal hasta que elijas **Reanudar la protección**. Pausar y
+marcar o desmarcar servicios no muestran el aviso de permiso de Windows,
+pero necesitan una cuenta de administrador: con una cuenta estándar,
+leakguard responde que solo un administrador puede cambiarlo.
 
 ## Desde la terminal
 
@@ -114,11 +117,17 @@ Cambia `WireGuard Tunnel` por el nombre de tu VPN, entre comillas si tiene
 espacios. `.\leakguard services` lista lo que puedes proteger. `status` y
 `test` también funcionan en una terminal normal.
 
-## Lo que todavía no muestra Windows
+## Límites
 
-- El número de **bloqueos**: en Windows el menú muestra cuánto tiempo lleva
-  conectada tu VPN y cuántas veces se cayó hoy, pero todavía no cuántas
-  veces leakguard bloqueó un servicio. La protección funciona igual.
+- Windows todavía no cuenta los **bloqueos**: el menú muestra cuánto tiempo
+  lleva conectada tu VPN y cuántas veces se cayó hoy, pero no cuántas veces
+  leakguard bloqueó un servicio. La protección funciona igual.
+- El tráfico de WSL2, Docker Desktop y las máquinas virtuales puede no
+  pasar por leakguard (aún por confirmar): si usas los servicios protegidos
+  desde ahí, podrían salir por tu conexión normal.
+- Algunos programas de VPN nombran su adaptador de otra forma que los
+  ejemplos de arriba. Si leakguard no encuentra tu VPN al conectarla, usa
+  **Elegir de una lista** y elige el adaptador de tu VPN.
 
 ## Actualizar
 
@@ -140,11 +149,11 @@ El registro del servicio está en `C:\ProgramData\leakguard\leakguard.log`.
    el programa, el acceso del menú Inicio y la apertura al iniciar sesión.
    Los servicios que protegías vuelven a usar tu conexión normal.
 
-Si el desinstalador no logra quitar la protección, te avisa y no borra
-nada, para que puedas intentarlo otra vez: vuelve a desinstalar desde
-Configuración, o abre una terminal como administrador y ejecuta
-`& "$env:ProgramFiles\leakguard\leakguard.exe" disable`. Mientras tanto,
-los servicios protegidos pueden seguir bloqueados.
+Si el desinstalador no logra quitar la protección por completo, te avisa
+y el programa se queda para que puedas intentarlo otra vez: vuelve a
+desinstalar desde Configuración, o abre una terminal como administrador y
+ejecuta `& "$env:ProgramFiles\leakguard\leakguard.exe" disable`. Los
+servicios protegidos pueden seguir bloqueados hasta que termine.
 
 También puedes elegir primero **Desinstalar leakguard…** en el menú del
 escudo: quita la protección, el servicio de fondo y la apertura al iniciar
@@ -196,8 +205,9 @@ password of one).
    anyway**.
 3. Windows asks **"Do you want to allow this app to make changes to your
    device?"** (the publisher shows as unknown). Click **Yes**.
-4. Follow the installer. It installs leakguard in
-   `C:\Program Files\leakguard` and adds it to the Start menu.
+4. Follow the installer. It always installs leakguard in
+   `C:\Program Files\leakguard` (the folder cannot be changed: only
+   administrators may modify it) and adds it to the Start menu.
 
 ## 3. Set it up in 3 steps
 
@@ -240,8 +250,10 @@ You can also drag the shield from the **^** arrow to the taskbar.
 ### Pause
 
 In the shield menu, **Pause protection** lets the services use your normal
-connection until you choose **Resume protection**. It needs no
-administrator permission.
+connection until you choose **Resume protection**. Pausing and ticking or
+unticking services show no Windows permission prompt, but they need an
+administrator account: with a standard account, leakguard answers that
+only administrators can change it.
 
 ## From the terminal
 
@@ -262,11 +274,17 @@ Replace `WireGuard Tunnel` with your VPN's name, in quotes if it has spaces.
 `.\leakguard services` lists what you can protect. `status` and `test` also
 work in a normal terminal.
 
-## What Windows does not show yet
+## Limits
 
-- The number of **blocks**: on Windows the menu shows how long your VPN has
-  been connected and how many times it dropped today, but not yet how many
+- Windows does not count **blocks** yet: the menu shows how long your VPN
+  has been connected and how many times it dropped today, but not how many
   times leakguard blocked a service. The protection works the same.
+- Traffic from WSL2, Docker Desktop and virtual machines may not pass
+  through leakguard (to be confirmed): if you use the protected services
+  from there, they could leave through your normal connection.
+- Some VPN programs name their adapter differently than the examples
+  above. If leakguard does not find your VPN when you connect it, use
+  **Choose from a list** and pick your VPN's adapter.
 
 ## Update
 
@@ -287,11 +305,11 @@ The service's log is `C:\ProgramData\leakguard\leakguard.log`.
    service), the program, the Start menu entry and the login item. The
    services you protected use your normal connection again.
 
-If the uninstaller cannot remove the protection, it tells you and removes
-nothing, so you can try again: uninstall again from Settings, or open a
-terminal as administrator and run
-`& "$env:ProgramFiles\leakguard\leakguard.exe" disable`. Until then, the
-protected services may stay blocked.
+If the uninstaller cannot remove the protection completely, it tells you
+and the program stays so you can try again: uninstall again from Settings,
+or open a terminal as administrator and run
+`& "$env:ProgramFiles\leakguard\leakguard.exe" disable`. The protected
+services may stay blocked until it finishes.
 
 You can also first choose **Uninstall leakguard…** in the shield menu: it
 removes the protection, the background service and the login item; then
