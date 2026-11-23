@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -49,7 +48,7 @@ func (c *cli) location() *time.Location {
 	return time.Local
 }
 
-func (c *cli) statsPath() string { return filepath.Join(c.env.Root, stats.DefaultPath) }
+func (c *cli) statsPath() string { return rooted(c.env.Root, stats.DefaultPath) }
 
 // newStats returns the stats of "serve", not loaded yet: the daemon loads
 // its rules first and the saved stats after, so stats file I/O never delays

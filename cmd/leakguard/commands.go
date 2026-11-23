@@ -5,7 +5,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"text/tabwriter"
@@ -23,7 +22,7 @@ See your VPN interfaces with: leakguard interfaces`
 
 var errNotConfigured = errors.New("not configured yet; run: sudo leakguard enable --vpn IFACE SERVICE...")
 
-func (c *cli) configPath() string { return filepath.Join(c.env.Root, config.DefaultPath) }
+func (c *cli) configPath() string { return rooted(c.env.Root, config.DefaultPath) }
 
 // vpnRefusedError is a saved configuration that is valid except for its VPN
 // interface, which is refused (for example a real connection that now

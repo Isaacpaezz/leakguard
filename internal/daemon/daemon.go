@@ -1,5 +1,5 @@
 // Package daemon installs the background service that runs "leakguard serve"
-// (the macOS LaunchDaemon, the Linux systemd unit):
+// (the macOS LaunchDaemon, the Linux systemd unit, the Windows service):
 // it loads the firewall rules at boot, verifies them periodically and loads
 // them again when OS updates or VPN clients flush them, counts what they
 // block, and answers the menu-bar app.

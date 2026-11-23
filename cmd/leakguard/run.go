@@ -82,6 +82,12 @@ type Env struct {
 	// NotifySocket is systemd's $NOTIFY_SOCKET: "serve" sends READY=1
 	// there once it has loaded the rules. Empty means no notification.
 	NotifySocket string
+	// SCM is the Windows Service Control Manager that windowsServices
+	// drives. Nil on other systems.
+	SCM daemon.ServiceManager
+	// Ready is called once "serve" has loaded the rules the first time:
+	// the Windows service reports Running then. Nil does nothing.
+	Ready func()
 }
 
 // darwinUsage is the macOS help.
@@ -154,11 +160,73 @@ var linuxText = strings.NewReplacer(
 	"--vpn ipsec0", "--vpn wg0",
 )
 
+// windowsUsage is the Windows help: the Windows Filtering Platform, the
+// Windows service, %ProgramData% and the named pipe, and an administrator
+// terminal instead of sudo.
+const windowsUsage = `leakguard keeps the services you choose off your real connection:
+they work only through your VPN, and go offline when the VPN drops.
+
+Commands marked (admin) need an administrator terminal: right-click
+Terminal or PowerShell and choose "Run as administrator".
+
+Usage:
+  leakguard services
+      List the services you can protect. * marks the protected ones.
+  leakguard interfaces
+      List the connected network adapters that look like a VPN.
+  leakguard enable [--vpn ADAPTER] SERVICE...   (admin)
+      Protect SERVICE... through the VPN adapter ADAPTER and keep the
+      protection on across reboots. Put a name with spaces in quotes.
+      Without --vpn, the saved adapter is used, or the only connected
+      VPN adapter. Without SERVICE..., the saved services are used.
+      It also ends a pause from the tray app.
+  leakguard disable   (admin)
+      Turn the protection off. Your choices are kept for the next enable.
+  leakguard status
+      Show what is protected, the last background run and the VPN
+      session. From a normal terminal it asks the background
+      service, which verifies as SYSTEM that the Windows Filtering
+      Platform rules are loaded; from an administrator terminal, or when
+      the service does not answer, it reads the saved settings itself.
+  leakguard test [--via ADAPTER]
+      Prove that protected services are blocked outside the VPN by
+      connecting through your real connection: ADAPTER, or the adapter of
+      the default route, or, when the default route is the VPN, the only
+      other connected adapter. Every connection must fail.
+  leakguard apply   (admin)
+      Re-apply the saved rules now, without the background service.
+      Once they are loaded, a pause from the tray app ends.
+  leakguard serve   (admin)
+      Run the background service that enable installs as the Windows
+      service "leakguard": it loads the saved rules at start, checks them
+      every 30 seconds, and loads them again only when the check fails or
+      the saved choice changed. It logs each run to
+      %ProgramData%\leakguard\leakguard.log, keeps the session stats in
+      %ProgramData%\leakguard\stats.json, and answers the tray app on
+      \\.\pipe\leakguard. Only administrators can talk to it.
+  leakguard version
+      Show the version of leakguard.
+  leakguard help
+      Show this help.
+
+Examples (the ones marked (admin) in an administrator terminal):
+  leakguard interfaces
+  leakguard enable --vpn "WireGuard Tunnel" anthropic   (admin)
+  leakguard status
+  leakguard test
+  leakguard disable   (admin)
+
+Exit status: 0 on success, 1 on failure, 2 on a usage error.
+`
+
 // usageFor returns the help for the operating system goos. Systems without
 // their own text yet get the macOS one.
 func usageFor(goos string) string {
-	if goos == "linux" {
+	switch goos {
+	case "linux":
 		return linuxText.Replace(darwinUsage)
+	case "windows":
+		return windowsUsage
 	}
 	return darwinUsage
 }
@@ -168,8 +236,11 @@ var usage = usageFor(runtime.GOOS)
 
 // viaExampleFor names a typical real-connection interface on goos.
 func viaExampleFor(goos string) string {
-	if goos == "linux" {
+	switch goos {
+	case "linux":
 		return "eth0"
+	case "windows":
+		return "Wi-Fi"
 	}
 	return "en0"
 }
@@ -273,9 +344,23 @@ func (c *cli) parse(fs *flag.FlagSet, args []string, allowArgs bool) ([]string, 
 	return rest, nil
 }
 
+// needAdmin tells how to run command as an administrator on this system.
+var needAdmin = needAdminFor(runtime.GOOS)
+
+// needAdminFor returns how to run a command as an administrator on goos:
+// sudo, or on Windows an administrator terminal (an elevated token).
+func needAdminFor(goos string) func(command string) string {
+	if goos == "windows" {
+		return func(command string) string { return "run from an administrator terminal: leakguard " + command }
+	}
+	return func(command string) string { return "run with sudo: sudo leakguard " + command }
+}
+
+// requireRoot fails unless this process runs as root, or on Windows with
+// an elevated token (Env.IsRoot).
 func (c *cli) requireRoot(command string) error {
 	if !c.env.IsRoot() {
-		return fmt.Errorf("run with sudo: sudo leakguard %s", command)
+		return errors.New(needAdmin(command))
 	}
 	return nil
 }

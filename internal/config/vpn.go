@@ -17,6 +17,8 @@ import (
 type rules struct {
 	goos  string // "darwin", "linux" or "windows"
 	sysfs string // Linux only: the /sys/class/net directory to read
+	// Windows only: lists the network adapters (GetAdaptersAddresses).
+	adapters func() ([]windowsAdapter, error)
 }
 
 // The name is pasted into firewall rules, so only plain interface names pass.
@@ -50,8 +52,11 @@ const (
 var linuxTunnelTypes = map[int]bool{65534: true, 512: true, 768: true, 769: true}
 
 func (r rules) validName(name string) bool {
-	if r.goos == "linux" {
+	switch r.goos {
+	case "linux":
 		return linuxName.MatchString(name)
+	case "windows":
+		return validWindowsAlias(name)
 	}
 	return macName.MatchString(name)
 }
@@ -80,12 +85,12 @@ func (r rules) reason(name string) error {
 	switch {
 	case name == "":
 		return errors.New("VPN interface is not set")
-	case r.goos == "windows":
-		return errors.New("choosing a VPN interface is not supported on Windows yet")
 	case !r.validName(name):
 		return fmt.Errorf("%q is not a valid interface name", name)
 	case r.goos == "linux":
 		return r.checkLinux(name)
+	case r.goos == "windows":
+		return r.checkWindows(name)
 	case hasPrefix(name, nonVPNPrefixes):
 		return realConnection(name)
 	}
@@ -93,6 +98,9 @@ func (r rules) reason(name string) error {
 }
 
 func (r rules) candidates(names []string) []string {
+	if r.goos == "windows" {
+		return r.windowsCandidates(names)
+	}
 	var out []string
 	for _, n := range names {
 		if r.candidate(n) {
@@ -104,8 +112,6 @@ func (r rules) candidates(names []string) []string {
 
 func (r rules) candidate(name string) bool {
 	switch r.goos {
-	case "windows":
-		return false
 	case "linux":
 		if !r.validName(name) {
 			return false

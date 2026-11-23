@@ -68,6 +68,10 @@ func (c *cli) serve(args []string) error {
 	if err := notifyReady(c.env.NotifySocket); err != nil {
 		fmt.Fprintf(c.stderr, "%s leakguard: could not tell systemd the service is ready: %v\n", c.now().Format(time.RFC3339), err)
 	}
+	// The Windows service reports Running now.
+	if c.env.Ready != nil {
+		c.env.Ready()
+	}
 	s.stats.load()
 	s.stats.sampleVPN()
 	srv := &ipc.Server{Path: c.env.Socket, Handler: s.handle, Authorize: c.env.Authorize, Chown: c.env.ChownSocket}

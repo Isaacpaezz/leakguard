@@ -143,7 +143,7 @@ func (h *harness) run(args ...string) (int, string, string) {
 	return code, stdout.String(), stderr.String()
 }
 
-func (h *harness) path(p string) string { return filepath.Join(h.env.Root, p) }
+func (h *harness) path(p string) string { return rooted(h.env.Root, p) }
 
 func (h *harness) saveConfig(t *testing.T, c config.Config) {
 	t.Helper()

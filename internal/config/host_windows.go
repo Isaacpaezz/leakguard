@@ -1,4 +1,5 @@
 package config
 
-// Windows refuses every VPN interface until it gets its own rules.
-var host = rules{goos: "windows"}
+// Windows tells a VPN adapter from the real connection by what
+// GetAdaptersAddresses says about it.
+var host = rules{goos: "windows", adapters: windowsAdapters}

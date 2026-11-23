@@ -164,23 +164,6 @@ func TestLinuxInterfaceNames(t *testing.T) {
 	}
 }
 
-// Until Windows gets its own rules, no interface is ever accepted there.
-func TestWindowsRefusesEveryVPNInterface(t *testing.T) {
-	r := rules{goos: "windows"}
-	for _, name := range []string{"utun4", "wg0", "Mullvad", "Ethernet 2"} {
-		err := r.check(name)
-		if err == nil || err.Error() != "choosing a VPN interface is not supported on Windows yet" {
-			t.Errorf("check(%q) = %v", name, err)
-		}
-	}
-	if err := r.check(""); err == nil || err.Error() != "VPN interface is not set" {
-		t.Errorf("check(\"\") = %v", err)
-	}
-	if got := r.candidates([]string{"utun4", "wg0", "tun1"}); len(got) != 0 {
-		t.Errorf("candidates() = %v, want none", got)
-	}
-}
-
 // macOS keeps exactly the classification it had before Linux and Windows.
 func TestDarwinRulesUnchanged(t *testing.T) {
 	r := rules{goos: "darwin"}
@@ -225,6 +208,9 @@ func TestHostRulesFollowTheOS(t *testing.T) {
 	}
 	if want == "linux" && host.sysfs != "/sys/class/net" {
 		t.Fatalf("host.sysfs = %q", host.sysfs)
+	}
+	if (want == "windows") != (host.adapters != nil) {
+		t.Fatalf("host.adapters set = %v on %s", host.adapters != nil, want)
 	}
 }
 

@@ -35,7 +35,8 @@ type Config struct {
 }
 
 // ValidInterfaceName reports whether name is a plain interface name, safe to
-// paste into firewall rules.
+// paste into firewall rules. On Windows it is an adapter alias: valid UTF-8,
+// 1 to 256 bytes, no control characters.
 func ValidInterfaceName(name string) bool {
 	return host.validName(name)
 }
@@ -43,7 +44,9 @@ func ValidInterfaceName(name string) bool {
 // CheckVPNInterface reports why name cannot be used as the VPN interface.
 // The firewall backends call it too, so a bad name never reaches the rules.
 // macOS judges by name; Linux by what the kernel says about the interface;
-// Windows refuses every interface for now. Every refusal wraps ErrVPNRefused.
+// Windows by what GetAdaptersAddresses says about the adapter. Linux and
+// Windows judge a missing interface by name. Every refusal wraps
+// ErrVPNRefused.
 func CheckVPNInterface(name string) error {
 	return host.check(name)
 }
@@ -79,7 +82,8 @@ func (c Config) ValidateServices(services []catalog.Service) error {
 	return nil
 }
 
-// VPNCandidates keeps the interface names that look like VPN tunnels.
+// VPNCandidates keeps the interface names that look like VPN tunnels. On
+// Windows only connected VPN adapters are kept.
 func VPNCandidates(names []string) []string {
 	return host.candidates(names)
 }
@@ -106,13 +110,14 @@ func Load(path string) (Config, error) {
 }
 
 // Save writes the configuration atomically, readable by everyone and writable
-// only by its owner.
+// only by its owner. The directory is made by PrepareDir: on Windows only
+// SYSTEM and Administrators can write it.
 func Save(path string, c Config) error {
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := PrepareDir(filepath.Dir(path)); err != nil {
 		return err
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".config-*.json")
