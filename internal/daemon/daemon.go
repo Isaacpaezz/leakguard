@@ -251,6 +251,13 @@ func (d Daemon) LegacyInstalled() bool {
 
 // writeFile replaces path atomically with data and the given mode.
 func writeFile(path string, data []byte, mode os.FileMode) error {
+	return writeFileChecked(path, data, mode, nil)
+}
+
+// writeFileChecked replaces path atomically with data and the given mode.
+// check, when set, runs on the complete temporary file before the rename;
+// if it fails, path is left untouched and the temporary file is removed.
+func writeFileChecked(path string, data []byte, mode os.FileMode, check func(tmp string) error) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -273,6 +280,11 @@ func writeFile(path string, data []byte, mode os.FileMode) error {
 	}
 	if err := tmp.Close(); err != nil {
 		return err
+	}
+	if check != nil {
+		if err := check(tmp.Name()); err != nil {
+			return err
+		}
 	}
 	return os.Rename(tmp.Name(), path)
 }

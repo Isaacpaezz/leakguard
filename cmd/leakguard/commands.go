@@ -340,6 +340,9 @@ func (c *cli) apply(args []string) error {
 	if err == nil && cfg.Paused {
 		cfg.Paused = false
 		if serr := config.Save(c.configPath(), cfg); serr != nil {
+			if isRefused {
+				return c.logApply(cfg, fmt.Errorf("%v; the pause could not be cleared: %w", refused.blocked(), serr))
+			}
 			err = fmt.Errorf("the rules are loaded, but the pause could not be cleared: %w", serr)
 		}
 	}

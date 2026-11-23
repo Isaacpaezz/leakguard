@@ -12,13 +12,14 @@ import (
 	"github.com/Isaacpaezz/leakguard/internal/version"
 )
 
-// failingSystemctl answers like systemctl, failing the commands in fail.
-type failingSystemctl struct {
+// scriptedSystemctl answers like systemctl: every command succeeds except
+// those listed in fail, which return their error.
+type scriptedSystemctl struct {
 	calls []string
 	fail  map[string]error
 }
 
-func (f *failingSystemctl) Run(args ...string) (string, error) {
+func (f *scriptedSystemctl) Run(args ...string) (string, error) {
 	key := strings.Join(args, " ")
 	f.calls = append(f.calls, key)
 	return "", f.fail[key]
@@ -63,7 +64,7 @@ func keepsChoiceAndRules(t *testing.T, h *harness, cfg []byte) {
 // the root-owned place and restarts the service with it, keeping the
 // saved choice (even a pause) and never touching the loaded rules.
 func TestReinstallServiceRestartsTheNewBinary(t *testing.T) {
-	sc := &failingSystemctl{}
+	sc := &scriptedSystemctl{}
 	h, cfg := systemdHarness(t, sc)
 	code, out, errOut := h.run("reinstall-service")
 	expect(t, code, out, errOut, 0, nil, nil)
@@ -86,7 +87,7 @@ func TestReinstallServiceRestartsTheNewBinary(t *testing.T) {
 // Without the service installed there is nothing to update: nothing is
 // written and systemd is not asked.
 func TestReinstallServiceWithoutTheServiceDoesNothing(t *testing.T) {
-	sc := &failingSystemctl{}
+	sc := &scriptedSystemctl{}
 	h := newHarness(t, true)
 	h.env.Systemctl = sc
 	h.env.Services = systemdServices
@@ -118,7 +119,7 @@ func TestReinstallServiceTakesNoArguments(t *testing.T) {
 
 // A failed restart is reported with exit 1; the choice and the rules stay.
 func TestReinstallServiceReportsAFailedRestart(t *testing.T) {
-	sc := &failingSystemctl{fail: map[string]error{"restart leakguard.service": errors.New("systemctl restart leakguard.service: exit status 1: boom")}}
+	sc := &scriptedSystemctl{fail: map[string]error{"restart leakguard.service": errors.New("systemctl restart leakguard.service: exit status 1: boom")}}
 	h, cfg := systemdHarness(t, sc)
 	code, out, errOut := h.run("reinstall-service")
 	expect(t, code, out, errOut, 1, nil, []string{"leakguard: could not update the background service: the background service is not started: systemctl restart leakguard.service: exit status 1: boom\n"})
@@ -143,4 +144,24 @@ func TestReinstallServiceIsNotInTheHelp(t *testing.T) {
 			t.Errorf("%s help names reinstall-service", goos)
 		}
 	}
+}
+
+// S7: when systemd cannot stop the service and it may still run, disable
+// fails, keeps the service files and leaves the rules loaded: it never
+// says protection is off while a daemon keeps loading the rules.
+func TestDisableFailsWhenTheServiceCannotBeStopped(t *testing.T) {
+	sc := &scriptedSystemctl{fail: map[string]error{"stop leakguard.service": errors.New("systemctl stop leakguard.service: exit status 1: Access denied")}}
+	h, cfg := systemdHarness(t, sc)
+	code, out, errOut := h.run("disable")
+	expect(t, code, out, errOut, 1, nil, []string{"leakguard: could not remove the background service: could not stop leakguard.service: systemctl stop leakguard.service: exit status 1: Access denied\n"})
+	if out != "" {
+		t.Errorf("stdout = %q, want empty", out)
+	}
+	if !exists(h.path(daemon.BinaryPath)) || !exists(h.path(daemon.UnitPath)) {
+		t.Error("disable removed the service files of a service that may still run")
+	}
+	if got, want := strings.Join(sc.calls, "|"), "stop leakguard.service|is-active leakguard.service"; got != want {
+		t.Errorf("systemctl calls = %q, want %q", got, want)
+	}
+	keepsChoiceAndRules(t, h, cfg)
 }

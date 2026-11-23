@@ -6,19 +6,18 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"os/user"
 	"syscall"
 )
 
-// authorizePeer accepts root and members of the first of sudo, wheel and
-// admin that exists; without such a group, only root.
-func authorizePeer(conn net.Conn) error {
-	_, admin, ok := adminGroup(user.LookupGroup)
+// authorizePeer accepts root and members of the socket's administrators
+// group (the first of sudo, wheel and admin that existed when the socket
+// was created); without such a group, only root.
+func authorizePeer(conn net.Conn, owner socketOwner) error {
 	cred, err := peerUcred(conn)
 	if err != nil {
 		return err
 	}
-	return authorizeLinuxPeer(cred.Uid, cred.Gid, cred.Pid, "/proc", admin, ok)
+	return authorizeLinuxPeer(cred.Uid, cred.Gid, cred.Pid, "/proc", uint32(owner.gid), owner.admins)
 }
 
 // peerUcred reads SO_PEERCRED from a Unix socket connection.

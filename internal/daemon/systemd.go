@@ -76,22 +76,21 @@ type Systemd struct {
 
 func (d Systemd) path(p string) string { return filepath.Join(d.Root, p) }
 
-// install writes data to the logical path p and secures it; an insecure
-// file is removed.
+// install replaces the logical path p with data. The new file is secured
+// as a temporary file next to p and renamed into place only then, so an
+// insecure file never replaces the binary or unit the running service
+// uses; it is removed instead.
 func (d Systemd) install(p string, data []byte, mode os.FileMode) error {
-	full := d.path(p)
-	if err := writeFile(full, data, mode); err != nil {
-		return err
-	}
 	secure := d.Secure
 	if secure == nil {
 		secure = SecureRootOwned
 	}
-	if err := secure(full); err != nil {
-		os.Remove(full)
-		return fmt.Errorf("refusing to install %s: %w", p, err)
-	}
-	return nil
+	return writeFileChecked(d.path(p), data, mode, func(tmp string) error {
+		if err := secure(tmp); err != nil {
+			return fmt.Errorf("refusing to install %s: %w", p, err)
+		}
+		return nil
+	})
 }
 
 // Install copies the executable at src to BinaryPath, writes the unit,
@@ -119,10 +118,21 @@ func (d Systemd) Install(src string) error {
 }
 
 // Uninstall stops and disables the service and removes its unit and
-// binary. systemctl fails when the service was never installed; that is
-// fine, like a launchctl bootout of a job that is not loaded.
+// binary. systemctl stop fails when the service was never installed; that
+// is fine, like a launchctl bootout of a job that is not loaded, but only
+// when systemd then says the service does not run. Otherwise Uninstall
+// fails and removes nothing, so a running daemon is never orphaned.
 func (d Systemd) Uninstall() error {
-	d.Systemctl.Run("stop", UnitName)
+	if _, err := d.Systemctl.Run("stop", UnitName); err != nil {
+		// is-active exits non-zero for every state but active; its output
+		// is the state.
+		state, _ := d.Systemctl.Run("is-active", UnitName)
+		switch strings.TrimSpace(state) {
+		case "inactive", "failed", "unknown":
+		default:
+			return fmt.Errorf("could not stop %s: %w", UnitName, err)
+		}
+	}
 	d.Systemctl.Run("disable", UnitName)
 	for _, p := range []string{UnitPath, BinaryPath} {
 		if err := os.Remove(d.path(p)); err != nil && !errors.Is(err, fs.ErrNotExist) {

@@ -3,10 +3,12 @@ package ipc
 import (
 	"context"
 	"errors"
+	"net"
 	"os"
 	"os/user"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 )
@@ -55,12 +57,12 @@ func TestSocketOwnership(t *testing.T) {
 		want   socketOwner
 	}{
 		// S2: macOS keeps root:admin (gid 80) 0660 whatever the group database says.
-		{"darwin", "darwin", groups(nil), socketOwner{"admin", 80, 0o660}},
-		{"linux sudo", "linux", groups(map[string]string{"sudo": "27", "wheel": "10"}), socketOwner{"sudo", 27, 0o660}},
-		{"linux wheel", "linux", groups(map[string]string{"wheel": "10"}), socketOwner{"wheel", 10, 0o660}},
+		{"darwin", "darwin", groups(nil), socketOwner{"admin", 80, 0o660, true}},
+		{"linux sudo", "linux", groups(map[string]string{"sudo": "27", "wheel": "10"}), socketOwner{"sudo", 27, 0o660, true}},
+		{"linux wheel", "linux", groups(map[string]string{"wheel": "10"}), socketOwner{"wheel", 10, 0o660, true}},
 		// Fail closed: without an administrators group only root may connect.
-		{"linux none", "linux", groups(nil), socketOwner{"root", 0, 0o600}},
-		{"linux unreadable", "linux", failing, socketOwner{"root", 0, 0o600}},
+		{"linux none", "linux", groups(nil), socketOwner{"root", 0, 0o600, false}},
+		{"linux unreadable", "linux", failing, socketOwner{"root", 0, 0o600, false}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -182,7 +184,7 @@ func TestServerAppliesTheSocketOwner(t *testing.T) {
 	path := socketPath(t)
 	rec := &recorder{}
 	startServer(t, &Server{Path: path, Handler: statusHandler(new(atomic.Int32)), Authorize: allowAll,
-		Chown: rec.chown, owner: func() socketOwner { return socketOwner{"root", 0, 0o600} }})
+		Chown: rec.chown, owner: func() socketOwner { return socketOwner{"root", 0, 0o600, false} }})
 	info, err := os.Lstat(path)
 	if err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("socket = %v, %v; want mode 0600", info, err)
@@ -192,8 +194,47 @@ func TestServerAppliesTheSocketOwner(t *testing.T) {
 	}
 	err = (&Server{Path: socketPath(t), Handler: statusHandler(new(atomic.Int32)), Authorize: allowAll,
 		Chown: func(string, int, int) error { return errors.New("operation not permitted") },
-		owner: func() socketOwner { return socketOwner{"sudo", 27, 0o660} }}).Serve(context.Background())
+		owner: func() socketOwner { return socketOwner{"sudo", 27, 0o660, true} }}).Serve(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "to root:sudo: operation not permitted") {
 		t.Fatalf("Serve() = %v", err)
+	}
+}
+
+// S8: the server resolves the administrators group once, when it creates
+// the socket, and checks every peer against that same group, so the
+// socket's group and the peer check never drift apart.
+func TestServerChecksPeersAgainstTheSocketGroup(t *testing.T) {
+	for _, want := range []socketOwner{{"wheel", 10, 0o660, true}, {"root", 0, 0o600, false}} {
+		var lookups, handled atomic.Int32
+		var mu sync.Mutex
+		var seen []socketOwner
+		path := socketPath(t)
+		startServer(t, &Server{Path: path, Handler: statusHandler(&handled), Chown: (&recorder{}).chown,
+			owner: func() socketOwner { lookups.Add(1); return want },
+			peerCheck: func(_ net.Conn, o socketOwner) error {
+				mu.Lock()
+				defer mu.Unlock()
+				seen = append(seen, o)
+				return nil
+			}})
+		for i := 0; i < 3; i++ {
+			if _, err := (Client{Path: path}).Status(); err != nil {
+				t.Fatalf("Status() = %v", err)
+			}
+		}
+		mu.Lock()
+		if lookups.Load() != 1 || len(seen) != 3 || seen[0] != want || seen[1] != want || seen[2] != want {
+			t.Fatalf("owner looked up %d times, peers checked against %+v; want once, 3 times %+v", lookups.Load(), seen, want)
+		}
+		mu.Unlock()
+	}
+	// A refusing check still refuses before anything runs.
+	var handled atomic.Int32
+	path := socketPath(t)
+	startServer(t, &Server{Path: path, Handler: statusHandler(&handled), Chown: (&recorder{}).chown,
+		owner:     func() socketOwner { return socketOwner{"root", 0, 0o600, false} },
+		peerCheck: func(net.Conn, socketOwner) error { return errors.New("uid 1000 is not root") }})
+	if _, err := (Client{Path: path}).Status(); err == nil || err.Error() != "not authorized" || handled.Load() != 0 {
+		t.Fatalf("Status() = %v (handler ran %d times), want not authorized", err, handled.Load())
 	}
 }

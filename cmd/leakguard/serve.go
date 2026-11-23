@@ -30,8 +30,10 @@ type service struct {
 	// applied is the choice this daemon loaded last, nil when it loaded
 	// none or paused. A different saved choice is loaded on the next check.
 	applied *config.Config
-	// refusal is the refused saved VPN last logged, so the reason is
-	// logged once per change; empty while the saved VPN is accepted.
+	// refusal is the refused saved VPN whose block-all rules were last
+	// logged as loaded, so that is logged once per change; empty while the
+	// saved VPN is accepted, and after a failed load of the block-all
+	// rules, so the next load that works is logged again.
 	refusal string
 	stats   *daemonStats
 }
@@ -141,9 +143,10 @@ func interval(d, def time.Duration) time.Duration {
 // when the saved choice is not the one loaded, or when force is set. It
 // does nothing while paused. A failure is logged and leaves the loaded
 // rules in place (fail closed). When only the saved VPN interface is
-// refused, the rules allow no interface, and the reason is logged once per
-// change. The block counter is read on each check, right before a load,
-// which resets it.
+// refused, the rules allow no interface: each failed load of them is
+// logged, and that they block protected services is logged once per
+// change, only after they loaded or verified. The block counter is read on
+// each check, right before a load, which resets it.
 func (s *service) check(force bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -156,10 +159,6 @@ func (s *service) check(force bool) {
 	switch {
 	case isRefused:
 		target.VPNInterface, err = blockAll.VPNInterface, nil
-		if refused.Error() != s.refusal {
-			s.refusal = refused.Error()
-			s.c.logApply(cfg, refused.blocked())
-		}
 	case err != nil:
 		s.refusal = ""
 		s.c.logApply(cfg, err)
@@ -171,9 +170,7 @@ func (s *service) check(force bool) {
 		verr := s.c.verify(target, services)
 		s.stats.countBlocks(s.c.firewall())
 		if verr == nil {
-			if !isRefused {
-				s.c.logApply(cfg, nil)
-			}
+			s.logLoaded(cfg, refused, isRefused)
 			return
 		}
 		fmt.Fprintf(s.c.stderr, "%s leakguard: rules not verified, loading them again: %v\n", s.c.now().Format(time.RFC3339), verr)
@@ -183,10 +180,27 @@ func (s *service) check(force bool) {
 	err = s.c.firewall().Apply(target.VPNInterface, services)
 	s.loaded(target, err)
 	switch {
-	case isRefused && err != nil:
+	case err == nil:
+		s.logLoaded(cfg, refused, isRefused)
+	case isRefused:
+		s.refusal = ""
 		s.c.logApply(cfg, refused.notBlocked(err))
-	case !isRefused:
+	default:
 		s.c.logApply(cfg, err)
+	}
+}
+
+// logLoaded logs rules that loaded or verified: the saved choice each
+// time, or, for a refused saved VPN, that protected services are blocked,
+// once per change.
+func (s *service) logLoaded(cfg config.Config, refused vpnRefusedError, isRefused bool) {
+	if !isRefused {
+		s.c.logApply(cfg, nil)
+		return
+	}
+	if refused.Error() != s.refusal {
+		s.refusal = refused.Error()
+		s.c.logApply(cfg, refused.blocked())
 	}
 }
 

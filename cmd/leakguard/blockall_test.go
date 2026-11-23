@@ -4,16 +4,20 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/Isaacpaezz/leakguard/internal/catalog"
 	"github.com/Isaacpaezz/leakguard/internal/config"
 	"github.com/Isaacpaezz/leakguard/internal/daemon"
+	"github.com/Isaacpaezz/leakguard/internal/firewall"
 	"github.com/Isaacpaezz/leakguard/internal/nft"
 	"github.com/Isaacpaezz/leakguard/internal/pf"
 )
@@ -40,7 +44,7 @@ func (f *fakeNft) Run(stdin string, args ...string) (string, error) {
 	f.calls = append(f.calls, key)
 	switch key {
 	case "-f -":
-		f.loaded = strings.Contains(stdin, "chain "+nft.Chain)
+		f.loaded = strings.Contains(stdin, "chain "+nft.Chain+" {") && strings.Contains(stdin, "chain "+nft.ForwardChain+" {")
 		f.oif, f.sets = "", [2][]string{}
 		if m := nftOif.FindStringSubmatch(stdin); m != nil {
 			f.oif = m[1]
@@ -60,7 +64,8 @@ func (f *fakeNft) Run(stdin string, args ...string) (string, error) {
 }
 
 func (f *fakeNft) listing() string {
-	objs := []string{`{"chain": {"family": "inet", "table": "leakguard", "name": "output", "hook": "output"}}`}
+	objs := []string{`{"chain": {"family": "inet", "table": "leakguard", "name": "output", "hook": "output"}}`,
+		`{"chain": {"family": "inet", "table": "leakguard", "name": "forward", "hook": "forward"}}`}
 	for i, name := range []string{"protected4", "protected6"} {
 		var elems []string
 		for _, e := range f.sets[i] {
@@ -76,6 +81,15 @@ func (f *fakeNft) listing() string {
 		}
 		objs = append(objs, fmt.Sprintf(`{"set": {"name": %q, "elem": [%s]}}`, name, strings.Join(elems, ", ")))
 	}
+	for _, chain := range []string{nft.Chain, nft.ForwardChain} {
+		objs = append(objs, f.rules(chain)...)
+	}
+	return `{"nftables": [` + strings.Join(objs, ", ") + "]}"
+}
+
+// rules lists the four reject rules of chain.
+func (f *fakeNft) rules(chain string) []string {
+	var objs []string
 	for _, fam := range [][2]string{{"ip", "protected4"}, {"ip6", "protected6"}} {
 		for _, tcp := range []bool{true, false} {
 			var e []string
@@ -89,10 +103,10 @@ func (f *fakeNft) listing() string {
 				reject = `{"reject": {"type": "tcp reset"}}`
 			}
 			e = append(e, `{"counter": {"packets": 0, "bytes": 0}}`, reject)
-			objs = append(objs, fmt.Sprintf(`{"rule": {"chain": "output", "expr": [%s]}}`, strings.Join(e, ", ")))
+			objs = append(objs, fmt.Sprintf(`{"rule": {"chain": %q, "expr": [%s]}}`, chain, strings.Join(e, ", ")))
 		}
 	}
-	return `{"nftables": [` + strings.Join(objs, ", ") + "]}"
+	return objs
 }
 
 // linuxHarness picks the Linux backends, nftables and systemd, through fakes.
@@ -284,4 +298,95 @@ func TestLinuxApplyBlocksEverythingWhenTheSavedVPNIsRefused(t *testing.T) {
 	}
 	code, out, errOut = h.run("status")
 	expect(t, code, out, errOut, 1, []string{"Firewall:           NOT PROTECTED: " + blockedReason + "\n"}, nil)
+}
+
+// flakyFirewall fails every Apply while fail is set.
+type flakyFirewall struct {
+	firewall.Firewall
+	fail *atomic.Bool
+}
+
+func (f flakyFirewall) Apply(vpn string, s []catalog.Service) error {
+	if f.fail.Load() {
+		return errors.New("pfctl: Operation not permitted")
+	}
+	return f.Firewall.Apply(vpn, s)
+}
+
+// S7: the daemon says protected services are blocked only once the
+// block-all rules really loaded. Every failed load is logged; the first
+// load that works after them is logged once, and later verifies are not.
+func TestServeLogsBlockedOnlyAfterTheBlockAllRulesLoad(t *testing.T) {
+	h, p := statefulHarness(t)
+	h.env.ApplyEvery = 5 * time.Millisecond
+	h.saveConfig(t, config.Config{VPNInterface: refusedVPN, Services: []string{"anthropic"}})
+	var fail atomic.Bool
+	fail.Store(true)
+	h.env.Firewall = func(e Env) firewall.Firewall { return flakyFirewall{pfFirewall(e), &fail} }
+	s := startServe(t, h)
+	const (
+		stamp      = "2026-11-16T15:00:00Z leakguard: "
+		notBlocked = stamp + `invalid configuration: "en9" is not a VPN interface; it carries your real connection, and protected services could not be blocked: pfctl: Operation not permitted` + "\n"
+		blocked    = stamp + blockedLog + "\n"
+	)
+	eventually(t, "3 failed loads", func() bool { return strings.Count(s.stderr.String(), notBlocked) >= 3 })
+	if got := s.stderr.String(); strings.Contains(got, blockedLog) {
+		t.Fatalf("stderr says blocked before the rules loaded:\n%s", got)
+	}
+	fail.Store(false)
+	eventually(t, "the block-all rules", func() bool { return blockOnly(p) })
+	reads := p.count("-a " + pf.Anchor + " -s rules")
+	eventually(t, "3 more verifies", func() bool { return p.count("-a "+pf.Anchor+" -s rules") >= reads+3 })
+	s.stop(t)
+	got := s.stderr.String()
+	if strings.Count(got, blocked) != 1 || !strings.HasSuffix(got, blocked) || strings.ReplaceAll(strings.TrimSuffix(got, blocked), notBlocked, "") != "" {
+		t.Fatalf("stderr = %q, want failed loads, then blocked once", got)
+	}
+	if n := p.count(loadAnchor); n != 1 {
+		t.Fatalf("loads = %d, want 1: the block-all rules must be verified, not reloaded", n)
+	}
+}
+
+// breakSave loads the rules, then puts a file where the configuration's
+// directory was, so saving the configuration fails, also as root.
+type breakSave struct {
+	firewall.Firewall
+	dir string
+}
+
+func (f breakSave) Apply(vpn string, s []catalog.Service) error {
+	err := f.Firewall.Apply(vpn, s)
+	if rerr := os.Rename(f.dir, f.dir+".moved"); rerr != nil {
+		return rerr
+	}
+	if werr := os.WriteFile(f.dir, nil, 0o644); werr != nil {
+		return werr
+	}
+	return err
+}
+
+// S7: "sudo leakguard apply" with a refused saved VPN still says so when
+// the block-all rules loaded but the pause could not be cleared. With an
+// accepted VPN it keeps saying what it said before.
+func TestApplyWithAFailedPauseSave(t *testing.T) {
+	for _, tc := range []struct {
+		vpn  string
+		want string
+	}{
+		{refusedVPN, "2026-11-16T15:00:00Z leakguard: " + blockedLog + "; the pause could not be cleared: "},
+		{"ipsec0", "2026-11-16T15:00:00Z leakguard: the rules are loaded, but the pause could not be cleared: "},
+	} {
+		h, p := statefulHarness(t)
+		h.saveConfig(t, config.Config{VPNInterface: tc.vpn, Services: []string{"anthropic"}, Paused: true})
+		h.env.Firewall = func(e Env) firewall.Firewall {
+			return breakSave{pfFirewall(e), filepath.Dir(h.path(config.DefaultPath))}
+		}
+		code, out, errOut := h.run("apply")
+		if code != 1 || out != "" || !strings.HasPrefix(errOut, tc.want) || strings.Count(errOut, "\n") != 1 {
+			t.Fatalf("apply with VPN %s = %d, stdout %q, stderr %q; want %q", tc.vpn, code, out, errOut, tc.want)
+		}
+		if tc.vpn == refusedVPN && !blockOnly(p) {
+			t.Fatalf("apply did not load the block-all rules: %v", p.calls)
+		}
+	}
 }

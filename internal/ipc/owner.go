@@ -35,11 +35,16 @@ func adminGroup(lookup groupLookup) (name string, gid uint32, ok bool) {
 	return "", 0, false
 }
 
-// socketOwner is who owns the daemon's socket and its mode.
+// socketOwner is who owns the daemon's socket and its mode. The server
+// resolves it once, when it creates the socket, and checks every peer
+// against the same group.
 type socketOwner struct {
 	group string
 	gid   int
 	mode  os.FileMode
+	// admins is true when gid is an administrators group whose members may
+	// connect; false means only root may (fail closed).
+	admins bool
 }
 
 // socketOwnership picks the socket's owner: root:admin 0660 on macOS;
@@ -47,12 +52,12 @@ type socketOwner struct {
 // system has no administrators group, so only root may connect (fail closed).
 func socketOwnership(goos string, lookup groupLookup) socketOwner {
 	if goos != "linux" {
-		return socketOwner{"admin", AdminGID, 0o660}
+		return socketOwner{"admin", AdminGID, 0o660, true}
 	}
 	if name, gid, ok := adminGroup(lookup); ok {
-		return socketOwner{name, int(gid), 0o660}
+		return socketOwner{name, int(gid), 0o660, true}
 	}
-	return socketOwner{"root", 0, 0o600}
+	return socketOwner{"root", 0, 0o600, false}
 }
 
 // parseProcStatus reads the effective uid, the effective gid and the

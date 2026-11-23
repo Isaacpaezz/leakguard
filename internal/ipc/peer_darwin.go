@@ -14,8 +14,9 @@ const (
 	localPeerCred = 1
 )
 
-// authorizePeer accepts root and members of group admin.
-func authorizePeer(conn net.Conn) error {
+// authorizePeer accepts root and members of group admin, which always
+// owns the socket on macOS.
+func authorizePeer(conn net.Conn, _ socketOwner) error {
 	uid, groups, err := peerCredentials(conn)
 	if err != nil {
 		return err

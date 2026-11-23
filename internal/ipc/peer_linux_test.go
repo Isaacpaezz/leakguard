@@ -59,7 +59,7 @@ func TestPeerCheckRejectsNonUnixConnsOnLinux(t *testing.T) {
 	a, b := net.Pipe()
 	defer a.Close()
 	defer b.Close()
-	if err := authorizePeer(a); err == nil {
+	if err := authorizePeer(a, socketOwner{"sudo", 27, 0o660, true}); err == nil {
 		t.Fatal("authorizePeer(net.Pipe) = nil")
 	}
 }
@@ -136,6 +136,40 @@ func TestPeerCheckForOtherUsers(t *testing.T) {
 	}
 	if calls.Load() != 2 {
 		t.Fatalf("handler ran %d times, want 2 (administrators only)", calls.Load())
+	}
+
+	// S8: the peer check uses the group the socket was given, not a new
+	// lookup: a member of that group is allowed, a member of sudo is not.
+	const socketGID = 4242
+	other := filepath.Join(dir, "g.sock")
+	var otherCalls atomic.Int32
+	startServer(t, &Server{Path: other, Handler: statusHandler(&otherCalls), Chown: (&recorder{}).chown,
+		Chmod: func(p string, _ os.FileMode) error { return os.Chmod(p, 0o666) },
+		owner: func() socketOwner { return socketOwner{"lgtest", socketGID, 0o660, true} }})
+	for _, tc := range []struct {
+		name   string
+		groups []uint32
+		want   string
+	}{
+		{"member of the socket group", []uint32{socketGID}, "ok"},
+		{"member of another administrators group", []uint32{admin}, "not authorized"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := exec.Command(exe, "-test.run=^TestHelperClient$")
+			cmd.Dir = dir
+			cmd.Env = []string{helperEnv + "=" + other}
+			cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: nobody, Gid: nobody, Groups: tc.groups}}
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("helper: %v\n%s", err, out)
+			}
+			if !strings.Contains(string(out), "RESULT: "+tc.want+"\n") {
+				t.Fatalf("helper output = %q, want RESULT: %s", out, tc.want)
+			}
+		})
+	}
+	if otherCalls.Load() != 1 {
+		t.Fatalf("handler ran %d times, want 1 (socket group members only)", otherCalls.Load())
 	}
 }
 
