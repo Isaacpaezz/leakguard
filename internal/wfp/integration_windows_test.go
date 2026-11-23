@@ -7,7 +7,6 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"slices"
 	"strings"
 	"syscall"
@@ -457,9 +456,16 @@ const forwardTarget = "1.1.1.1:443"
 // traffic this computer forwards for others. A Windows container on
 // Docker's nat network reaches the internet through WinNAT on the host, so
 // the host forwards its packets from the vEthernet (nat) adapter to the
-// real one. The test copies its own binary into a nanoserver container
+// real one. The test copies its own binary into a Nano Server container
 // matching this Windows build and runs TestForwardProbe there to connect to
-// forwardTarget, protected for the test:
+// forwardTarget, protected for the test. The binary goes in with docker cp
+// into the created, not yet started, container, never through a bind
+// mount: a mounted host folder keeps the host's ACL, which the container's
+// account cannot use (CreateProcess fails with ERROR_ACCESS_DENIED), while
+// a copied file inherits the container's own C:\ ACL. The probe also runs
+// as ContainerAdministrator. The log names the container's isolation,
+// network and addresses, so it shows whether its traffic is NAT-forwarded.
+// Phases:
 //
 //   - nothing loaded: the container connects (the network works);
 //   - IPFORWARD blocks only: the container cannot connect, while this
@@ -494,29 +500,57 @@ func TestIntegrationForwardedTraffic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dir := t.TempDir()
-	copyFile(t, exe, filepath.Join(dir, "probe.exe"))
+	dockerDo := func(args ...string) (string, error) {
+		out, err := exec.Command(docker, args...).CombinedOutput()
+		return strings.TrimSpace(string(out)), err
+	}
 	start := time.Now()
-	if out, err := exec.Command(docker, "pull", image).CombinedOutput(); err != nil {
+	if out, err := dockerDo("pull", image); err != nil {
 		t.Fatalf("docker pull %s: %v\n%s", image, err, out)
 	}
 	t.Logf("pulled %s in %v", image, time.Since(start).Round(time.Second))
+	info, err := dockerDo("info", "--format", "default isolation {{.Isolation}}, OS {{.OperatingSystem}} {{.KernelVersion}}")
+	t.Logf("docker: %s (%v)", info, err)
+	info, err = dockerDo("network", "inspect", "nat", "--format", "network nat: driver {{.Driver}}, IPAM {{json .IPAM.Config}}, options {{json .Options}}")
+	t.Logf("docker: %s (%v)", info, err)
+	described := false
 	probe := func(phase string) bool {
 		t.Helper()
 		start := time.Now()
-		cmd := exec.Command(docker, "run", "--rm", "--isolation=process",
-			"--mount", "type=bind,source="+dir+",target=C:\\probe",
+		out, err := dockerDo("create", "--isolation=process", "--network=nat", "--user=ContainerAdministrator",
 			"-e", "LEAKGUARD_FORWARD_PROBE="+forwardTarget,
-			image, "C:\\probe\\probe.exe", "-test.run=^TestForwardProbe$", "-test.v")
-		out, err := cmd.CombinedOutput()
-		_, line, ok := strings.Cut(string(out), "LEAKGUARD-PROBE: ")
-		if !ok {
+			image, `C:\probe.exe`, "-test.run=^TestForwardProbe$", "-test.v")
+		if err != nil {
+			t.Fatalf("%s: docker create: %v\n%s", phase, err, out)
+		}
+		lines := strings.Fields(out)
+		id := lines[len(lines)-1]
+		defer dockerDo("rm", "--force", id)
+		if out, err := dockerDo("cp", exe, id+`:C:\probe.exe`); err != nil {
+			t.Fatalf("%s: docker cp the probe into the container: %v\n%s", phase, err, out)
+		}
+		if !described {
+			described = true
+			out, err := dockerDo("inspect", "--format", "isolation {{.HostConfig.Isolation}}, network mode {{.HostConfig.NetworkMode}}, user {{.Config.User}}", id)
+			t.Logf("container: %s (%v)", out, err)
+		}
+		out, err = dockerDo("start", "--attach", id)
+		var result string
+		ran := false
+		for _, l := range strings.Split(out, "\n") {
+			l = strings.TrimSpace(l)
+			if info, ok := strings.CutPrefix(l, "LEAKGUARD-PROBE-INFO: "); ok {
+				t.Logf("%s: in the container: %s", phase, info)
+			}
+			if r, ok := strings.CutPrefix(l, "LEAKGUARD-PROBE: "); ok {
+				result, ran = r, true
+			}
+		}
+		if !ran {
 			t.Fatalf("%s: the probe did not run in the container (%v):\n%s", phase, err, out)
 		}
-		line, _, _ = strings.Cut(line, "\n")
-		line = strings.TrimSpace(line)
-		t.Logf("%s: container connect %s after %v: %s", phase, forwardTarget, time.Since(start).Round(time.Millisecond), line)
-		return line == "connected"
+		t.Logf("%s: container connect %s after %v: %s", phase, forwardTarget, time.Since(start).Round(time.Millisecond), result)
+		return result == "connected"
 	}
 
 	f := Firewall{Check: func(string) error { return nil }} // config refuses Ethernet as the VPN
@@ -601,7 +635,21 @@ func TestForwardProbe(t *testing.T) {
 	if target == "" {
 		t.Skip("run by TestIntegrationForwardedTraffic inside a Windows container")
 	}
-	fmt.Printf("LEAKGUARD-PROBE: %s\n", classify(connect(target, 5*time.Second)))
+	var addrs []string
+	if as, err := net.InterfaceAddrs(); err != nil {
+		addrs = append(addrs, err.Error())
+	} else {
+		for _, a := range as {
+			addrs = append(addrs, a.String())
+		}
+	}
+	fmt.Printf("LEAKGUARD-PROBE-INFO: addresses %s\n", strings.Join(addrs, ", "))
+	c, err := net.DialTimeout("tcp", target, 5*time.Second)
+	if err == nil {
+		fmt.Printf("LEAKGUARD-PROBE-INFO: connected from %s to %s\n", c.LocalAddr(), c.RemoteAddr())
+		c.Close()
+	}
+	fmt.Printf("LEAKGUARD-PROBE: %s\n", classify(err))
 }
 
 // nanoserverImage is the Nano Server image a process-isolated container
@@ -634,15 +682,4 @@ func routeTo(t *testing.T, ip [4]byte) Adapter {
 	}
 	t.Fatalf("no adapter has interface index %d: %v", index, as)
 	return Adapter{}
-}
-
-func copyFile(t *testing.T, from, to string) {
-	t.Helper()
-	b, err := os.ReadFile(from)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(to, b, 0o755); err != nil {
-		t.Fatal(err)
-	}
 }
