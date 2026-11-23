@@ -109,7 +109,8 @@ func TestLinuxJudgesAMissingInterfaceByName(t *testing.T) {
 			t.Errorf("check(%q) = %v", ok, err)
 		}
 	}
-	for _, name := range []string{"lo", "eth1", "enp0s31f6", "wlan1", "wlp3s0", "docker0", "br-x", "virbr1", "veth9", "dummy1"} {
+	for _, name := range []string{"lo", "eth1", "enp0s31f6", "wlan1", "wlp3s0", "docker0", "br-x", "virbr1", "veth9", "dummy1",
+		"bond0", "usb0", "rndis0", "rmnet_data0", "ib0", "vlan10", "macvlan0", "macvtap0", "ipvlan0", "team0", "vxlan0"} {
 		err := r.check(name)
 		if err == nil || !strings.Contains(err.Error(), strconv.Quote(name)+" is not a VPN interface") {
 			t.Errorf("check(%q) = %v, want a refusal naming it", name, err)
@@ -240,7 +241,7 @@ func TestPathPerOS(t *testing.T) {
 			t.Errorf("pathFor(%q, %q) = %q, want %q", tc.goos, tc.programData, got, tc.want)
 		}
 	}
-	if runtime.GOOS == "darwin" && DefaultPath != "/Library/Application Support/leakguard/config.json" {
-		t.Errorf("DefaultPath = %q", DefaultPath)
+	if runtime.GOOS != "windows" && DefaultPath != pathFor(runtime.GOOS, "") {
+		t.Errorf("DefaultPath = %q, want %q", DefaultPath, pathFor(runtime.GOOS, ""))
 	}
 }

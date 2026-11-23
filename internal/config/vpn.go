@@ -30,7 +30,10 @@ var (
 // Prefixes of interfaces that carry the real connection, never a VPN.
 var (
 	nonVPNPrefixes      = []string{"lo", "en", "bridge", "awdl", "llw", "ap", "anpi", "gif", "stf"}
-	linuxNonVPNPrefixes = []string{"lo", "eth", "en", "wl", "ww", "docker", "br", "virbr", "veth", "dummy", "bond"}
+	linuxNonVPNPrefixes = []string{
+		"lo", "eth", "en", "wl", "ww", "docker", "br", "virbr", "veth", "dummy", "bond",
+		"usb", "rndis", "rmnet", "ib", "vlan", "macvlan", "macvtap", "ipvlan", "team", "vxlan",
+	}
 )
 
 // Prefixes of interfaces that VPN clients create.

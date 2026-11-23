@@ -18,7 +18,7 @@ func TestPathPerOS(t *testing.T) {
 			t.Errorf("pathFor(%q, %q) = %q, want %q", tc.goos, tc.programData, got, tc.want)
 		}
 	}
-	if runtime.GOOS == "darwin" && DefaultPath != "/Library/Application Support/leakguard/stats.json" {
-		t.Errorf("DefaultPath = %q", DefaultPath)
+	if runtime.GOOS != "windows" && DefaultPath != pathFor(runtime.GOOS, "") {
+		t.Errorf("DefaultPath = %q, want %q", DefaultPath, pathFor(runtime.GOOS, ""))
 	}
 }
