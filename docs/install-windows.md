@@ -122,9 +122,15 @@ espacios. `.\leakguard services` lista lo que puedes proteger. `status` y
 - Windows todavía no cuenta los **bloqueos**: el menú muestra cuánto tiempo
   lleva conectada tu VPN y cuántas veces se cayó hoy, pero no cuántas veces
   leakguard bloqueó un servicio. La protección funciona igual.
-- El tráfico de WSL2, Docker Desktop y las máquinas virtuales puede no
-  pasar por leakguard (aún por confirmar): si usas los servicios protegidos
-  desde ahí, podrían salir por tu conexión normal.
+- **WSL2** (en su modo normal, NAT), las **máquinas virtuales de Hyper-V**
+  y los **contenedores de Hyper-V** todavía no pasan por leakguard: si la
+  VPN se cae, un programa dentro de ellos puede llegar a los servicios
+  protegidos por tu conexión normal. Para estar protegido, usa Claude Code
+  y herramientas parecidas directamente en Windows, no dentro de WSL2 ni de
+  una máquina virtual.
+- Los contenedores de Windows con aislamiento de procesos (lo normal de
+  Docker en Windows Server) no pueden llegar a los servicios protegidos, ni
+  siquiera con la VPN conectada.
 - Algunos programas de VPN nombran su adaptador de otra forma que los
   ejemplos de arriba. Si leakguard no encuentra tu VPN al conectarla, usa
   **Elegir de una lista** y elige el adaptador de tu VPN.
@@ -279,9 +285,13 @@ work in a normal terminal.
 - Windows does not count **blocks** yet: the menu shows how long your VPN
   has been connected and how many times it dropped today, but not how many
   times leakguard blocked a service. The protection works the same.
-- Traffic from WSL2, Docker Desktop and virtual machines may not pass
-  through leakguard (to be confirmed): if you use the protected services
-  from there, they could leave through your normal connection.
+- **WSL2** (in its default NAT mode), **Hyper-V virtual machines** and
+  **Hyper-V containers** do not go through leakguard yet: if the VPN
+  drops, a program inside them can reach the protected services over your
+  real connection. To be protected, run Claude Code and similar tools
+  directly on Windows, not inside WSL2 or a virtual machine.
+- Windows containers with process isolation (Docker's default on Windows
+  Server) cannot reach the protected services, even when the VPN is up.
 - Some VPN programs name their adapter differently than the examples
   above. If leakguard does not find your VPN when you connect it, use
   **Choose from a list** and pick your VPN's adapter.

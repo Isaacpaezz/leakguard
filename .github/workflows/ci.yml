@@ -148,9 +148,12 @@ jobs:
       # The test runs its own binary in Nano Server containers and probes a
       # protected public address. Process isolation shares this kernel, so
       # it must be blocked at once (WSAEACCES) with the VPN down, and Flush
-      # must restore it. Hyper-V isolation has its own kernel, like WSL2 and
-      # VMs, so only IPFORWARD sees it: asserted when the runner can start
-      # one, otherwise logged as unverified without failing.
+      # must restore it; with every filter loaded and the egress adapter as
+      # the VPN, this computer's own connect must succeed. Hyper-V isolation
+      # has its own kernel, like WSL2 and Hyper-V VMs: its traffic is NAT-
+      # translated inside the Hyper-V switch and is not filtered (a known
+      # gap, run 45127817057). The test logs it as KNOWN GAP without failing
+      # and this step turns that line into a warning on every run.
       # Some runners come with the Docker service stopped or without Docker:
       # it is started and waited for (about 60 s). A runner without Docker
       # skips the container coverage with a warning, an environment reason,
@@ -182,7 +185,7 @@ jobs:
             "available=false" >> $env:GITHUB_OUTPUT
           }
           exit 0
-      - name: Container traffic (ALE for process isolation, IPFORWARD for Hyper-V)
+      - name: Container traffic (ALE for process isolation, Hyper-V known gap)
         if: ${{ !cancelled() && steps.docker.outputs.available == 'true' }}
         shell: bash
         env:
@@ -196,6 +199,12 @@ jobs:
             echo "::error::TestIntegrationForwardedTraffic did not pass"
             exit 1
           fi
+          { grep 'KNOWN GAP' <<<"$out" || true; } | while IFS= read -r line; do
+            line=$(sed -E 's/^[[:space:]]*[A-Za-z0-9_]+\.go:[0-9]+: //' <<<"$line")
+            line=${line//'%'/'%25'}
+            line=${line//$'\r'/}
+            echo "::warning::$line"
+          done
       # The portable suite of these packages still assumes Unix in places:
       # continue-on-error until it is ported (T14).
       # The whole suites of these packages run on Windows too (T14c).

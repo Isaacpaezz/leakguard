@@ -797,11 +797,11 @@ func TestRulesOrderAndShape(t *testing.T) {
 	}
 }
 
-// SF2: traffic this computer forwards for guests with their own kernel (WSL2
-// in NAT mode, Hyper-V virtual machines and isolated containers, ICS
-// clients) never passes its ALE_AUTH_CONNECT. Every
-// range is also blocked at IPFORWARD unless it leaves on the VPN, with the
-// same weights; without a VPN no forwarded traffic is permitted either.
+// SF2: traffic this computer's IP stack forwards for others (such as ICS
+// clients) never passes its ALE_AUTH_CONNECT. Every range is also blocked
+// at IPFORWARD unless it leaves on the VPN, with the same weights; without
+// a VPN no forwarded traffic is permitted either. (Hyper-V guests reach
+// neither layer: a known gap, see the package documentation.)
 func TestRulesFilterForwardedTraffic(t *testing.T) {
 	for _, luid := range []uint64{vpnLUID, 0} {
 		rules, err := Rules(luid, services)

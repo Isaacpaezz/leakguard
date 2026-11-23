@@ -6,20 +6,30 @@
 // leaves on the VPN adapter. Other providers' filters are never read or
 // touched.
 //
-// What CI proved on windows-latest (Server 2025, run 45125443458):
-// process-isolated Windows containers on Docker's nat network share this
-// kernel, so their connects are authorized at this computer's
-// ALE_AUTH_CONNECT and never pass IPFORWARD. With the VPN down they are
-// blocked (WSAEACCES); with the VPN up they stay blocked too, because
-// their ALE local interface is the container's own vNIC, never the VPN's:
-// over-blocking that fails closed. The IPFORWARD filters stay: they are
-// harmless to this computer's own traffic and are what can see guests with
-// their own kernel (WSL2 in NAT mode, Hyper-V virtual machines and
-// isolated containers, ICS clients). That part is proven only where
-// TestIntegrationForwardedTraffic could start a Hyper-V isolated
-// container; GitHub's runners may lack nested virtualization. WSL2 in
-// mirrored mode and virtual machines bridged on an external switch are
-// not forwarded by this computer and are not covered.
+// What CI proved on windows-latest (Server 2025, runs 45125443458 and
+// 45127817057, TestIntegrationForwardedTraffic):
+//
+//   - Process-isolated Windows containers on Docker's nat network share
+//     this kernel, so their connects are authorized at this computer's
+//     ALE_AUTH_CONNECT and never pass IPFORWARD. With the VPN down they
+//     are blocked at once (WSAEACCES); with the VPN up they stay blocked,
+//     because their ALE local interface is the container's own vNIC, never
+//     the VPN's: over-blocking that fails closed.
+//   - Hyper-V guests are NOT filtered: a KNOWN GAP. A Hyper-V isolated
+//     container reached the protected address with nothing loaded, with
+//     the VPN down, with the real adapter as the VPN and after Flush. Its
+//     traffic is NAT-translated inside the Hyper-V virtual switch
+//     (HNS/VFP) and never reaches this computer's ALE or IPFORWARD layers.
+//     The same holds for WSL2 in NAT mode and Hyper-V virtual machines.
+//     Closing it needs filters at the WFP vSwitch layers and a decision
+//     on over-blocking WSL2 while the VPN is up.
+//   - With every filter loaded and the adapter the route leaves on as the
+//     VPN, this computer's own connect to the protected address succeeds.
+//
+// The IPFORWARD filters stay for traffic this computer routes itself, such
+// as Internet Connection Sharing clients; that they block it is unproven.
+// WSL2 in mirrored mode and virtual machines bridged on an external switch
+// are not covered either.
 //
 // The filter set, the diff against what is loaded and the swap from the old
 // set to the new one are portable and run against an Engine; only the
@@ -90,11 +100,12 @@ const (
 	LayerConnectV4
 	// LayerConnectV6 is ALE_AUTH_CONNECT_V6.
 	LayerConnectV6
-	// LayerForwardV4 is IPFORWARD_V4: packets this computer routes for
-	// guests with their own kernel (virtual machines, WSL2 in NAT mode,
-	// Hyper-V isolated containers, ICS clients), which never pass its
-	// ALE_AUTH_CONNECT. Process-isolated containers do not reach it (see
-	// the package documentation).
+	// LayerForwardV4 is IPFORWARD_V4: packets this computer's own IP stack
+	// routes for others, such as Internet Connection Sharing clients
+	// (unproven). Process-isolated containers are filtered at
+	// ALE_AUTH_CONNECT instead, and Hyper-V guests (WSL2 in NAT mode,
+	// Hyper-V virtual machines and isolated containers) reach neither
+	// layer: a known gap (see the package documentation).
 	LayerForwardV4
 	// LayerForwardV6 is IPFORWARD_V6.
 	LayerForwardV6
@@ -316,8 +327,10 @@ func lookup(adapters []Adapter, alias string) (uint64, error) {
 }
 
 // Rules returns the filters that keep services on the adapter with this
-// LUID, for this computer's connections and for the traffic it forwards,
-// in the order Apply adds them: blocks first. luid 0 returns blocks only,
+// LUID, for this computer's connections (ALE_AUTH_CONNECT) and for the
+// traffic its IP stack forwards (IPFORWARD; Hyper-V guests never reach it,
+// see the package documentation), in the order Apply adds them: blocks
+// first. luid 0 returns blocks only,
 // so no interface may carry protected traffic.
 func Rules(luid uint64, services []catalog.Service) ([]Rule, error) {
 	prefixes, err := protected(services)

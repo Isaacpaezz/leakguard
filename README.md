@@ -169,6 +169,9 @@ including the command-line route:
    **^** arrow until you pin it. The blocks count is not shown on Windows
    yet.
 
+WSL2, Hyper-V virtual machines and Hyper-V containers do not go through
+leakguard yet: run Claude Code and similar tools directly on Windows.
+
 To remove it, uninstall leakguard from Settings > Apps: that also removes
 the protection. Step-by-step guide in Spanish and English, including the
 command-line route:
@@ -452,6 +455,10 @@ se han probado en una PC con Windows de verdad. Si algo falla,
    en el área de notificación; Windows puede esconderlo detrás de la flecha
    **^** hasta que lo fijes. En Windows todavía no se muestra el número de
    bloqueos.
+
+WSL2, las máquinas virtuales de Hyper-V y los contenedores de Hyper-V
+todavía no pasan por leakguard: usa Claude Code y herramientas parecidas
+directamente en Windows.
 
 Para quitarlo, desinstala leakguard desde Configuración > Aplicaciones: eso
 también quita la protección. Guía completa, con la ruta por terminal:
