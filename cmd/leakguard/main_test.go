@@ -111,6 +111,8 @@ func newHarness(t *testing.T, root bool) *harness {
 		Pfctl:     h.pfctl,
 		Launchctl: h.launchctl,
 		Secure:    func(string) error { return nil },
+		Firewall:  pfFirewall,
+		Services:  launchdServices,
 		Interfaces: func() ([]Interface, error) {
 			return []Interface{
 				{Name: "en0", Up: true, HasAddress: true},

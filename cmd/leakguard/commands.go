@@ -14,7 +14,6 @@ import (
 	"github.com/Isaacpaezz/leakguard/internal/config"
 	"github.com/Isaacpaezz/leakguard/internal/daemon"
 	"github.com/Isaacpaezz/leakguard/internal/ipc"
-	"github.com/Isaacpaezz/leakguard/internal/pf"
 	"github.com/Isaacpaezz/leakguard/internal/probe"
 )
 
@@ -24,12 +23,6 @@ See your VPN interfaces with: leakguard interfaces`
 var errNotConfigured = errors.New("not configured yet; run: sudo leakguard enable --vpn IFACE SERVICE...")
 
 func (c *cli) configPath() string { return filepath.Join(c.env.Root, config.DefaultPath) }
-
-func (c *cli) firewall() pf.Firewall { return pf.Firewall{Runner: c.env.Pfctl} }
-
-func (c *cli) daemon() daemon.Daemon {
-	return daemon.Daemon{Root: c.env.Root, Launchctl: c.env.Launchctl, Secure: c.env.Secure}
-}
 
 // loadValid loads the saved configuration and checks it against the catalog.
 func (c *cli) loadValid() (config.Config, []catalog.Service, error) {
@@ -193,6 +186,9 @@ func (c *cli) enable(args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := c.requireSupported(); err != nil {
+		return err
+	}
 	if err := c.requireRoot("enable"); err != nil {
 		return err
 	}
@@ -274,6 +270,9 @@ func (c *cli) disable(args []string) error {
 // after a reboot.
 func (c *cli) apply(args []string) error {
 	if _, err := c.parse(flag.NewFlagSet("apply", flag.ContinueOnError), args, false); err != nil {
+		return err
+	}
+	if err := c.requireSupported(); err != nil {
 		return err
 	}
 	if err := c.requireRoot("apply"); err != nil {
@@ -359,19 +358,17 @@ func (c *cli) status(args []string) error {
 	return w.Flush()
 }
 
-// verify checks, as root, that pf is enabled and the anchor protects services.
+// verify checks, as root, that the firewall is enabled and its rules
+// protect services.
 func (c *cli) verify(cfg config.Config, services []catalog.Service) error {
-	switch on, err := c.firewall().Enabled(); {
+	fw := c.firewall()
+	switch on, err := fw.Enabled(); {
 	case err != nil:
 		return err
 	case !on:
-		return errors.New("pf is disabled; turn it back on with: sudo leakguard apply")
+		return fmt.Errorf("%s is disabled; turn it back on with: sudo leakguard apply", fw.Name())
 	}
-	state, err := c.firewall().Status()
-	if err != nil {
-		return err
-	}
-	return state.Verify(cfg.VPNInterface, services)
+	return fw.Verify(cfg.VPNInterface, services)
 }
 
 func isVPN(iface string, cfg config.Config) bool {

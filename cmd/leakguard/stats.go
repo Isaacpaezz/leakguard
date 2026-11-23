@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/Isaacpaezz/leakguard/internal/config"
+	"github.com/Isaacpaezz/leakguard/internal/firewall"
 	"github.com/Isaacpaezz/leakguard/internal/ipc"
-	"github.com/Isaacpaezz/leakguard/internal/pf"
 	"github.com/Isaacpaezz/leakguard/internal/stats"
 )
 
@@ -88,15 +88,15 @@ func (d *daemonStats) logf(format string, a ...any) {
 	fmt.Fprintf(d.c.stderr, "%s leakguard: %s\n", d.c.now().Format(time.RFC3339), fmt.Sprintf(format, a...))
 }
 
-// countBlocks reads pf's block counter into the tracker. The caller holds the
+// countBlocks reads the firewall's block counter into the tracker. The caller holds the
 // service lock and calls it right before a reload or flush, so no block is
 // lost.
-func (d *daemonStats) countBlocks(fw pf.Firewall) {
+func (d *daemonStats) countBlocks(fw firewall.Firewall) {
 	n, err := fw.BlockCount()
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	switch {
-	case errors.Is(err, pf.ErrNotLoaded):
+	case errors.Is(err, firewall.ErrNotLoaded):
 		// No rules, no counter: the reload that follows counts from zero.
 	case err != nil:
 		if msg := err.Error(); msg != d.readErr {

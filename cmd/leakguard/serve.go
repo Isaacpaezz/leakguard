@@ -44,6 +44,9 @@ func (c *cli) serve(args []string) error {
 	if _, err := c.parse(flag.NewFlagSet("serve", flag.ContinueOnError), args, false); err != nil {
 		return err
 	}
+	if err := c.requireSupported(); err != nil {
+		return err
+	}
 	if err := c.requireRoot("serve"); err != nil {
 		return err
 	}

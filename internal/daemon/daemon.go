@@ -87,6 +87,24 @@ func (ExecRunner) Run(args ...string) (string, error) {
 	return stdout.String(), nil
 }
 
+// Manager installs and inspects the background service that runs
+// "leakguard serve". Each OS has its own; only package main picks one.
+type Manager interface {
+	// Install copies the executable at src to a root-owned place and
+	// (re)starts the service with it.
+	Install(src string) error
+	// Uninstall stops the service and removes its files.
+	Uninstall() error
+	// Installed reports whether the service is installed.
+	Installed() bool
+	// LegacyInstalled reports whether an older kill switch is installed.
+	LegacyInstalled() bool
+	// LastLogLine returns the last line the service logged.
+	LastLogLine() (string, bool)
+}
+
+var _ Manager = Daemon{}
+
 // Daemon installs and removes the LaunchDaemon.
 type Daemon struct {
 	// Root prefixes every file path; empty means the real file system.

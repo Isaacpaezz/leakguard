@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Isaacpaezz/leakguard/internal/daemon"
+	"github.com/Isaacpaezz/leakguard/internal/firewall"
 	"github.com/Isaacpaezz/leakguard/internal/pf"
 	"github.com/Isaacpaezz/leakguard/internal/probe"
 	"github.com/Isaacpaezz/leakguard/internal/stats"
@@ -68,6 +69,12 @@ type Env struct {
 	// ServeContext returns the context that stops "serve". Nil means
 	// SIGINT or SIGTERM.
 	ServeContext func() (context.Context, context.CancelFunc)
+	// Firewall builds the firewall backend from the Env, for example
+	// pfFirewall. Nil means this system has none: changes fail closed.
+	Firewall func(Env) firewall.Firewall
+	// Services builds the background-service manager from the Env, for
+	// example launchdServices. Nil means this system has none.
+	Services func(Env) daemon.Manager
 }
 
 const usage = `leakguard keeps the services you choose off your real connection:

@@ -26,6 +26,8 @@ func systemEnv() Env {
 		IsRoot:     func() bool { return os.Geteuid() == 0 },
 		Pfctl:      pf.ExecRunner{},
 		Launchctl:  daemon.ExecRunner{},
+		Firewall:   systemFirewall,
+		Services:   systemServices,
 		Interfaces: systemInterfaces,
 		Executable: func() (string, error) {
 			exe, err := os.Executable()

@@ -14,6 +14,7 @@ import (
 
 	"github.com/Isaacpaezz/leakguard/internal/catalog"
 	"github.com/Isaacpaezz/leakguard/internal/config"
+	"github.com/Isaacpaezz/leakguard/internal/firewall"
 )
 
 const (
@@ -72,6 +73,21 @@ func (ExecRunner) Run(stdin string, args ...string) (string, error) {
 // Firewall applies and inspects the leakguard anchor.
 type Firewall struct {
 	Runner Runner
+}
+
+var _ firewall.Firewall = Firewall{}
+
+// Name implements firewall.Firewall.
+func (Firewall) Name() string { return "pf" }
+
+// Verify checks that the loaded anchor protects every range of services on
+// vpnInterface.
+func (f Firewall) Verify(vpnInterface string, services []catalog.Service) error {
+	state, err := f.Status()
+	if err != nil {
+		return err
+	}
+	return state.Verify(vpnInterface, services)
 }
 
 // State is what pf currently has loaded in the anchor.
@@ -207,7 +223,7 @@ func lines(s string) []string {
 }
 
 // ErrNotLoaded means the anchor has no rules, so there is no counter.
-var ErrNotLoaded = errors.New("leakguard rules are not loaded")
+var ErrNotLoaded = firewall.ErrNotLoaded
 
 // BlockCount returns how many packets the block rule has rejected since the
 // anchor was last loaded: pf resets the counter on every reload or flush.
