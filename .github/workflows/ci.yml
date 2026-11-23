@@ -124,12 +124,49 @@ jobs:
           t '^(TestWindowsLoadsTheTrayIcons|TestWindowsPlatform)$' ./cmd/leakguard-menubar/
           t '^(TestSystemIsRootIsTheElevatedToken|TestWindowsBackends|TestWFPFirewall|TestWindowsDefaultInterface.*|TestRouteTableReadsInterfaceMetrics|TestRunAsSystemServiceOutsideTheSCM|TestSCM.*|TestRunUnderSCM.*|TestUsageOnWindows|TestOpenServiceLog)$' ./cmd/leakguard/
           exit $failed
-      # Loads real filters, probes them and flushes them at the end.
+      # Loads real filters at ALE_AUTH_CONNECT and IPFORWARD, probes them and
+      # flushes them at the end; then proves another program's filters are
+      # never read or touched. Each named test must pass, not skip.
       - name: Load real WFP filters and probe them
         if: ${{ !cancelled() }}
+        shell: bash
         env:
           LEAKGUARD_WFP_INTEGRATION: "1"
-        run: go test -count=1 -run Integration -v ./internal/wfp/
+        run: |
+          rc=0
+          out=$(go test -count=1 -v -run '^(TestIntegrationRealFilters|TestIntegrationForeignFilters)$' ./internal/wfp/ 2>&1) || rc=$?
+          printf '%s\n' "$out"
+          if [ "$rc" -ne 0 ]; then exit "$rc"; fi
+          for name in TestIntegrationRealFilters TestIntegrationForeignFilters; do
+            if ! grep -q "^--- PASS: $name (" <<<"$out"; then
+              echo "::error::$name did not pass"
+              exit 1
+            fi
+          done
+      # Traffic this computer forwards for others (WinNAT, like WSL2 in NAT
+      # mode, the Hyper-V default switch and ICS) never meets ALE_AUTH_CONNECT.
+      # A process-isolated Windows container on Docker's nat network sends
+      # its packets through WinNAT on the host; the test runs its own binary
+      # inside a Nano Server container matching the runner's build and probes
+      # a protected public address with and without the IPFORWARD filters.
+      - name: Forwarded traffic through a Windows container (IPFORWARD)
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          LEAKGUARD_WFP_FORWARD_INTEGRATION: "1"
+        run: |
+          if ! docker version; then
+            echo "::error::Docker with Windows containers is not available on this runner"
+            exit 1
+          fi
+          rc=0
+          out=$(go test -count=1 -timeout 30m -v -run '^TestIntegrationForwardedTraffic$' ./internal/wfp/ 2>&1) || rc=$?
+          printf '%s\n' "$out"
+          if [ "$rc" -ne 0 ]; then exit "$rc"; fi
+          if ! grep -q '^--- PASS: TestIntegrationForwardedTraffic (' <<<"$out"; then
+            echo "::error::TestIntegrationForwardedTraffic did not pass"
+            exit 1
+          fi
       # The portable suite of these packages still assumes Unix in places:
       # continue-on-error until it is ported (T14).
       - name: Portable tests of the other packages

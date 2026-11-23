@@ -5,9 +5,7 @@ package wfp
 import (
 	"errors"
 	"fmt"
-	"net/netip"
-	"slices"
-	"strings"
+	"runtime"
 	"syscall"
 	"unsafe"
 
@@ -16,19 +14,24 @@ import (
 )
 
 // session is an Engine over a real, non-dynamic WFP session: what it adds
-// outlives the session and the process. h is a second session handle that
-// reads what tailscale/wf reads wrong: the filters' weights.
+// outlives the session and the process. tailscale/wf adds and deletes; h is
+// a second session handle that lists the leakguard filters with
+// leakguard's own bindings, because tailscale/wf lists every filter on the
+// system, fails on any it cannot parse and reads every field after the
+// action 8 bytes off (see fwpmFilter0).
 type session struct {
 	s *wf.Session
 	h windows.Handle
 }
 
 var (
-	fwpuclnt                = windows.NewLazySystemDLL("fwpuclnt.dll")
-	procFwpmEngineOpen0     = fwpuclnt.NewProc("FwpmEngineOpen0")
-	procFwpmEngineClose0    = fwpuclnt.NewProc("FwpmEngineClose0")
-	procFwpmFilterGetByKey0 = fwpuclnt.NewProc("FwpmFilterGetByKey0")
-	procFwpmFreeMemory0     = fwpuclnt.NewProc("FwpmFreeMemory0")
+	fwpuclnt                         = windows.NewLazySystemDLL("fwpuclnt.dll")
+	procFwpmEngineOpen0              = fwpuclnt.NewProc("FwpmEngineOpen0")
+	procFwpmEngineClose0             = fwpuclnt.NewProc("FwpmEngineClose0")
+	procFwpmFilterCreateEnumHandle0  = fwpuclnt.NewProc("FwpmFilterCreateEnumHandle0")
+	procFwpmFilterEnum0              = fwpuclnt.NewProc("FwpmFilterEnum0")
+	procFwpmFilterDestroyEnumHandle0 = fwpuclnt.NewProc("FwpmFilterDestroyEnumHandle0")
+	procFwpmFreeMemory0              = fwpuclnt.NewProc("FwpmFreeMemory0")
 )
 
 // rpcAuthnWinNT is RPC_C_AUTHN_WINNT, the authentication of a local
@@ -53,16 +56,35 @@ func openEngine() (Engine, error) {
 	return session{s, h}, nil
 }
 
-// filter0 reads the filter with this key as the engine stores it and
-// passes it to read before the engine frees it.
-func (e session) filter0(key GUID, read func(*fwpmFilter0)) error {
-	var p *fwpmFilter0
-	if r, _, _ := procFwpmFilterGetByKey0.Call(uintptr(e.h), uintptr(unsafe.Pointer(&key)), uintptr(unsafe.Pointer(&p))); r != 0 {
-		return syscall.Errno(r)
+// enum passes every filter of provider at layer l (every provider's when
+// provider is nil) to visit, before the engine frees it. The engine selects
+// them (see enumTemplate); nothing else is listed.
+func (e session) enum(provider *GUID, l Layer, visit func(*fwpmFilter0)) error {
+	tm := enumTemplate(provider, l)
+	var h windows.Handle
+	r, _, _ := procFwpmFilterCreateEnumHandle0.Call(uintptr(e.h), uintptr(unsafe.Pointer(&tm)), uintptr(unsafe.Pointer(&h)))
+	runtime.KeepAlive(provider)
+	if r != 0 {
+		return fmt.Errorf("at %s: %w", l, syscall.Errno(r))
 	}
-	defer procFwpmFreeMemory0.Call(uintptr(unsafe.Pointer(&p)))
-	read(p)
-	return nil
+	defer procFwpmFilterDestroyEnumHandle0.Call(uintptr(e.h), uintptr(h))
+	for {
+		var entries **fwpmFilter0
+		var n uint32
+		if r, _, _ := procFwpmFilterEnum0.Call(uintptr(e.h), uintptr(h), 100, uintptr(unsafe.Pointer(&entries)), uintptr(unsafe.Pointer(&n))); r != 0 {
+			return fmt.Errorf("at %s: %w", l, syscall.Errno(r))
+		}
+		if entries == nil {
+			return nil
+		}
+		for _, f := range unsafe.Slice(entries, n) {
+			visit(f)
+		}
+		procFwpmFreeMemory0.Call(uintptr(unsafe.Pointer(&entries)))
+		if n == 0 {
+			return nil
+		}
+	}
 }
 
 // is reports whether err is the WFP error code.
@@ -108,59 +130,43 @@ func (e session) Installed() (bool, error) {
 	return false, nil
 }
 
+// Filters lists the leakguard provider's filters at the layers leakguard
+// uses, and only those: the engine never hands over another provider's.
 func (e session) Filters() ([]Filter, error) {
-	rules, err := e.s.Rules()
-	if err != nil {
-		return nil, err
-	}
+	key := ProviderKey
 	var out []Filter
-	for _, r := range rules {
-		if GUID(r.Provider) != ProviderKey {
-			continue
-		}
-		rule := fromWF(r)
-		// tailscale/wf's weight is never right (see fwpmFilter0).
-		var other string
-		err := e.filter0(GUID(r.ID), func(f *fwpmFilter0) { rule.Weight, other = weightOf(&f.Weight) })
-		if is(err, windows.FWP_E_FILTER_NOT_FOUND) {
-			continue // deleted since the listing
-		}
+	for _, l := range filterLayers {
+		err := e.enum(&key, l, func(f *fwpmFilter0) {
+			if f.ProviderKey != nil && *f.ProviderKey == ProviderKey {
+				out = append(out, filterOf(f))
+			}
+		})
 		if err != nil {
-			return nil, fmt.Errorf("cannot read the weight of filter %s: %w", GUID(r.ID), err)
+			return nil, err
 		}
-		if other != "" {
-			rule.Other = strings.Join(slices.DeleteFunc([]string{rule.Other, other}, func(s string) bool { return s == "" }), ", ")
-		}
-		out = append(out, Filter{Key: GUID(r.ID), Rule: rule})
 	}
 	return out, nil
 }
 
-// dump describes every filter at ALE_AUTH_CONNECT as the engine stores it,
-// leakguard's or not: provider, sublayer, layer, action, weight, effective
-// weight and conditions. It is for diagnostics.
+// dump describes every filter at the layers leakguard uses as the engine
+// stores it, leakguard's or not: provider, the rule as leakguard reads it
+// and the effective weight. It is for diagnostics, and reads nothing
+// leakguard does not know how to read.
 func (e session) dump() ([]string, error) {
-	rules, err := e.s.Rules()
-	if err != nil {
-		return nil, err
-	}
 	var out []string
-	for _, r := range rules {
-		if r.Layer != wf.LayerALEAuthConnectV4 && r.Layer != wf.LayerALEAuthConnectV6 {
-			continue
+	for _, l := range filterLayers {
+		err := e.enum(nil, l, func(f *fwpmFilter0) {
+			provider := "none"
+			if f.ProviderKey != nil {
+				provider = f.ProviderKey.String()
+			}
+			x := filterOf(f)
+			out = append(out, fmt.Sprintf("filter %s %q: provider %s, %s, effective weight %s",
+				x.Key, windows.UTF16PtrToString(f.Name), provider, x.Rule, describeWeight(&f.EffectiveWeight)))
+		})
+		if err != nil {
+			return out, err
 		}
-		weight, effective := "unreadable", "unreadable"
-		if err := e.filter0(GUID(r.ID), func(f *fwpmFilter0) {
-			weight, effective = describeWeight(&f.Weight), describeWeight(&f.EffectiveWeight)
-		}); err != nil {
-			weight = err.Error()
-		}
-		var conds []string
-		for _, m := range r.Conditions {
-			conds = append(conds, m.String())
-		}
-		out = append(out, fmt.Sprintf("filter %s %q: provider %s, sublayer %s, layer %s, action %s, hard %v, weight %s, effective weight %s, conditions [%s]",
-			GUID(r.ID), r.Name, GUID(r.Provider), GUID(r.Sublayer), r.Layer, r.Action, r.HardAction, weight, effective, strings.Join(conds, "; ")))
 	}
 	return out, nil
 }
@@ -197,20 +203,12 @@ func (e session) Close() error {
 	return e.s.Close()
 }
 
-// toWF is the WFP filter for f: the remote address must be in the range
-// and, for a permit, the connection must leave on the adapter's LUID.
+// toWF is the WFP filter for f: the remote address (the destination of a
+// forwarded packet) must be in the range and, for a permit, the traffic
+// must leave on the adapter's LUID (be forwarded to it).
 func toWF(f Filter) (*wf.Rule, error) {
 	r := f.Rule
-	if r.Other != "" || !r.Remote.IsValid() {
-		return nil, fmt.Errorf("leakguard never adds filter %s", r)
-	}
-	var layer wf.LayerID
-	switch r.Layer {
-	case LayerConnectV4:
-		layer = wf.LayerALEAuthConnectV4
-	case LayerConnectV6:
-		layer = wf.LayerALEAuthConnectV6
-	default:
+	if r.Other != "" || !r.Remote.IsValid() || r.Layer == LayerOther {
 		return nil, fmt.Errorf("leakguard never adds filter %s", r)
 	}
 	var action wf.Action
@@ -222,15 +220,19 @@ func toWF(f Filter) (*wf.Rule, error) {
 	default:
 		return nil, fmt.Errorf("leakguard never adds filter %s", r)
 	}
-	conds := []*wf.Match{{Field: wf.FieldIPRemoteAddress, Op: wf.MatchTypeEqual, Value: r.Remote}}
+	conds := []*wf.Match{{Field: wf.FieldID(remoteField(r.Layer)), Op: wf.MatchTypeEqual, Value: r.Remote}}
 	if r.LUID != 0 {
-		conds = append(conds, &wf.Match{Field: wf.FieldIPLocalInterface, Op: wf.MatchTypeEqual, Value: r.LUID})
+		conds = append(conds, &wf.Match{Field: wf.FieldID(interfaceField(r.Layer)), Op: wf.MatchTypeEqual, Value: r.LUID})
+	}
+	name := fmt.Sprintf("leakguard %s %s", r.Action, r.Remote)
+	if r.Layer.Forward() {
+		name += " (forwarded)"
 	}
 	return &wf.Rule{
 		ID:          wf.RuleID(f.Key),
-		Name:        fmt.Sprintf("leakguard %s %s", r.Action, r.Remote),
+		Name:        name,
 		Description: "Protected service outside the VPN",
-		Layer:       layer,
+		Layer:       wf.LayerID(layerKey(r.Layer)),
 		Sublayer:    wf.SublayerID(r.Sublayer),
 		Weight:      r.Weight,
 		Conditions:  conds,
@@ -241,59 +243,8 @@ func toWF(f Filter) (*wf.Rule, error) {
 	}, nil
 }
 
-// fromWF is the Rule of a loaded filter. Anything toWF never writes ends up
-// in Other, so the filter never matches an expected one.
-func fromWF(r *wf.Rule) Rule {
-	out := Rule{Sublayer: GUID(r.Sublayer), Weight: r.Weight, Hard: r.HardAction, Persistent: r.Persistent}
-	switch r.Layer {
-	case wf.LayerALEAuthConnectV4:
-		out.Layer = LayerConnectV4
-	case wf.LayerALEAuthConnectV6:
-		out.Layer = LayerConnectV6
-	}
-	switch r.Action {
-	case wf.ActionBlock:
-		out.Action = ActionBlock
-	case wf.ActionPermit:
-		out.Action = ActionPermit
-	}
-	var other []string
-	if r.BootTime {
-		other = append(other, "boot-time")
-	}
-	if r.Disabled {
-		other = append(other, "disabled")
-	}
-	var remote, local bool
-	for _, m := range r.Conditions {
-		switch {
-		case m.Field == wf.FieldIPRemoteAddress && m.Op == wf.MatchTypeEqual && !remote:
-			switch v := m.Value.(type) {
-			case netip.Prefix:
-				out.Remote, remote = v, true
-			case netip.Addr:
-				out.Remote, remote = netip.PrefixFrom(v, v.BitLen()), true
-			default:
-				other = append(other, "condition "+m.String())
-			}
-		case m.Field == wf.FieldIPLocalInterface && m.Op == wf.MatchTypeEqual && !local:
-			if v, ok := m.Value.(uint64); ok && v != 0 {
-				out.LUID, local = v, true
-			} else {
-				other = append(other, "condition "+m.String())
-			}
-		default:
-			other = append(other, "condition "+m.String())
-		}
-	}
-	if !remote {
-		other = append(other, "no remote address condition")
-	}
-	out.Other = strings.Join(other, ", ")
-	return out
-}
-
-// resolveLUID returns the LUID of the adapter whose alias is alias.
+// resolveLUID returns the LUID of the adapter whose alias is alias,
+// ignoring case.
 func resolveLUID(alias string) (uint64, error) {
 	as, err := adapters()
 	if err != nil {
@@ -313,7 +264,7 @@ func adapters() ([]Adapter, error) {
 		if err == nil {
 			var out []Adapter
 			for a := first; a != nil; a = a.Next {
-				out = append(out, Adapter{Alias: windows.UTF16PtrToString(a.FriendlyName), LUID: a.Luid, Type: a.IfType})
+				out = append(out, Adapter{Alias: windows.UTF16PtrToString(a.FriendlyName), LUID: a.Luid, Type: a.IfType, Index: a.IfIndex})
 			}
 			return out, nil
 		}

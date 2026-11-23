@@ -103,19 +103,22 @@ func (e *fakeEngine) Uninstall() error {
 
 func (e *fakeEngine) Close() error { e.closes++; return nil }
 
-// checkGap fails when a range in mustBlock has no hard block filter.
+// checkGap fails when a range in mustBlock has no hard block filter, for
+// this computer's connections or for forwarded traffic.
 func (e *fakeEngine) checkGap() {
 	e.gapChecked++
 	for _, p := range e.mustBlock {
-		blocked := false
-		for _, f := range e.filters {
-			r := f.Rule
-			if r.Action == ActionBlock && r.Hard && r.Remote == p && r.LUID == 0 && r.Sublayer == SublayerKey {
-				blocked = true
+		for _, forward := range []bool{false, true} {
+			blocked := false
+			for _, f := range e.filters {
+				r := f.Rule
+				if r.Action == ActionBlock && r.Hard && r.Remote == p && r.LUID == 0 && r.Sublayer == SublayerKey && r.Layer.Forward() == forward && r.Layer != LayerOther {
+					blocked = true
+				}
 			}
-		}
-		if !blocked {
-			e.t.Errorf("after %q, %s is not blocked", e.ops[len(e.ops)-1], p)
+			if !blocked {
+				e.t.Errorf("after %q, %s is not blocked (forwarded traffic: %v)", e.ops[len(e.ops)-1], p, forward)
+			}
 		}
 	}
 }
@@ -159,16 +162,20 @@ func prefixes(t *testing.T, cidrs ...string) []netip.Prefix {
 	return out
 }
 
-// want is the expected rule set: blocks for every range, permits for luid.
+// want is the expected rule set: blocks for every range, for this
+// computer's connections and for the traffic it forwards, and permits for
+// luid.
 func want(t *testing.T, luid uint64) []Rule {
 	t.Helper()
 	var out []Rule
 	for _, p := range prefixes(t, ranges...) {
-		layer := LayerConnectV4
+		connect, forward := LayerConnectV4, LayerForwardV4
 		if p.Addr().Is6() {
-			layer = LayerConnectV6
+			connect, forward = LayerConnectV6, LayerForwardV6
 		}
-		out = append(out, Rule{Layer: layer, Sublayer: SublayerKey, Action: ActionBlock, Remote: p, Weight: BlockWeight, Hard: true, Persistent: true})
+		for _, layer := range []Layer{connect, forward} {
+			out = append(out, Rule{Layer: layer, Sublayer: SublayerKey, Action: ActionBlock, Remote: p, Weight: BlockWeight, Hard: true, Persistent: true})
+		}
 	}
 	if luid != 0 {
 		for _, r := range slices.Clone(out) {
@@ -491,7 +498,7 @@ func TestVerifyFailsOnMissingExtraOrChangedFilters(t *testing.T) {
 		want   string
 	}{
 		{"missing block", func(e *fakeEngine) { e.filters = e.filters[1:] }, "1 missing (first: block 160.79.104.0/23 at ALE_AUTH_CONNECT_V4, weight 1)"},
-		{"missing permit", func(e *fakeEngine) { e.filters = e.filters[:len(e.filters)-1] }, "1 missing (first: permit 2607:6bc0:1::/48 at ALE_AUTH_CONNECT_V6 on interface LUID 0x47000000000005, weight 2)"},
+		{"missing permit", func(e *fakeEngine) { e.filters = e.filters[:len(e.filters)-1] }, "1 missing (first: permit 2607:6bc0:1::/48 at IPFORWARD_V6 on interface LUID 0x47000000000005, weight 2)"},
 		{"duplicate", func(e *fakeEngine) {
 			e.filters = append(e.filters, Filter{Key: filterKey(99, 0), Rule: e.filters[0].Rule})
 		}, "1 unexpected (first: block 160.79.104.0/23"},
@@ -502,7 +509,7 @@ func TestVerifyFailsOnMissingExtraOrChangedFilters(t *testing.T) {
 		}, "1 unexpected (first: block 10.0.0.0/8"},
 		{"block turned permit", func(e *fakeEngine) { e.filters[0].Rule.Action = ActionPermit }, "1 unexpected (first: permit 160.79.104.0/23 at ALE_AUTH_CONNECT_V4, weight 1"},
 		{"other LUID", func(e *fakeEngine) { e.filters[len(e.filters)-1].Rule.LUID = 9 }, "on interface LUID 0x9"},
-		{"permit for any interface", func(e *fakeEngine) { e.filters[len(e.filters)-1].Rule.LUID = 0 }, "1 unexpected (first: permit 2607:6bc0:1::/48 at ALE_AUTH_CONNECT_V6, weight 2"},
+		{"permit for any interface", func(e *fakeEngine) { e.filters[len(e.filters)-1].Rule.LUID = 0 }, "1 unexpected (first: permit 2607:6bc0:1::/48 at IPFORWARD_V6, weight 2"},
 		{"other layer", func(e *fakeEngine) { e.filters[0].Rule.Layer = LayerOther }, "at another layer"},
 		{"other sublayer", func(e *fakeEngine) { e.filters[0].Rule.Sublayer = GUID{Data1: 1} }, "sublayer {00000001-"},
 		{"heavier block", func(e *fakeEngine) { e.filters[0].Rule.Weight = 3 }, "weight 3"},
@@ -510,7 +517,20 @@ func TestVerifyFailsOnMissingExtraOrChangedFilters(t *testing.T) {
 		{"soft block", func(e *fakeEngine) { e.filters[0].Rule.Hard = false }, ", soft"},
 		{"not persistent", func(e *fakeEngine) { e.filters[0].Rule.Persistent = false }, "not persistent"},
 		{"extra condition", func(e *fakeEngine) { e.filters[0].Rule.Other = "condition ALE_APP_ID" }, "condition ALE_APP_ID"},
-		{"all gone", func(e *fakeEngine) { e.filters = nil }, "8 missing"},
+		{"all gone", func(e *fakeEngine) { e.filters = nil }, "16 missing"},
+		{"forward block missing", func(e *fakeEngine) {
+			e.filters = slices.DeleteFunc(e.filters, func(f Filter) bool {
+				return f.Rule.Layer == LayerForwardV4 && f.Rule.Action == ActionBlock && f.Rule.Remote.Bits() == 23
+			})
+		}, "1 missing (first: block 160.79.104.0/23 at IPFORWARD_V4, weight 1)"},
+		{"forward permit for another interface", func(e *fakeEngine) {
+			for i, f := range e.filters {
+				if f.Rule.Layer == LayerForwardV4 && f.Rule.Action == ActionPermit {
+					e.filters[i].Rule.LUID = 9
+					break
+				}
+			}
+		}, "1 unexpected (first: permit 160.79.104.0/23 at IPFORWARD_V4 on interface LUID 0x9, weight 2)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newFake(t)
@@ -533,7 +553,7 @@ func TestVerifyEmptyVPNFailsWhenAnInterfaceIsPermitted(t *testing.T) {
 	if err := f.Apply(vpn, services); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	if err := f.Verify("", services); err == nil || !strings.Contains(err.Error(), "4 unexpected (first: permit") {
+	if err := f.Verify("", services); err == nil || !strings.Contains(err.Error(), "8 unexpected (first: permit") {
 		t.Errorf("Verify(\"\") = %v, want the permits reported", err)
 	}
 }
@@ -544,7 +564,7 @@ func TestVerifyVPNFailsWhenOnlyBlocksAreLoaded(t *testing.T) {
 	if err := f.Apply("", services); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	if err := f.Verify(vpn, services); err == nil || !strings.Contains(err.Error(), "4 missing (first: permit") {
+	if err := f.Verify(vpn, services); err == nil || !strings.Contains(err.Error(), "8 missing (first: permit") {
 		t.Errorf("Verify = %v, want the missing permits", err)
 	}
 }
@@ -574,7 +594,7 @@ func TestVerifyRefusedVPNFailsEvenWithTheBlocksLoaded(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	err = f.Verify("Ethernet", services)
-	if !errors.Is(err, config.ErrVPNRefused) || !strings.Contains(err.Error(), "4 unexpected (first: permit") {
+	if !errors.Is(err, config.ErrVPNRefused) || !strings.Contains(err.Error(), "8 unexpected (first: permit") {
 		t.Errorf("Verify = %v, want the permits and the refusal", err)
 	}
 }
@@ -593,7 +613,7 @@ func TestVerifyAbsentAdapterExpectsTheBlocksOnly(t *testing.T) {
 	if err := f.Apply(vpn, services); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	if err := f.Verify("Gone", services); err == nil || !strings.Contains(err.Error(), "4 unexpected (first: permit") {
+	if err := f.Verify("Gone", services); err == nil || !strings.Contains(err.Error(), "8 unexpected (first: permit") {
 		t.Errorf("Verify with permits loaded = %v, want them reported", err)
 	}
 }
@@ -636,7 +656,7 @@ func TestApplyReportsAnOldFilterThatCannotBeDeleted(t *testing.T) {
 	if err := f.Apply(vpn, services); err != nil {
 		t.Fatalf("first Apply: %v", err)
 	}
-	stuck := e.filters[0] // the first block; the 7 old filters after it still go
+	stuck := e.filters[0] // the first block; the 15 old filters after it still go
 	e.failDelete = func(k GUID) error {
 		if k == stuck.Key {
 			return errors.New("FWP_E_IN_USE")
@@ -648,8 +668,8 @@ func TestApplyReportsAnOldFilterThatCannotBeDeleted(t *testing.T) {
 		t.Fatalf("Apply = %v, want the old filter named", err)
 	}
 	e.failDelete = nil
-	if n := len(e.filters); n != 5 {
-		t.Errorf("%d filters left, want the 4 new blocks and the stuck old block: %v", n, e.rules())
+	if n := len(e.filters); n != 9 {
+		t.Errorf("%d filters left, want the 8 new blocks and the stuck old block: %v", n, e.rules())
 	}
 	if err := f.Verify("", services); err == nil || err.Error() != "leakguard filters do not match the protected services: 1 unexpected (first: "+stuck.Rule.String()+")" {
 		t.Errorf("Verify = %v, want the leftover block reported", err)
@@ -703,13 +723,58 @@ func TestDefaultEngineOutsideWindowsIsUnsupported(t *testing.T) {
 	}
 }
 
-func TestLookupMatchesTheExactAlias(t *testing.T) {
-	adapters := []Adapter{{Alias: "Ethernet", LUID: 1}, {Alias: "WireGuard Tunnel", LUID: vpnLUID}, {Alias: "wireguard tunnel", LUID: 3}}
-	if luid, err := lookup(adapters, vpn); err != nil || luid != vpnLUID {
-		t.Errorf("lookup(%q) = %#x, %v; want %#x", vpn, luid, err, vpnLUID)
+// B1: Windows and internal/config match aliases ignoring case, so the
+// backend must too: "wireguard tunnel" is the adapter "WireGuard Tunnel".
+func TestLookupIgnoresCase(t *testing.T) {
+	adapters := []Adapter{{Alias: "Ethernet", LUID: 1}, {Alias: "WireGuard Tunnel", LUID: vpnLUID}}
+	for _, alias := range []string{"WireGuard Tunnel", "wireguard tunnel", "WIREGUARD TUNNEL"} {
+		if luid, err := lookup(adapters, alias); err != nil || luid != vpnLUID {
+			t.Errorf("lookup(%q) = %#x, %v; want %#x", alias, luid, err, vpnLUID)
+		}
 	}
 	if _, err := lookup(adapters, "WireGuard"); !errors.Is(err, ErrNoAdapter) || err.Error() != `no network adapter is named "WireGuard"` {
 		t.Errorf("lookup of a missing alias = %v", err)
+	}
+}
+
+// B1: two adapters whose aliases differ only in case are ambiguous: the
+// lookup refuses rather than guess, and it is not "no adapter" (which
+// would read as the VPN being down).
+func TestLookupRefusesAliasesThatDifferOnlyInCase(t *testing.T) {
+	adapters := []Adapter{{Alias: "WireGuard Tunnel", LUID: vpnLUID}, {Alias: "Ethernet", LUID: 1}, {Alias: "wireguard tunnel", LUID: 3}}
+	for _, alias := range []string{"WireGuard Tunnel", "wireguard tunnel", "Wireguard Tunnel"} {
+		luid, err := lookup(adapters, alias)
+		wantErr := fmt.Sprintf(`2 network adapters are named %q ignoring case ("WireGuard Tunnel", "wireguard tunnel"): cannot tell which one is the VPN`, alias)
+		if luid != 0 || err == nil || errors.Is(err, ErrNoAdapter) || err.Error() != wantErr {
+			t.Errorf("lookup(%q) = %#x, %v; want 0 and %q", alias, luid, err, wantErr)
+		}
+	}
+}
+
+// B1 end to end: the verifier's case. enable --vpn "wireguard tunnel" for
+// the adapter "WireGuard Tunnel" loads its permits and verifies; an
+// ambiguous alias loads the blocks only and fails.
+func TestApplyResolvesTheVPNIgnoringCase(t *testing.T) {
+	e := newFake(t)
+	f := fw(e)
+	adapters := []Adapter{{Alias: "Ethernet", LUID: 1}, {Alias: "WireGuard Tunnel", LUID: vpnLUID}}
+	f.Resolve = func(alias string) (uint64, error) { return lookup(adapters, alias) }
+	if err := f.Apply("wireguard tunnel", services); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	sameRules(t, e.rules(), want(t, vpnLUID))
+	if err := f.Verify("wireguard tunnel", services); err != nil {
+		t.Errorf("Verify: %v", err)
+	}
+
+	adapters = append(adapters, Adapter{Alias: "wireguard tunnel", LUID: 3})
+	err := f.Apply("wireguard tunnel", services)
+	if err == nil || !strings.Contains(err.Error(), `cannot use "wireguard tunnel" as the VPN interface, protected services are blocked on every interface: 2 network adapters are named "wireguard tunnel" ignoring case`) {
+		t.Fatalf("Apply with an ambiguous alias = %v, want the blocks and the ambiguity", err)
+	}
+	sameRules(t, e.rules(), want(t, 0))
+	if err := f.Verify("wireguard tunnel", services); err == nil || !strings.Contains(err.Error(), "cannot tell which one is the VPN") {
+		t.Errorf("Verify with an ambiguous alias = %v, want the ambiguity", err)
 	}
 }
 
@@ -718,16 +783,61 @@ func TestRulesOrderAndShape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rules) != 8 {
-		t.Fatalf("%d rules, want 8: %v", len(rules), rules)
+	if len(rules) != 16 {
+		t.Fatalf("%d rules, want 16: %v", len(rules), rules)
 	}
 	for i, r := range rules {
-		block := i < 4
+		block := i < 8
 		if (r.Action == ActionBlock) != block {
 			t.Errorf("rule %d is %s; blocks come first", i, r.Action)
 		}
 	}
 	if got := rules[0].Remote.String(); got != "160.79.104.0/23" {
 		t.Errorf("first range %s, want IPv4 first, sorted", got)
+	}
+}
+
+// SF2: traffic this computer forwards (WinNAT for containers, WSL2 in NAT
+// mode, the Hyper-V default switch, ICS) never passes ALE_AUTH_CONNECT. Every
+// range is also blocked at IPFORWARD unless it leaves on the VPN, with the
+// same weights; without a VPN no forwarded traffic is permitted either.
+func TestRulesFilterForwardedTraffic(t *testing.T) {
+	for _, luid := range []uint64{vpnLUID, 0} {
+		rules, err := Rules(luid, services)
+		if err != nil {
+			t.Fatal(err)
+		}
+		type key struct {
+			layer  Layer
+			action Action
+			remote netip.Prefix
+		}
+		got := map[key]Rule{}
+		for _, r := range rules {
+			got[key{r.Layer, r.Action, r.Remote}] = r
+		}
+		for _, p := range prefixes(t, ranges...) {
+			layer := LayerForwardV4
+			if p.Addr().Is6() {
+				layer = LayerForwardV6
+			}
+			b, ok := got[key{layer, ActionBlock, p}]
+			if !ok || b.LUID != 0 || b.Weight != BlockWeight || !b.Hard || !b.Persistent || b.Sublayer != SublayerKey {
+				t.Errorf("luid %#x: forward block for %s = %s, %v", luid, p, b, ok)
+			}
+			pr, ok := got[key{layer, ActionPermit, p}]
+			switch {
+			case luid == 0 && ok:
+				t.Errorf("without a VPN, forwarded traffic to %s is permitted: %s", p, pr)
+			case luid != 0 && (!ok || pr.LUID != luid || pr.Weight != PermitWeight || pr.Hard || !pr.Persistent):
+				t.Errorf("forward permit for %s = %s, %v", p, pr, ok)
+			}
+		}
+	}
+	if !LayerForwardV4.Forward() || !LayerForwardV6.Forward() || LayerConnectV4.Forward() || LayerConnectV6.Forward() {
+		t.Error("Forward() must be true for the IPFORWARD layers only")
+	}
+	if LayerForwardV4.String() != "IPFORWARD_V4" || LayerForwardV6.String() != "IPFORWARD_V6" {
+		t.Errorf("layer names %s, %s", LayerForwardV4, LayerForwardV6)
 	}
 }

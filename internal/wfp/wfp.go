@@ -1,8 +1,10 @@
 // Package wfp drives the Windows Filtering Platform. leakguard owns one
 // persistent provider and one sublayer with fixed GUIDs and adds its filters
-// there, at ALE_AUTH_CONNECT for IPv4 and IPv6: one block per protected
-// range and, above it, one permit per range for connections that leave on
-// the VPN adapter. Other providers' filters are never touched.
+// there, for IPv4 and IPv6: at ALE_AUTH_CONNECT (this computer's
+// connections) and at IPFORWARD (traffic it routes for containers, virtual
+// machines, WSL2 in NAT mode or ICS), one block per protected range and,
+// above it, one permit per range for traffic that leaves on the VPN
+// adapter. Other providers' filters are never read or touched.
 //
 // The filter set, the diff against what is loaded and the swap from the old
 // set to the new one are portable and run against an Engine; only the
@@ -15,6 +17,7 @@ import (
 	"math"
 	"net/netip"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/Isaacpaezz/leakguard/internal/catalog"
@@ -72,6 +75,12 @@ const (
 	LayerConnectV4
 	// LayerConnectV6 is ALE_AUTH_CONNECT_V6.
 	LayerConnectV6
+	// LayerForwardV4 is IPFORWARD_V4: packets this computer routes for
+	// others (containers, virtual machines, WSL2 in NAT mode, ICS), which
+	// never pass ALE_AUTH_CONNECT.
+	LayerForwardV4
+	// LayerForwardV6 is IPFORWARD_V6.
+	LayerForwardV6
 )
 
 func (l Layer) String() string {
@@ -80,9 +89,18 @@ func (l Layer) String() string {
 		return "ALE_AUTH_CONNECT_V4"
 	case LayerConnectV6:
 		return "ALE_AUTH_CONNECT_V6"
+	case LayerForwardV4:
+		return "IPFORWARD_V4"
+	case LayerForwardV6:
+		return "IPFORWARD_V6"
 	}
 	return "another layer"
 }
+
+// Forward reports whether l filters forwarded traffic. There a rule's
+// Remote is the packet's destination and its LUID the interface the packet
+// is forwarded to.
+func (l Layer) Forward() bool { return l == LayerForwardV4 || l == LayerForwardV6 }
 
 // Action is what a filter does with matching connections.
 type Action int
@@ -112,9 +130,11 @@ type Rule struct {
 	Layer    Layer
 	Sublayer GUID
 	Action   Action
-	// Remote is the protected destination range.
+	// Remote is the protected destination range: a connection's remote
+	// address, or a forwarded packet's destination.
 	Remote netip.Prefix
-	// LUID is the local interface a connection must leave on; 0 is any.
+	// LUID is the interface a connection must leave on, or a forwarded
+	// packet must be forwarded to; 0 is any.
 	LUID   uint64
 	Weight uint64
 	// Hard means lower sublayers cannot override the action.
@@ -251,21 +271,37 @@ type Adapter struct {
 	LUID  uint64
 	// Type is the IANA interface type, for example 24 for loopback.
 	Type uint32
+	// Index is the interface index (IfIndex).
+	Index uint32
 }
 
-// lookup returns the LUID of the adapter whose alias is exactly alias.
+// lookup returns the LUID of the adapter whose alias is alias, ignoring
+// case like Windows and config.CheckVPNInterface. When more than one
+// adapter matches, it refuses rather than guess which one is the VPN.
 func lookup(adapters []Adapter, alias string) (uint64, error) {
+	var found []Adapter
 	for _, a := range adapters {
-		if a.Alias == alias {
-			return a.LUID, nil
+		if strings.EqualFold(a.Alias, alias) {
+			found = append(found, a)
 		}
 	}
-	return 0, fmt.Errorf("%w %q", ErrNoAdapter, alias)
+	switch len(found) {
+	case 0:
+		return 0, fmt.Errorf("%w %q", ErrNoAdapter, alias)
+	case 1:
+		return found[0].LUID, nil
+	}
+	names := make([]string, len(found))
+	for i, a := range found {
+		names[i] = strconv.Quote(a.Alias)
+	}
+	return 0, fmt.Errorf("%d network adapters are named %q ignoring case (%s): cannot tell which one is the VPN", len(found), alias, strings.Join(names, ", "))
 }
 
 // Rules returns the filters that keep services on the adapter with this
-// LUID, in the order Apply adds them: blocks first. luid 0 returns blocks
-// only, so no interface may carry protected traffic.
+// LUID, for this computer's connections and for the traffic it forwards,
+// in the order Apply adds them: blocks first. luid 0 returns blocks only,
+// so no interface may carry protected traffic.
 func Rules(luid uint64, services []catalog.Service) ([]Rule, error) {
 	prefixes, err := protected(services)
 	if err != nil {
@@ -276,15 +312,22 @@ func Rules(luid uint64, services []catalog.Service) ([]Rule, error) {
 		if action == ActionPermit && luid == 0 {
 			break
 		}
-		for _, p := range prefixes {
-			r := Rule{Layer: LayerConnectV4, Sublayer: SublayerKey, Action: action, Remote: p, Weight: BlockWeight, Hard: true, Persistent: true}
-			if p.Addr().Is6() {
-				r.Layer = LayerConnectV6
+		for _, forward := range []bool{false, true} {
+			for _, p := range prefixes {
+				r := Rule{Layer: LayerConnectV4, Sublayer: SublayerKey, Action: action, Remote: p, Weight: BlockWeight, Hard: true, Persistent: true}
+				switch {
+				case forward && p.Addr().Is6():
+					r.Layer = LayerForwardV6
+				case forward:
+					r.Layer = LayerForwardV4
+				case p.Addr().Is6():
+					r.Layer = LayerConnectV6
+				}
+				if action == ActionPermit {
+					r.LUID, r.Weight, r.Hard = luid, PermitWeight, false
+				}
+				rules = append(rules, r)
 			}
-			if action == ActionPermit {
-				r.LUID, r.Weight, r.Hard = luid, PermitWeight, false
-			}
-			rules = append(rules, r)
 		}
 	}
 	return rules, nil

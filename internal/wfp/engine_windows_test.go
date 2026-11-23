@@ -1,7 +1,6 @@
 package wfp
 
 import (
-	"net/netip"
 	"strings"
 	"testing"
 
@@ -9,59 +8,86 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// Layers map to the library's ALE_AUTH_CONNECT layers.
-func TestLayersAreALEAuthConnect(t *testing.T) {
+// leakguard's own layer and condition keys, which it enumerates and reads
+// with, are the ones tailscale/wf adds with.
+func TestKeysMatchTheLibrary(t *testing.T) {
 	for _, tc := range []struct {
-		layer Layer
-		want  wf.LayerID
-	}{{LayerConnectV4, wf.LayerALEAuthConnectV4}, {LayerConnectV6, wf.LayerALEAuthConnectV6}} {
-		r, err := toWF(Filter{Key: filterKey(1, 0), Rule: Rule{Layer: tc.layer, Sublayer: SublayerKey, Action: ActionBlock, Remote: netip.MustParsePrefix("192.0.2.0/24")}})
-		if err != nil {
-			t.Fatal(err)
+		name      string
+		got, want GUID
+	}{
+		{"ALE_AUTH_CONNECT_V4", layerKey(LayerConnectV4), GUID(wf.LayerALEAuthConnectV4)},
+		{"ALE_AUTH_CONNECT_V6", layerKey(LayerConnectV6), GUID(wf.LayerALEAuthConnectV6)},
+		{"IPFORWARD_V4", layerKey(LayerForwardV4), GUID(wf.LayerIPForwardV4)},
+		{"IPFORWARD_V6", layerKey(LayerForwardV6), GUID(wf.LayerIPForwardV6)},
+		{"IP_REMOTE_ADDRESS", remoteField(LayerConnectV4), GUID(wf.FieldIPRemoteAddress)},
+		{"IP_LOCAL_INTERFACE", interfaceField(LayerConnectV4), GUID(wf.FieldIPLocalInterface)},
+		{"IP_DESTINATION_ADDRESS", remoteField(LayerForwardV4), GUID(wf.FieldIPDestinationAddress)},
+		{"IP_FORWARD_INTERFACE", interfaceField(LayerForwardV4), GUID(wf.FieldIPForwardInterface)},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("%s: leakguard %s, tailscale/wf %s", tc.name, tc.got, tc.want)
 		}
-		if r.Layer != tc.want {
-			t.Errorf("%s maps to %s, want %s", tc.layer, r.Layer, tc.want)
-		}
+	}
+	if fwpActionBlock != uint32(wf.ActionBlock) || fwpActionPermit != uint32(wf.ActionPermit) || fwpMatchEqual != uint32(wf.MatchTypeEqual) {
+		t.Errorf("block %#x, permit %#x, equal %d; tailscale/wf: %#x, %#x, %d", fwpActionBlock, fwpActionPermit, fwpMatchEqual, uint32(wf.ActionBlock), uint32(wf.ActionPermit), uint32(wf.MatchTypeEqual))
 	}
 }
 
-// What toWF writes, fromWF reads back unchanged.
-func TestFilterRoundTrip(t *testing.T) {
+// toWF writes each rule at its layer with that layer's conditions: the
+// remote address and local interface for this computer's connections, the
+// destination and forward interface for forwarded packets.
+func TestToWFWritesEachLayersConditions(t *testing.T) {
 	rules, err := Rules(vpnLUID, services)
 	if err != nil {
 		t.Fatal(err)
 	}
+	layers := map[Layer]wf.LayerID{LayerConnectV4: wf.LayerALEAuthConnectV4, LayerConnectV6: wf.LayerALEAuthConnectV6, LayerForwardV4: wf.LayerIPForwardV4, LayerForwardV6: wf.LayerIPForwardV6}
+	seen := map[Layer]int{}
 	for i, r := range rules {
 		w, err := toWF(Filter{Key: filterKey(3, uint32(i)), Rule: r})
 		if err != nil {
 			t.Fatalf("toWF(%s): %v", r, err)
 		}
-		if GUID(w.ID) != filterKey(3, uint32(i)) || GUID(w.Provider) != ProviderKey || GUID(w.Sublayer) != SublayerKey {
-			t.Errorf("%s: key %s, provider %s, sublayer %s", r, GUID(w.ID), GUID(w.Provider), GUID(w.Sublayer))
+		seen[r.Layer]++
+		if GUID(w.ID) != filterKey(3, uint32(i)) || GUID(w.Provider) != ProviderKey || GUID(w.Sublayer) != SublayerKey || w.Layer != layers[r.Layer] {
+			t.Errorf("%s: key %s, provider %s, sublayer %s, layer %s", r, GUID(w.ID), GUID(w.Provider), GUID(w.Sublayer), w.Layer)
 		}
-		if got := fromWF(w); got != r {
-			t.Errorf("round trip:\n got %s\nwant %s", got, r)
+		if w.Weight != r.Weight || w.HardAction != r.Hard || !w.Persistent || w.BootTime {
+			t.Errorf("%s: weight %d, hard %v, persistent %v, boot-time %v", r, w.Weight, w.HardAction, w.Persistent, w.BootTime)
+		}
+		if (r.Action == ActionBlock) != (w.Action == wf.ActionBlock) || (r.Action == ActionPermit) != (w.Action == wf.ActionPermit) {
+			t.Errorf("%s: action %s", r, w.Action)
+		}
+		remote, iface := wf.FieldIPRemoteAddress, wf.FieldIPLocalInterface
+		if r.Layer.Forward() {
+			remote, iface = wf.FieldIPDestinationAddress, wf.FieldIPForwardInterface
+		}
+		want := []string{(&wf.Match{Field: remote, Op: wf.MatchTypeEqual, Value: r.Remote}).String()}
+		if r.LUID != 0 {
+			want = append(want, (&wf.Match{Field: iface, Op: wf.MatchTypeEqual, Value: r.LUID}).String())
+		}
+		var got []string
+		for _, m := range w.Conditions {
+			got = append(got, m.String())
+		}
+		if strings.Join(got, "; ") != strings.Join(want, "; ") {
+			t.Errorf("%s: conditions %q, want %q", r, got, want)
 		}
 	}
-}
-
-func TestFromWFMarksWhatLeakguardNeverWrites(t *testing.T) {
-	w, err := toWF(Filter{Key: filterKey(1, 0), Rule: Rule{Layer: LayerConnectV4, Sublayer: SublayerKey, Action: ActionBlock, Remote: netip.MustParsePrefix("192.0.2.0/24"), Hard: true, Persistent: true}})
-	if err != nil {
-		t.Fatal(err)
+	for l := range layers {
+		if seen[l] != 4 {
+			t.Errorf("%d rules at %s, want 4 (2 ranges, block and permit)", seen[l], l)
+		}
 	}
-	w.Conditions = append(w.Conditions, &wf.Match{Field: wf.FieldIPRemotePort, Op: wf.MatchTypeEqual, Value: uint16(443)})
-	w.BootTime = true
-	got := fromWF(w)
-	if !strings.Contains(got.Other, "boot-time") || !strings.Contains(got.Other, "condition IP_REMOTE_PORT") {
-		t.Errorf("Other = %q", got.Other)
-	}
-	w.Conditions = nil
-	if got := fromWF(w); !strings.Contains(got.Other, "no remote address condition") {
-		t.Errorf("Other = %q", got.Other)
-	}
-	if _, err := toWF(Filter{Key: filterKey(1, 0), Rule: got}); err == nil {
+	bad := rules[0]
+	bad.Other = "condition ALE_APP_ID"
+	if _, err := toWF(Filter{Key: filterKey(1, 0), Rule: bad}); err == nil {
 		t.Error("toWF accepted a rule with Other set")
+	}
+	bad = rules[0]
+	bad.Layer = LayerOther
+	if _, err := toWF(Filter{Key: filterKey(1, 0), Rule: bad}); err == nil {
+		t.Error("toWF accepted a rule at another layer")
 	}
 }
 
