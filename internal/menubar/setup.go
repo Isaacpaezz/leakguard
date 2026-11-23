@@ -47,19 +47,27 @@ var (
 // so it is used only when no current installed copy exists: on the first run
 // or to update an older install.
 func FindCLI(exe string, inst Install, isExecutable func(path string) bool, checkInstalled func(path string) error) (string, error) {
+	next := ""
+	if exe != "" {
+		next = filepath.Join(filepath.Dir(exe), "leakguard")
+	}
+	return findCLI(InstalledCLI, next, inst, isExecutable, checkInstalled)
+}
+
+// findCLI is FindCLI's rule for any system: installed is the copy the
+// service runs and next the CLI next to the app ("" when unknown).
+func findCLI(installed, next string, inst Install, isExecutable func(path string) bool, checkInstalled func(path string) error) (string, error) {
 	if inst == InstallCurrent {
-		err := checkInstalled(InstalledCLI)
+		err := checkInstalled(installed)
 		switch {
 		case err == nil:
-			return InstalledCLI, nil
+			return installed, nil
 		case !errors.Is(err, fs.ErrNotExist):
 			return "", ErrCLINotRootOwned
 		}
 	}
-	if exe != "" {
-		if next := filepath.Join(filepath.Dir(exe), "leakguard"); isExecutable(next) {
-			return next, nil
-		}
+	if next != "" && isExecutable(next) {
+		return next, nil
 	}
 	if inst == InstallOld {
 		return "", ErrCLIUpdate

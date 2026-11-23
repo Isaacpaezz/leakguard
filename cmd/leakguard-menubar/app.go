@@ -1,7 +1,7 @@
-//go:build darwin || linux
+//go:build darwin || linux || windows
 
 // Command leakguard-menubar is the menu-bar app on macOS and the tray app on
-// Linux. It shows whether the chosen services are protected, guides the
+// Linux and Windows. It shows whether the chosen services are protected, guides the
 // first setup in three steps with native dialogs, and lets an administrator
 // tick services, change the VPN and pause the protection. It only talks to
 // the root daemon over its socket: quitting the app never stops the
@@ -14,6 +14,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -32,8 +33,8 @@ const (
 	lineLength = menubar.MenuLineLength
 )
 
-// platform is what differs between macOS and Linux: dialogs, icons, the
-// installed state, the administrator prompt and the login item.
+// platform is what differs between macOS, Linux and Windows: dialogs,
+// icons, the installed state, the administrator prompt and the login item.
 type platform interface {
 	// dialogs draws the wizard and the uninstall.
 	dialogs() menubar.Dialogs
@@ -451,7 +452,12 @@ func (a *app) draw() {
 		a.icon = m.State
 		a.plat.setIcon(m.State)
 	}
-	systray.SetTooltip(m.Tooltip)
+	tip := m.Tooltip
+	if runtime.GOOS == "windows" {
+		// The notification area holds 127 UTF-16 units and a terminator.
+		tip = menubar.FitUTF16(tip, 127)
+	}
+	systray.SetTooltip(tip)
 
 	if key := layoutKey(m); key != a.layout {
 		a.rebuild(m)

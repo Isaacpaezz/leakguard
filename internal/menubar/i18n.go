@@ -6,15 +6,16 @@ import (
 )
 
 // Lang is the language of every user-facing string: the dialogs and the menu
-// follow the Mac's first preferred language, or the Linux session's locale.
-// A Lang made with ForOS("linux") also reads the Linux wording.
+// follow the Mac's first preferred language, the Linux session's locale or
+// the Windows display language. A Lang made with ForOS("linux") or
+// ForOS("windows") also reads that system's wording.
 //
 // The system is a field of its own, apart from the language, and Lang
 // cannot be compared with ==: a Linux Spanish Lang is not equal to Spanish,
 // so every language decision asks IsSpanish instead.
 type Lang struct {
-	spanish, linux bool
-	_              [0]func() // not comparable
+	spanish, linux, windows bool
+	_                       [0]func() // not comparable
 }
 
 var (
@@ -25,23 +26,28 @@ var (
 // IsSpanish reports whether l is Spanish, on any system.
 func (l Lang) IsSpanish() bool { return l.spanish }
 
-// String is "es" or "en", with "+linux" for the Linux wording.
+// String is "es" or "en", with "+linux" or "+windows" for that system's
+// wording.
 func (l Lang) String() string {
 	s := "en"
 	if l.spanish {
 		s = "es"
 	}
-	if l.linux {
+	switch {
+	case l.linux:
 		s += "+linux"
+	case l.windows:
+		s += "+windows"
 	}
 	return s
 }
 
 // ForOS returns l with the wording for the operating system goos: "linux"
-// reads linuxMessages where they exist, so no text names a Mac thing; any
-// other system reads the macOS wording.
+// reads linuxMessages and "windows" windowsMessages where they exist, so no
+// text names a Mac thing; any other system reads the macOS wording.
 func (l Lang) ForOS(goos string) Lang {
 	l.linux = goos == "linux"
+	l.windows = goos == "windows"
 	return l
 }
 
@@ -319,6 +325,52 @@ const (
 	linuxRemoveEN = "To remove the program: if you used the .deb package, run sudo apt remove leakguard; if you used the .tar.gz, delete the files you copied."
 )
 
+// windowsMessages replace the messages that name Mac or Linux things (the
+// Mac, the menu bar, Applications, the Trash, sudo, apt) on Windows. The
+// tray lives in the notification area of the taskbar, UAC asks for
+// administrator permission, and the program is removed from Settings.
+var windowsMessages = map[Msg]text{
+	MsgMenuOpenAtLoginTip:     {"Abre este menú cada vez que inicias sesión en Windows; no pide contraseña", "Opens this menu every time you sign in to Windows; no password needed"},
+	msgExplainNotSetUp:        {"leakguard no está configurado en esta computadora", "leakguard is not set up on this computer"},
+	msgExplainNotAuthorized:   {"Solo un administrador de esta computadora puede cambiar leakguard", "Only administrators can change leakguard"},
+	msgCLINotRootOwned:        {"El leakguard instalado no está protegido: solo los administradores deberían poder cambiarlo. Reinstálalo con el instalador de leakguard.", "The installed leakguard is not protected: only administrators should be able to change it. Reinstall it with the leakguard installer."},
+	msgCLIUpdate:              {"Para actualizar leakguard, pon el nuevo leakguard.exe junto a esta app o vuelve a ejecutar el instalador de leakguard", "To update leakguard, put the new leakguard.exe next to this app, or run the leakguard installer again"},
+	msgStep3Password:          {"Activar la protección.\n\nWindows te va a pedir permiso de administrador. Lo necesitamos una sola vez, para instalar el servicio que bloquea %s si tu VPN se cae.", "Turn on the protection.\n\nWindows will ask for administrator permission. We need it only this once, to install the background service that blocks %s if your VPN drops."},
+	msgDoneShield:             {"El escudo verde en el área de notificación de la barra de tareas significa que estás protegido.", "A green shield in the notification area of the taskbar means you are protected."},
+	msgUninstallConfirm:       {"¿Quieres desinstalar leakguard?\n\nSe quitarán las reglas de protección, el servicio de fondo y la apertura al iniciar sesión. Los servicios que protegías volverán a usar tu conexión normal.\n\nEl programa sigue instalado: después puedes desinstalarlo desde Configuración > Aplicaciones. Windows te va a pedir permiso de administrador.", "Do you want to uninstall leakguard?\n\nThis removes the protection rules, the background service and the login item. The services you protected will use your normal connection again.\n\nThe program stays installed: afterwards you can uninstall it from Settings > Apps. Windows will ask for administrator permission."},
+	msgUninstallCleanupFailed: {"leakguard se desinstaló, pero no se pudo quitar la apertura al iniciar sesión: %s\n\n" + windowsRemoveES, "leakguard was uninstalled, but the login item could not be removed: %s\n\n" + windowsRemoveEN},
+	msgUninstallDone:          {"leakguard se desinstaló. " + windowsRemoveES, "leakguard was uninstalled. " + windowsRemoveEN},
+}
+
+// How to remove the program on Windows.
+const (
+	windowsRemoveES = "Para quitar el programa, desinstala leakguard desde Configuración > Aplicaciones."
+	windowsRemoveEN = "To remove the program, uninstall leakguard from Settings > Apps."
+)
+
+// Words of the Windows dialogs, outside the shared catalog so the macOS and
+// Linux catalogs keep their digests: the names Windows gives the buttons of
+// its own message boxes, and the question asked for one item of a list.
+var (
+	winWordOK     = text{"Aceptar", "OK"}
+	winWordCancel = text{"Cancelar", "Cancel"}
+	winWordYes    = text{"Sí", "Yes"}
+	winWordNo     = text{"No", "No"}
+	winChooseItem = text{"¿Elegir %s?", "Choose %s?"}
+)
+
+// word returns t in language l, formatted with args when given.
+func (l Lang) word(t text, args ...any) string {
+	s := t.en
+	if l.spanish {
+		s = t.es
+	}
+	if len(args) > 0 {
+		s = fmt.Sprintf(s, args...)
+	}
+	return s
+}
+
 // Text returns message m in language l, formatted with args when given.
 func (l Lang) Text(m Msg, args ...any) string {
 	if m < 0 || m >= msgCount {
@@ -326,6 +378,9 @@ func (l Lang) Text(m Msg, args ...any) string {
 	}
 	t := messages[m]
 	if v, ok := linuxMessages[m]; ok && l.linux {
+		t = v
+	}
+	if v, ok := windowsMessages[m]; ok && l.windows {
 		t = v
 	}
 	s := t.en
