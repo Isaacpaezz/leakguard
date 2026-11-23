@@ -90,7 +90,7 @@ setup; light and dark; English and Spanish), drawn from the real strings in
 **1.0** is GitHub milestone 1
 (https://github.com/Isaacpaezz/leakguard/milestone/1): #14 ChatGPT/OpenAI,
 #16 self-updating IP ranges, #15 Developer ID signing and notarization, #8
-menu polish. Windows follows in 1.1 and Linux in 1.2. The numbered list below
+menu polish. Owner, 2026-11-23: Linux ships as the 0.2.0 pre-release and Windows as 0.3.0 (both before 1.0). The numbered list below
 is the original work breakdown.
 
 0. ✅ Open source foundation: CONTRIBUTING, templates, CODEOWNERS, SECURITY,
@@ -204,7 +204,7 @@ is the original work breakdown.
    no drop. "Today" resets at local midnight, also across DST. Stats
    errors are logged once and never change protection.
 3. 🧪 Built on `feat/linux-support`, not released (`odd/tasks/linux-windows.md`).
-   Linux `nftables` backend and tray app (release 1.2). Exists: per-OS VPN
+   Linux `nftables` backend and tray app (release 0.2.0). Exists: per-OS VPN
    rules (sysfs facts; Ethernet, Wi-Fi, Docker, bridges, veth, loopback
    refused), `internal/firewall` and `daemon.Manager` interfaces picked only
    in `main`, `internal/nft` (table `inet leakguard`, reject outside the VPN
@@ -233,7 +233,7 @@ is the original work breakdown.
    Not verified live (no Linux machine, owner decision L3): the tray icon
    and dialogs on a real desktop, the pkexec prompt with the polkit policy,
    the systemd service at boot, and a real VPN dropping.
-4. Windows backend and tray app (release 1.1).
+4. Windows backend and tray app (release 0.3.0).
 5. Self-updating catalog (release 1.0, #16): a scheduled workflow refreshes ranges from their
    sources (ASN prefixes) and opens a PR; the app downloads a signed catalog.
    Domain-aware blocking for CDN-hosted services (OpenAI).

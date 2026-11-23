@@ -6,7 +6,7 @@ All notable changes to leakguard are documented here. The format follows
 
 The newest section is shown automatically on the README landing page.
 
-## [Unreleased]
+## [0.2.0] - 2026-11-23
 
 leakguard for Linux (pre-release). Its firewall is tested automatically with
 real nftables rules, but the tray app and a real VPN drop have not yet been
