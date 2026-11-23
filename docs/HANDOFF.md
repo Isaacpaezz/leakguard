@@ -90,7 +90,11 @@ setup; light and dark; English and Spanish), drawn from the real strings in
 **1.0** is GitHub milestone 1
 (https://github.com/Isaacpaezz/leakguard/milestone/1): #14 ChatGPT/OpenAI,
 #16 self-updating IP ranges, #15 Developer ID signing and notarization, #8
-menu polish. Owner, 2026-11-23: Linux ships as the 0.2.0 pre-release and Windows as 0.3.0 (both before 1.0). The numbered list below
+menu polish. Owner, 2026-11-23: Linux ships as the 0.2.0 pre-release and
+Windows as 0.3.0 (both before 1.0); both were released on 2026-11-23:
+**0.2.0** (Linux, PR #18) and **0.3.0** (Windows, PR #19), pre-releases with
+the DMG, both `.deb`, both `.tar.gz` and both Windows `setup.exe`, each with
+a `.sha256`. The numbered list below
 is the original work breakdown.
 
 0. ✅ Open source foundation: CONTRIBUTING, templates, CODEOWNERS, SECURITY,
@@ -203,8 +207,9 @@ is the original work breakdown.
    counter unseen: blocks may be lost then, never counted twice. VPN gaps over 2 min (sleep, daemon down) add no time and
    no drop. "Today" resets at local midnight, also across DST. Stats
    errors are logged once and never change protection.
-3. 🧪 Built on `feat/linux-support`, not released (`odd/tasks/linux-windows.md`).
-   Linux `nftables` backend and tray app (release 0.2.0). Exists: per-OS VPN
+3. ✅ Released as the 0.2.0 pre-release (PR #18, 2026-11-23;
+   `odd/tasks/linux-windows.md`). Linux `nftables` backend and tray app.
+   Exists: per-OS VPN
    rules (sysfs facts; Ethernet, Wi-Fi, Docker, bridges, veth, loopback
    refused), `internal/firewall` and `daemon.Manager` interfaces picked only
    in `main`, `internal/nft` (table `inet leakguard`, reject outside the VPN
@@ -233,9 +238,8 @@ is the original work breakdown.
    Not verified live (no Linux machine, owner decision L3): the tray icon
    and dialogs on a real desktop, the pkexec prompt with the polkit policy,
    the systemd service at boot, and a real VPN dropping.
-4. 🧪 Built on `feat/windows-support` (draft PR #19, stacked on the Linux
-   PR #18), not released (`odd/tasks/linux-windows.md`). Windows backend
-   and tray app (release 0.3.0). Exists: `internal/wfp` on tailscale/wf
+4. ✅ Released as the 0.3.0 pre-release (PR #19, 2026-11-23;
+   `odd/tasks/linux-windows.md`). Windows backend and tray app. Exists: `internal/wfp` on tailscale/wf
    (persistent provider and sublayer, block weight 1 and permit-by-LUID
    weight 2 per protected range at `ALE_AUTH_CONNECT_V4/V6`, add-then-delete
    swap, `BlockCount` unsupported so the menu omits blocks), Windows

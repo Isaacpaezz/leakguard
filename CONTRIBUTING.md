@@ -56,10 +56,45 @@ ad-hoc signed) and `dist/leakguard-0.0.0-local-macos.dmg` with its `.sha256`
 file. `dist/` is ignored by git; never commit it. CI runs the same script on
 every pull request without uploading anything.
 
+## Build the Linux packages
+
+On Linux with Go, GNU tar, `dpkg-deb` 1.19 or newer and `sha256sum` (any
+Debian or Ubuntu has them):
+
+```sh
+scripts/build-linux.sh 0.0.0-local
+```
+
+On macOS, run it in Docker:
+
+```sh
+docker run --rm -v "$PWD":/src -w /src -e GOFLAGS=-buildvcs=false golang:1.25 scripts/build-linux.sh 0.0.0-local
+```
+
+For `amd64` and `arm64` it builds `dist/leakguard_0.0.0-local_ARCH.deb` and
+`dist/leakguard-0.0.0-local-linux-ARCH.tar.gz` (static `leakguard` and
+`leakguard-tray`, the `.desktop` file, the icon, the guide and the license),
+each with its `.sha256`.
+
+## Build the Windows installers
+
+On Linux or macOS with Go, `makensis` (NSIS 3.04 or newer: `apt-get install
+nsis` or `brew install makensis`) and `sha256sum` or `shasum`:
+
+```sh
+scripts/build-windows.sh 0.0.0-local
+```
+
+For `amd64` and `arm64` it builds the NSIS installer
+`dist/leakguard-0.0.0-local-windows-ARCH-setup.exe` (the `leakguard.exe` CLI
+and the `leakguard-tray.exe` tray app), each with its `.sha256`. The tray's
+Windows resources are generated with go-winres during the build and removed
+afterwards; never commit them.
+
 Releases: only the maintainer pushes `v*` tags. Before tagging `vX.Y.Z`, the
 newest section of `CHANGELOG.md` must be `## [X.Y.Z] - DATE`; the release
-workflow (`.github/workflows/release.yml`) then tests, builds the DMG and
-creates the GitHub Release with that section as notes (versions below 1.0
+workflow (`.github/workflows/release.yml`) then tests, builds the DMG, the
+Linux packages and the Windows installers, and creates the GitHub Release with that section as notes (versions below 1.0
 are marked as pre-releases). Contributors and AI agents never push tags.
 
 ## The README updates itself
