@@ -171,8 +171,9 @@ func PrepareDir(dir string) error {
 // Save writes the configuration atomically, readable by everyone and writable
 // only by its owner. The directory is made by PrepareDir: on Windows only
 // SYSTEM and Administrators can write it, and the new file replaces
-// whatever had the name (a file a user planted included) by a rename. It
-// holds the lock of WithDataDirLock throughout.
+// whatever had the name (a file a user planted included) by a rename,
+// even while a reader holds it (see ReplaceFile). It holds the lock of
+// WithDataDirLock throughout. On failure no temporary file is left.
 func Save(path string, c Config) error {
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
@@ -208,5 +209,5 @@ func Save(path string, c Config) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), path)
+	return ReplaceFile(tmp.Name(), path)
 }

@@ -51,7 +51,9 @@ func SecureWindowsPath(path string) error {
 // OpenTrusted opens the file at path for reading only when SYSTEM's
 // daemon can trust it: not a link or junction, one hard link, owned by
 // SYSTEM or Administrators, and nobody else may write it. Otherwise it
-// fails with ErrUnsafePath. The checks and the read use the same handle.
+// fails with ErrUnsafePath. The checks and the read use the same handle,
+// which shares reading, writing and deleting, so Save can replace the file
+// while it is open (the handle keeps reading the old one).
 func OpenTrusted(path string) (*os.File, error) {
 	h, err := openNoFollow(path, windows.GENERIC_READ, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE)
 	if err != nil {

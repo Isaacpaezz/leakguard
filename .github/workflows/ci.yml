@@ -118,7 +118,8 @@ jobs:
           }
           t '^(TestPipe.*|TestDefaultPathIsThePipe|TestAuthorize.*Token.*|TestAuthorizeServer)$' ./internal/ipc/
           t '^(TestBoundDial.*OnWindows)$' ./internal/probe/
-          t '^(TestRealWindowsAdapters.*|TestPrepareDir.*|TestLoadRefuses.*|TestCanonicalInterfaceName|TestSameInterface)$' ./internal/config/
+          t '^(TestRealWindowsAdapters.*|TestPrepareDir.*|TestLoadRefuses.*|TestCanonicalInterfaceName|TestSameInterface|TestSaveWhileAReaderHoldsTheConfig)$' ./internal/config/
+          t '^(TestSaveWhileAReaderHoldsTheStats)$' ./internal/stats/
           t '^(TestSCM.*|TestWindowsDefaultPaths|TestWindowsLastLogLineReadsOnlyATrustedLog|TestWindowsInstallSecuresTheServiceDirectory|TestWindowsInstallReplacesAJunctionAtTheServiceDirectory)$' ./internal/daemon/
           t '^(TestWindowsCommandLineRoundTrip|TestUserLang|TestProgramFiles|TestQuerySCM|TestCheckInstalledCLIWindows|TestDialogsWithoutManifest|TestShellExecuteInfoSize|TestRunElevatedExitCode|TestRegistryRunKey|TestTaskDialogIndirectWithManifest|TestRunElevatedWithReport|TestWindowsSetupCommandRealAliases)$' ./internal/menubar/
           t '^(TestWindowsLoadsTheTrayIcons|TestWindowsPlatform)$' ./cmd/leakguard-menubar/
@@ -150,16 +151,43 @@ jobs:
       # must restore it. Hyper-V isolation has its own kernel, like WSL2 and
       # VMs, so only IPFORWARD sees it: asserted when the runner can start
       # one, otherwise logged as unverified without failing.
-      - name: Container traffic (ALE for process isolation, IPFORWARD for Hyper-V)
+      # Some runners come with the Docker service stopped or without Docker:
+      # it is started and waited for (about 60 s). A runner without Docker
+      # skips the container coverage with a warning, an environment reason,
+      # never a failure as if a filter regressed.
+      - name: Start Docker for the container traffic test
+        id: docker
         if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $available = $false
+          if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
+            Write-Output 'The docker CLI is not installed on this runner'
+          } elseif (-not (Get-Service -Name docker -ErrorAction SilentlyContinue)) {
+            Write-Output 'The docker service is not installed on this runner'
+          } else {
+            try { Start-Service -Name docker -ErrorAction Stop } catch { Write-Output "Start-Service docker: $_" }
+            for ($i = 0; $i -lt 60; $i++) {
+              docker version *> $null
+              if ($LASTEXITCODE -eq 0) { $available = $true; break }
+              Start-Sleep -Seconds 1
+            }
+          }
+          if ($available) {
+            docker version
+            "available=true" >> $env:GITHUB_OUTPUT
+          } else {
+            Write-Output '::warning::Container traffic coverage was skipped: Docker with Windows containers is not available on this runner (environment, not a filter regression)'
+            "available=false" >> $env:GITHUB_OUTPUT
+          }
+          exit 0
+      - name: Container traffic (ALE for process isolation, IPFORWARD for Hyper-V)
+        if: ${{ !cancelled() && steps.docker.outputs.available == 'true' }}
         shell: bash
         env:
           LEAKGUARD_WFP_FORWARD_INTEGRATION: "1"
         run: |
-          if ! docker version; then
-            echo "::error::Docker with Windows containers is not available on this runner"
-            exit 1
-          fi
           rc=0
           out=$(go test -count=1 -timeout 30m -v -run '^TestIntegrationForwardedTraffic$' ./internal/wfp/ 2>&1) || rc=$?
           printf '%s\n' "$out"

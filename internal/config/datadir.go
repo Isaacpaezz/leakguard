@@ -30,12 +30,18 @@ var inUseDelays = []time.Duration{
 // whileInUse runs op, and runs it again after each of inUseDelays while it
 // fails because the entry is in use. It returns op's last error.
 func whileInUse(fsys dataFS, op func() error) error {
+	return retryWhile(fsys.inUse, fsys.sleep, op)
+}
+
+// retryWhile runs op, and runs it again after each of inUseDelays while it
+// fails with an error busy accepts. It returns op's last error.
+func retryWhile(busy func(error) bool, sleep func(time.Duration), op func() error) error {
 	err := op()
 	for _, d := range inUseDelays {
-		if err == nil || !fsys.inUse(err) {
+		if err == nil || !busy(err) {
 			return err
 		}
-		fsys.sleep(d)
+		sleep(d)
 		err = op()
 	}
 	return err
