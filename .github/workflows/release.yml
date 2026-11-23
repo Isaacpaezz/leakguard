@@ -1,7 +1,9 @@
 name: Release
 
-# Builds the macOS DMG and publishes it on GitHub Releases. Only the
-# maintainer pushes v* tags; agents never do (AGENTS.md rule 10).
+# Builds the macOS DMG and the Linux packages and publishes them on GitHub
+# Releases. Only the maintainer pushes v* tags; agents never do (AGENTS.md
+# rule 10). The macOS job creates the release; the Linux packages are built
+# without write access and uploaded to it once it exists.
 on:
   push:
     tags: ['v*']
@@ -46,3 +48,53 @@ jobs:
             "${prerelease[@]}" \
             "dist/leakguard-$version-macos.dmg" \
             "dist/leakguard-$version-macos.dmg.sha256"
+
+  linux:
+    name: Linux packages
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - run: go test ./...
+      - name: Build the .deb and .tar.gz packages
+        run: scripts/build-linux.sh "${TAG#v}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages
+          path: |
+            dist/*.deb
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  linux-upload:
+    name: Upload the Linux packages
+    needs: [macos, linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-packages
+          path: linux-packages
+      - name: Add them to the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # --clobber lets a re-run of this job replace a partial upload.
+          gh release upload "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber \
+            linux-packages/*

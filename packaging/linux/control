@@ -1,0 +1,18 @@
+Package: leakguard
+Version: @VERSION@
+Architecture: @ARCH@
+Maintainer: Isaac Páez <35874890+Isaacpaezz@users.noreply.github.com>
+Installed-Size: @INSTALLED_SIZE@
+Depends: nftables
+Recommends: zenity | kdialog, pkexec | policykit-1
+Section: net
+Priority: optional
+Homepage: https://github.com/Isaacpaezz/leakguard
+Description: VPN kill switch for the services you choose
+ When your VPN drops, the services you choose, such as Claude, go offline
+ instead of leaking through your real connection. The rest of the computer
+ keeps working normally.
+ .
+ leakguard allows traffic to the protected services only through the VPN
+ interface, with nftables rules kept by a systemd service. A tray icon shows
+ whether you are protected, with one checkbox per service and a 3-step setup.
