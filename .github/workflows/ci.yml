@@ -73,6 +73,11 @@ jobs:
       - run: go vet ./...
       - name: Unit tests
         run: go test ./internal/catalog/... ./internal/firewall/... ./internal/wfp/...
+      # The Windows-only tests of the service, pipe, probe and adapter rules.
+      # continue-on-error until the whole suite is ported (T14).
+      - name: Windows tests of the other packages
+        continue-on-error: true
+        run: go test -count=1 -v ./internal/ipc/ ./internal/probe/ ./internal/config/ ./internal/daemon/ ./cmd/leakguard/
       # Loads real filters, probes them and flushes them at the end.
       - name: Load real WFP filters and probe them
         env:
