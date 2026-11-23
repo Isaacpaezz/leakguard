@@ -18,6 +18,11 @@ func launchdServices(env Env) daemon.Manager {
 	return daemon.Daemon{Root: env.Root, Launchctl: env.Launchctl, Secure: env.Secure}
 }
 
+// systemdServices is the Linux background service: the systemd unit.
+func systemdServices(env Env) daemon.Manager {
+	return daemon.Systemd{Root: env.Root, Systemctl: env.Systemctl, Secure: env.Secure}
+}
+
 func (c *cli) firewall() firewall.Firewall {
 	if c.env.Firewall == nil {
 		return unsupportedFirewall{}

@@ -6,7 +6,6 @@ import (
 	"net"
 	"net/netip"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"time"
 
@@ -26,6 +25,7 @@ func systemEnv() Env {
 		IsRoot:     func() bool { return os.Geteuid() == 0 },
 		Pfctl:      pf.ExecRunner{},
 		Launchctl:  daemon.ExecRunner{},
+		Systemctl:  daemon.SystemctlRunner{},
 		Firewall:   systemFirewall,
 		Services:   systemServices,
 		Interfaces: systemInterfaces,
@@ -36,17 +36,12 @@ func systemEnv() Env {
 			}
 			return filepath.EvalSymlinks(exe)
 		},
-		Resolver: net.DefaultResolver,
-		Dial:     probe.BoundDial,
-		DefaultInterface: func() (string, error) {
-			out, err := exec.Command("/sbin/route", "-n", "get", "default").Output()
-			if err != nil {
-				return "", err
-			}
-			return probe.ParseDefaultRoute(string(out))
-		},
-		Now:    time.Now,
-		Socket: ipc.DefaultPath,
+		Resolver:         net.DefaultResolver,
+		Dial:             probe.BoundDial,
+		DefaultInterface: systemDefaultInterface,
+		Now:              time.Now,
+		Socket:           ipc.DefaultPath,
+		NotifySocket:     systemNotifySocket(),
 	}
 }
 

@@ -1,4 +1,5 @@
-// Package daemon installs the macOS LaunchDaemon that runs "leakguard serve":
+// Package daemon installs the background service that runs "leakguard serve"
+// (the macOS LaunchDaemon, the Linux systemd unit):
 // it loads the firewall rules at boot, verifies them periodically and loads
 // them again when OS updates or VPN clients flush them, counts what they
 // block, and answers the menu-bar app.
@@ -120,8 +121,12 @@ type Daemon struct {
 
 // LastLogLine returns the last non-empty line of the daemon log, reading only
 // its tail. A missing or empty log returns false.
-func (d Daemon) LastLogLine() (string, bool) {
-	f, err := os.Open(d.path(LogPath))
+func (d Daemon) LastLogLine() (string, bool) { return lastLogLine(d.path(LogPath)) }
+
+// lastLogLine returns the last non-empty line of the log at path, reading
+// only its tail. A missing or empty log returns false.
+func lastLogLine(path string) (string, bool) {
+	f, err := os.Open(path)
 	if err != nil {
 		return "", false
 	}

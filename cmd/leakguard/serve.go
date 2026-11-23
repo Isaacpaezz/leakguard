@@ -58,6 +58,11 @@ func (c *cli) serve(args []string) error {
 
 	s := &service{c: c, stats: c.newStats()}
 	s.check(true)
+	// systemd holds network-pre.target until now. A failed first load
+	// still lets the boot go on: what loaded, or nothing, fails closed.
+	if err := notifyReady(c.env.NotifySocket); err != nil {
+		fmt.Fprintf(c.stderr, "%s leakguard: could not tell systemd the service is ready: %v\n", c.now().Format(time.RFC3339), err)
+	}
 	s.stats.load()
 	s.stats.sampleVPN()
 	srv := &ipc.Server{Path: c.env.Socket, Handler: s.handle, Authorize: c.env.Authorize, Chown: c.env.ChownSocket}

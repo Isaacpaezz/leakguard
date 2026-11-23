@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -455,7 +456,7 @@ func (c *cli) test(args []string) error {
 	iface := *via
 	if iface != "" {
 		if isVPN(iface, cfg) {
-			return fmt.Errorf("%s is a VPN interface; name your Wi-Fi or Ethernet interface with --via IFACE, for example --via en0", iface)
+			return fmt.Errorf("%s is a VPN interface; name your Wi-Fi or Ethernet interface with --via IFACE, for example --via %s", iface, viaExampleFor(runtime.GOOS))
 		}
 		if err := c.checkVia(iface, cfg); err != nil {
 			return err

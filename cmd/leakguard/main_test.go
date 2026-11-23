@@ -183,6 +183,7 @@ func expect(t *testing.T, code int, stdout, stderr string, wantCode int, wantOut
 }
 
 func TestHelpListsEveryCommand(t *testing.T) {
+	withUsage(t, "darwin")
 	h := newHarness(t, false)
 	for _, args := range [][]string{{"help"}, {"-h"}, {"--help"}} {
 		code, out, errOut := h.run(args...)
