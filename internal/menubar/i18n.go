@@ -143,6 +143,7 @@ const (
 	msgButtonUnderstood
 	msgUninstallCleanupFailed
 	msgUninstallDone
+	msgErrNoDialogTool
 
 	msgCount
 )
@@ -261,6 +262,7 @@ var messages = [msgCount]text{
 	msgButtonUnderstood:           {"Entendido", "OK"},
 	msgUninstallCleanupFailed:     {"leakguard se desinstaló, pero no se pudo quitar la apertura al iniciar sesión: %s\n\nPuedes arrastrar la app a la Papelera.", "leakguard was uninstalled, but the login item could not be removed: %s\n\nYou can drag the app to the Trash."},
 	msgUninstallDone:              {"leakguard se desinstaló. Puedes arrastrar la app a la Papelera.", "leakguard was uninstalled. You can drag the app to the Trash."},
+	msgErrNoDialogTool:            {"Instala zenity para ver las ventanas de leakguard", "Install zenity to see leakguard's windows"},
 }
 
 // Text returns message m in language l, formatted with args when given.

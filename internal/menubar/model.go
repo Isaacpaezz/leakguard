@@ -309,6 +309,8 @@ func explainKnown(l Lang, err error) (string, bool) {
 		m = msgErrInvalidChoice
 	case errors.Is(err, ErrUnexpectedAnswer):
 		m = msgErrUnexpectedAnswer
+	case errors.Is(err, ErrNoDialogTool):
+		m = msgErrNoDialogTool
 	default:
 		return "", false
 	}
