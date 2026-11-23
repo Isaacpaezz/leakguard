@@ -44,8 +44,9 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-      - name: Install nftables
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq nftables
+      - name: Install nftables and iproute2
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq nftables iproute2
+      # Local traffic, and traffic forwarded through network namespaces.
       - name: Load real rules and probe them
         run: |
           go test -c -o "$RUNNER_TEMP/nft.test" ./internal/nft/

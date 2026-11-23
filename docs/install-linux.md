@@ -111,9 +111,9 @@ Descarga el `.deb` nuevo e instálalo igual que la primera vez
 (`sudo apt install ./leakguard_VERSIÓN_amd64.deb`). Si la protección está
 activa, el paquete reinicia el servicio de fondo con la versión nueva y
 conserva lo que elegiste; las reglas siguen cargadas durante la
-actualización, así que nada se escapa. Si no puede reiniciarlo, lo dice y la
-versión anterior sigue protegiendo; ejecuta `sudo leakguard enable` para
-terminar.
+actualización, así que nada se escapa. Si no puede actualizarlo, lo dice:
+las reglas siguen cargadas y nada se escapa; ejecuta `sudo leakguard enable`
+para terminar, o mira qué hace el servicio con `systemctl status leakguard`.
 
 El registro `/var/log/leakguard.log` se rota cada semana y se guardan las
 últimas 4 semanas.
@@ -247,8 +247,9 @@ Download the new `.deb` and install it the same way as the first time
 (`sudo apt install ./leakguard_VERSION_amd64.deb`). If the protection is
 on, the package restarts the background service with the new version and
 keeps your choices; the rules stay loaded during the update, so nothing
-leaks. If it cannot restart it, it says so and the previous version keeps
-protecting; run `sudo leakguard enable` to finish.
+leaks. If it cannot update it, it says so: the rules stay loaded and
+nothing leaks; run `sudo leakguard enable` to finish, or see what the
+service is doing with `systemctl status leakguard`.
 
 The log `/var/log/leakguard.log` is rotated every week, keeping the last 4
 weeks.

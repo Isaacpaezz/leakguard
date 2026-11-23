@@ -26,12 +26,10 @@ usage() {
 
 [[ $# -eq 1 ]] || usage
 version=$1
-# The same rule as tools/infoplist and tools/debversion.
-semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z]+(\.[0-9A-Za-z-]+)*)?$'
-[[ $version =~ $semver ]] || {
-	echo "build-linux: \"$version\" is not a version like 1.2.3 or 1.2.3-rc.1" >&2
-	usage
-}
+cd "$(dirname "$0")/.."
+# tools/debversion checks VERSION (the rule of tools/infoplist) and prints
+# its Debian form; it explains a refusal and exits 2.
+debversion=$(go run ./tools/debversion "$version") || usage
 [[ $(uname -s) == Linux ]] || {
 	echo "build-linux: run this on Linux" >&2
 	exit 1
@@ -43,10 +41,8 @@ for tool in go tar dpkg-deb sha256sum; do
 	}
 done
 
-cd "$(dirname "$0")/.."
 dist=dist
 pkg=packaging/linux
-debversion=$(go run ./tools/debversion "$version")
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/leakguard-build.XXXXXX")
 trap 'rm -rf "$work"' EXIT

@@ -207,18 +207,28 @@ is the original work breakdown.
    Linux `nftables` backend and tray app (release 1.2). Exists: per-OS VPN
    rules (sysfs facts; Ethernet, Wi-Fi, Docker, bridges, veth, loopback
    refused), `internal/firewall` and `daemon.Manager` interfaces picked only
-   in `main`, `internal/nft` (table `inet leakguard`, reject outside the VPN,
-   counter, `nft -j` verify, block-all when the saved VPN is refused),
+   in `main`, `internal/nft` (table `inet leakguard`, reject outside the VPN
+   in an `output` chain and a `forward` chain, so traffic routed for rootful
+   Docker or libvirt NAT is held to the same rules as pf holds it on macOS,
+   counters, `nft -j` verify of both chains, block-all when the saved VPN is
+   refused),
    systemd unit `leakguard.service` before `network-pre.target`, socket
    `/run/leakguard.sock` (root and the first of `sudo`/`wheel`/`admin`,
-   `SO_PEERCRED`), `SO_BINDTODEVICE` probe, the tray app `leakguard-tray`
+   `SO_PEERCRED` against the group resolved once for the socket),
+   `SO_BINDTODEVICE` probe, the tray app `leakguard-tray`
    (static, D-Bus StatusNotifierItem, zenity/kdialog, pkexec, XDG
    autostart), and `scripts/build-linux.sh` making a `.deb` (depends on
-   `nftables`, polkit policy, `prerm` that runs `leakguard disable`) and a
-   `.tar.gz` for amd64 and arm64, built on every pull request and uploaded
-   by the release workflow. Verified: the whole suite in Docker, real
-   nftables rules in Docker and on `ubuntu-latest` (refusal via an absent
-   VPN, counter, verify, block-all), and the `.deb` installing, running
+   `nftables`; polkit policy with `auth_admin`, one prompt per change;
+   `prerm` that runs `leakguard disable`; `postinst` that runs the internal
+   `leakguard reinstall-service` on upgrade, so the service restarts with
+   the new copy while the rules stay loaded; `postrm` whose purge deletes
+   the choice, stats and logs; `/etc/logrotate.d/leakguard`) and a
+   `.tar.gz` for amd64 and arm64, built on every pull request. The release
+   workflow publishes the release only after the macOS and Linux builds
+   all succeeded, with every package at once. Verified: the whole suite in
+   Docker, real nftables rules in Docker and on `ubuntu-latest` (refusal via
+   an absent VPN, counter, verify, block-all, and forwarded traffic from a
+   network namespace routed through the host), and the `.deb` installing, running
    `leakguard version`/`services` and removing cleanly in `debian:bookworm`.
    Not verified live (no Linux machine, owner decision L3): the tray icon
    and dialogs on a real desktop, the pkexec prompt with the polkit policy,

@@ -7,14 +7,20 @@
 # service keeps them loaded until the new one loads them again at start.
 #
 # A failure here never fails the package operation: the error is printed
-# with what to run, and the old copy keeps protecting until then.
+# with what to run. Depending on the step that failed, the service may run
+# the previous copy, or the new copy may be in place with systemd retrying
+# to start it; either way the loaded rules stay until a service loads them
+# again or the protection is turned off.
 set -u
 
 case "${1:-}" in
 configure)
 	if [ -e /etc/systemd/system/leakguard.service ] && [ -x /usr/bin/leakguard ]; then
-		/usr/bin/leakguard reinstall-service ||
-			echo "leakguard: warning: the background service still runs the previous version; update it with: sudo leakguard enable" >&2
+		/usr/bin/leakguard reinstall-service || {
+			echo "leakguard: warning: the background service could not be updated to this version." >&2
+			echo "leakguard: your protection rules stay loaded. Fix it with: sudo leakguard enable" >&2
+			echo "leakguard: see what the service is doing with: systemctl status leakguard" >&2
+		}
 	fi
 	;;
 esac

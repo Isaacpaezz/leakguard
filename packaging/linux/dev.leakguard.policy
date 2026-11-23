@@ -6,7 +6,9 @@
   The administrator prompt of the leakguard tray app. The app runs
   "pkexec /usr/bin/leakguard enable|disable ..." for the first setup and the
   uninstall, and the root-owned copy the systemd service runs once it is
-  installed. Only administrators can authorize it.
+  installed. Only administrators can authorize it, once per change, like
+  the macOS administrator prompt: auth_admin, never auth_admin_keep, so no
+  authorization is cached for other programs to reuse.
 -->
 <policyconfig>
   <vendor>leakguard</vendor>
@@ -21,7 +23,7 @@
     <defaults>
       <allow_any>auth_admin</allow_any>
       <allow_inactive>auth_admin</allow_inactive>
-      <allow_active>auth_admin_keep</allow_active>
+      <allow_active>auth_admin</allow_active>
     </defaults>
     <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/leakguard</annotate>
   </action>
@@ -34,7 +36,7 @@
     <defaults>
       <allow_any>auth_admin</allow_any>
       <allow_inactive>auth_admin</allow_inactive>
-      <allow_active>auth_admin_keep</allow_active>
+      <allow_active>auth_admin</allow_active>
     </defaults>
     <annotate key="org.freedesktop.policykit.exec.path">/usr/local/libexec/leakguard/leakguard</annotate>
   </action>
