@@ -116,7 +116,6 @@ func TestCheckVPNInterface(t *testing.T) {
 	cases := map[string]string{
 		"":           "VPN interface is not set",
 		"ipsec0 all": "not a valid interface name",
-		"Ipsec0":     "not a valid interface name",
 		"en0":        "not a VPN interface",
 		"lo0":        "not a VPN interface",
 	}

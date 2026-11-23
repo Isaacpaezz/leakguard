@@ -180,6 +180,10 @@ func TestServeReloadsWhenTheClockGoesBackwards(t *testing.T) {
 func TestServeLoadsTheRulesWithCorruptStats(t *testing.T) {
 	h, p := statefulHarness(t)
 	path := h.path(stats.DefaultPath)
+	// The stats directory is not the config directory on every OS.
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(path, []byte("{not json"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -199,6 +203,9 @@ func TestServeLoadsTheRulesWithCorruptStats(t *testing.T) {
 // S5b: a pause whose config save fails flushed the counter; the reload that
 // follows never counts a block twice.
 func TestServePauseWithAFailedSaveNeverDoubleCounts(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions, so the save cannot be made to fail")
+	}
 	h, p := statefulHarness(t)
 	h.env.ApplyEvery = 5 * time.Millisecond
 	s := startServe(t, h)
