@@ -20,7 +20,7 @@
 
 <p align="center">
   <a href="https://github.com/Isaacpaezz/leakguard/releases"><strong>⬇️ Download for macOS, Linux or Windows</strong></a><br>
-  <sub>0.3.0 is a pre-release. macOS 13 or newer (Apple silicon or Intel), Linux with nftables and systemd (<code>.deb</code> and <code>.tar.gz</code>, amd64 and arm64), or Windows 10 and 11 (<code>setup.exe</code>, amd64 and arm64).</sub><br>
+  <sub>0.3.1 is a pre-release. macOS 13 or newer (Apple silicon or Intel), Linux with nftables and systemd (<code>.deb</code> and <code>.tar.gz</code>, amd64 and arm64), or Windows 10 and 11 (<code>setup.exe</code>, amd64 and arm64).</sub><br>
   <sub><a href="#which-file-do-i-download">Which file do I download?</a> · Install guides: <a href="docs/install-macos.md">macOS</a> · <a href="docs/install-linux.md">Linux</a> · <a href="docs/install-windows.md">Windows</a>.</sub>
 </p>
 
@@ -153,7 +153,7 @@ next to the clock):
 ## Which file do I download?
 
 Get it from [Releases](https://github.com/Isaacpaezz/leakguard/releases).
-`VERSION` is the release number, for example `0.3.0`.
+`VERSION` is the release number, for example `0.3.1`.
 
 | Your computer | Download |
 |---|---|
@@ -171,7 +171,7 @@ the text of the `.sha256`).
 
 ## Install on macOS
 
-> 0.3.0 is a pre-release. macOS 13 or newer, Apple silicon or Intel, and an
+> 0.3.1 is a pre-release. macOS 13 or newer, Apple silicon or Intel, and an
 > administrator account on the Mac.
 
 1. Download `leakguard-VERSION-macos.dmg` from
@@ -260,19 +260,12 @@ Missing a service? [Request it](https://github.com/Isaacpaezz/leakguard/issues/n
 ## What's new
 
 <!-- BEGIN GENERATED: whats-new -->
-**v0.3.0** · 2026-11-23
+**v0.3.1** · 2026-11-23
 
-leakguard for Windows (pre-release). Its firewall is tested
-automatically with real Windows Filtering Platform filters, but the tray app,
-the installer on a real PC and a real VPN drop have not yet been tried on a
-real Windows PC: please report any problem.
+A fix for Windows (pre-release).
 
-**Added**
-- Windows support: `setup.exe` installers for Windows 10 and 11 (amd64 and arm64), each with a SHA-256 checksum and an install guide in Spanish and English ([docs/install-windows.md](docs/install-windows.md)). They always install to Program Files, which only administrators can change (another folder is refused), with a Start menu entry; uninstalling from Settings > Apps also removes the protection, and running a newer installer restarts the background service with the new version, keeping your choices. Not signed with a certificate yet, so Windows asks you to allow it once ("More info", then "Run anyway").
-- On Windows, a Windows Filtering Platform firewall blocks protected destinations outside the VPN at once; its filters stay loaded across restarts of the background service, and only VPN adapters are accepted as the VPN: Ethernet, Wi-Fi, loopback and virtual machine adapters never are.
-- On Windows, a Windows service (`leakguard`, run as SYSTEM, started at boot and restarted when it fails) checks the rules every 30 seconds and as soon as the VPN connects or drops, and logs to `C:\ProgramData\leakguard\leakguard.log`; only administrators can change the protection through it, also from the tray app without elevation.
-- On Windows, the tray app with the same menu, 3-step setup, session stats, "Open at login" and uninstall as on macOS, in Spanish or English like Windows, with one administrator prompt (UAC) per change; when a change fails, it shows the reason. The blocks count is not shown on Windows yet.
-- Known limit on Windows: WSL2, Hyper-V virtual machines and Hyper-V containers do not go through leakguard yet, so if the VPN drops a program inside them can reach the protected services over the real connection; run Claude Code and similar tools directly on Windows.
+**Fixed**
+- On Windows, the tray menu and `leakguard status` no longer say "no blocks": Windows cannot count blocks yet, so the "Today" line shows only how many times the VPN dropped (and the menu hides it when the VPN never dropped).
 <!-- END GENERATED: whats-new -->
 
 Full history: [CHANGELOG.md](CHANGELOG.md).
@@ -417,7 +410,7 @@ quedan sin internet hasta que la VPN vuelve. El resto de tu computadora
 
 Está pensado para países como Venezuela, donde estos servicios están
 restringidos y se usan a través de una VPN con *split tunneling* (por ejemplo,
-VPN Bypass). La versión 0.3.0, para macOS, Linux y Windows, todavía es una
+VPN Bypass). La versión 0.3.1, para macOS, Linux y Windows, todavía es una
 versión preliminar. Hoy protege Anthropic (Claude); ChatGPT
 (OpenAI) llegará en la versión 1.0.
 
@@ -499,7 +492,7 @@ notificación, junto al reloj):
 ### ¿Qué archivo descargo?
 
 Descárgalo desde [Releases](https://github.com/Isaacpaezz/leakguard/releases).
-`VERSIÓN` es el número de la versión, por ejemplo `0.3.0`.
+`VERSIÓN` es el número de la versión, por ejemplo `0.3.1`.
 
 | Tu computadora | Descarga |
 |---|---|
