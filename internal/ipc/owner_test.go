@@ -130,6 +130,15 @@ func TestAuthorizeLinuxPeer(t *testing.T) {
 	nonMember := strings.Replace(procStatus, "Groups:\t4 24 27 1000 \n", "Groups:\t4 24 1000 \n", 1)
 	primary := strings.NewReplacer("Gid:\t1000\t1000\t1000\t1000", "Gid:\t27\t27\t27\t27",
 		"Groups:\t4 24 27 1000 \n", "Groups:\t\n").Replace(procStatus)
+	// A setgid admin program: only the effective gid (what SO_PEERCRED
+	// reports) is the admin group; no supplementary groups.
+	effective := strings.NewReplacer("Gid:\t1000\t1000\t1000\t1000", "Gid:\t1000\t27\t27\t27",
+		"Groups:\t4 24 27 1000 \n", "Groups:\t\n").Replace(procStatus)
+	// The real gid is the admin group but the effective one is not.
+	realOnly := strings.NewReplacer("Gid:\t1000\t1000\t1000\t1000", "Gid:\t27\t1000\t1000\t1000",
+		"Groups:\t4 24 27 1000 \n", "Groups:\t\n").Replace(procStatus)
+	// A member that dropped its supplementary groups (setgroups(0)).
+	cleared := strings.Replace(procStatus, "Groups:\t4 24 27 1000 \n", "Groups:\t\n", 1)
 	cases := []struct {
 		name     string
 		uid, gid uint32
@@ -150,6 +159,9 @@ func TestAuthorizeLinuxPeer(t *testing.T) {
 		// The pid was reused by another process: its ids differ from SO_PEERCRED.
 		{"uid mismatch", 1001, 1000, member, 27, true, false},
 		{"gid mismatch", 1000, 1001, member, 27, true, false},
+		{"effective gid member", 1000, 27, effective, 27, true, true},
+		{"real gid member only", 1000, 1000, realOnly, 27, true, false},
+		{"cleared supplementary groups", 1000, 1000, cleared, 27, true, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
