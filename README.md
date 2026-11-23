@@ -15,16 +15,18 @@
   <a href="https://github.com/Isaacpaezz/leakguard/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Isaacpaezz/leakguard/ci.yml?branch=main&style=for-the-badge&label=CI" alt="CI status"></a>
   <a href="https://github.com/Isaacpaezz/leakguard/releases"><img src="https://img.shields.io/github/v/release/Isaacpaezz/leakguard?include_prereleases&style=for-the-badge" alt="Latest release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-2ea44f?style=for-the-badge" alt="MIT license"></a>
-  <img src="https://img.shields.io/badge/platform-macOS%2013%2B-555555?style=for-the-badge" alt="Platform: macOS 13 or newer">
+  <img src="https://img.shields.io/badge/platform-macOS%2013%2B%20%C2%B7%20Linux-555555?style=for-the-badge" alt="Platform: macOS 13 or newer, and Linux">
 </p>
 
 <p align="center">
   <a href="https://github.com/Isaacpaezz/leakguard/releases"><strong>⬇️ Download for macOS</strong></a><br>
-  <sub>0.1.0 is the first public version, a pre-release. macOS 13 or newer, Apple silicon or Intel.</sub>
+  <sub>0.1.0 is the first public version, a pre-release. macOS 13 or newer, Apple silicon or Intel.</sub><br>
+  <sub>Linux (<code>.deb</code> and <code>.tar.gz</code>) is coming as a pre-release: <a href="docs/install-linux.md">Linux install guide</a>.</sub>
 </p>
 
 <p align="center">
   <a href="#install-on-macos">Install</a> ·
+  <a href="#install-on-linux">Linux</a> ·
   <a href="#what-you-see">What you see</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="#supported-services">Services</a> ·
@@ -68,8 +70,8 @@ block return out quick to <protected-services>
 
 If the VPN interface is gone, no allowed path is left and the connection fails
 at once: in about 8 ms in our macOS tests. No detection race, and no leak.
-On macOS this is a `pf` anchor kept by a background service that loads it at
-boot and checks it every 30 seconds.
+On macOS this is a `pf` anchor, and on Linux an `nftables` table, kept by a
+background service that loads it at boot and checks it every 30 seconds.
 
 ## What you see
 
@@ -122,6 +124,29 @@ leakguard, choose "Uninstall leakguard…" in its menu, enter your password,
 then drag the app to the Trash. Step-by-step guide in Spanish and English,
 also inside the DMG: [docs/install-macos.md](docs/install-macos.md).
 
+## Install on Linux
+
+> A pre-release. The firewall is tested automatically with real `nftables`
+> rules, but the tray icon and a real VPN drop have not yet been tried on a
+> real Linux desktop. Please
+> [report](https://github.com/Isaacpaezz/leakguard/issues/new?template=bug_report.yml)
+> anything that does not work.
+
+1. Download `leakguard_VERSION_amd64.deb` (most PCs) or
+   `leakguard_VERSION_arm64.deb` (ARM, such as a Raspberry Pi) from
+   [Releases](https://github.com/Isaacpaezz/leakguard/releases).
+2. Install it: `sudo apt install ./leakguard_VERSION_amd64.deb` (Ubuntu,
+   Debian, Mint). Other distributions use the `.tar.gz`; they need
+   `nftables` and `systemd`.
+3. Open leakguard from the applications menu and follow the same 3-step
+   setup. The tray icon shows out of the box on Ubuntu; other GNOME desktops
+   need the AppIndicator extension.
+
+To remove it, choose "Uninstall leakguard…" in its menu, then
+`sudo apt remove leakguard`. Step-by-step guide in Spanish and English,
+including the command-line route:
+[docs/install-linux.md](docs/install-linux.md).
+
 ## Supported services
 
 IP ranges live in [`catalog/services/`](catalog/services/), one file per
@@ -165,7 +190,7 @@ Full history: [CHANGELOG.md](CHANGELOG.md).
 | 0.1.0 | macOS: menu-bar app, 3-step setup, Claude protection, DMG installer | ✅ First public version (pre-release) |
 | 1.0 | [Milestone 1.0](https://github.com/Isaacpaezz/leakguard/milestone/1): ChatGPT/OpenAI ([#14](https://github.com/Isaacpaezz/leakguard/issues/14)), self-updating IP ranges ([#16](https://github.com/Isaacpaezz/leakguard/issues/16)), signed and notarized app ([#15](https://github.com/Isaacpaezz/leakguard/issues/15)), menu polish ([#8](https://github.com/Isaacpaezz/leakguard/issues/8)) | 🚧 Next |
 | 1.1 | Windows: Windows Filtering Platform backend and tray app | 🗓️ Planned |
-| 1.2 | Linux: `nftables` backend and tray app | 🗓️ Planned |
+| 1.2 | Linux: `nftables` backend, systemd service, tray app, `.deb` and `.tar.gz` ([guide](docs/install-linux.md)) | 🧪 Built, not released yet; the tray app is not yet tried on a real desktop |
 
 Design notes and lessons learned: [docs/HANDOFF.md](docs/HANDOFF.md).
 
@@ -296,6 +321,9 @@ todavía es una versión preliminar. Hoy protege Anthropic (Claude); ChatGPT
 
 **[⬇️ Descargar para macOS](https://github.com/Isaacpaezz/leakguard/releases)**
 
+Linux (`.deb` y `.tar.gz`) llega como versión preliminar: mira la
+[guía de instalación para Linux](docs/install-linux.md).
+
 ### Qué ves
 
 Un escudo en la barra de menú. Su menú te dice si estás protegido, cuánto
@@ -356,10 +384,29 @@ protección**.
 
 Si cancelas, no se cambia nada.
 
+### Instalar en Linux
+
+Es una versión preliminar: el cortafuegos se prueba automáticamente con
+reglas reales de nftables, pero el ícono de la bandeja y una caída real de la
+VPN todavía no se han probado en un escritorio Linux de verdad. Si algo falla,
+[cuéntanos](https://github.com/Isaacpaezz/leakguard/issues/new?template=bug_report.yml).
+
+1. Descarga `leakguard_VERSIÓN_amd64.deb` (la mayoría de las computadoras) o
+   `leakguard_VERSIÓN_arm64.deb` (ARM, como una Raspberry Pi) desde
+   [Releases](https://github.com/Isaacpaezz/leakguard/releases).
+2. Instálalo: `sudo apt install ./leakguard_VERSIÓN_amd64.deb`.
+3. Abre leakguard desde el menú de aplicaciones y sigue los 3 pasos. En
+   Ubuntu el escudo aparece solo; otros escritorios GNOME necesitan la
+   extensión AppIndicator.
+
+Guía completa, con el `.tar.gz` para otras distribuciones y la ruta por
+terminal: [docs/install-linux.md](docs/install-linux.md).
+
 ### Enlaces
 
 - Guía completa de instalación, también dentro del DMG:
   [docs/install-macos.md](docs/install-macos.md)
+- Guía de instalación para Linux: [docs/install-linux.md](docs/install-linux.md)
 - Descargas: [Releases](https://github.com/Isaacpaezz/leakguard/releases)
 - ¿Algo no funciona? [Reporta un problema](https://github.com/Isaacpaezz/leakguard/issues/new?template=bug_report.yml)
   (puedes escribir en español).

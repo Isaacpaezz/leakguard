@@ -203,7 +203,26 @@ is the original work breakdown.
    counter unseen: blocks may be lost then, never counted twice. VPN gaps over 2 min (sleep, daemon down) add no time and
    no drop. "Today" resets at local midnight, also across DST. Stats
    errors are logged once and never change protection.
-3. Linux `nftables` backend and tray app (release 1.2).
+3. 🧪 Built on `feat/linux-support`, not released (`odd/tasks/linux-windows.md`).
+   Linux `nftables` backend and tray app (release 1.2). Exists: per-OS VPN
+   rules (sysfs facts; Ethernet, Wi-Fi, Docker, bridges, veth, loopback
+   refused), `internal/firewall` and `daemon.Manager` interfaces picked only
+   in `main`, `internal/nft` (table `inet leakguard`, reject outside the VPN,
+   counter, `nft -j` verify, block-all when the saved VPN is refused),
+   systemd unit `leakguard.service` before `network-pre.target`, socket
+   `/run/leakguard.sock` (root and the first of `sudo`/`wheel`/`admin`,
+   `SO_PEERCRED`), `SO_BINDTODEVICE` probe, the tray app `leakguard-tray`
+   (static, D-Bus StatusNotifierItem, zenity/kdialog, pkexec, XDG
+   autostart), and `scripts/build-linux.sh` making a `.deb` (depends on
+   `nftables`, polkit policy, `prerm` that runs `leakguard disable`) and a
+   `.tar.gz` for amd64 and arm64, built on every pull request and uploaded
+   by the release workflow. Verified: the whole suite in Docker, real
+   nftables rules in Docker and on `ubuntu-latest` (refusal via an absent
+   VPN, counter, verify, block-all), and the `.deb` installing, running
+   `leakguard version`/`services` and removing cleanly in `debian:bookworm`.
+   Not verified live (no Linux machine, owner decision L3): the tray icon
+   and dialogs on a real desktop, the pkexec prompt with the polkit policy,
+   the systemd service at boot, and a real VPN dropping.
 4. Windows backend and tray app (release 1.1).
 5. Self-updating catalog (release 1.0, #16): a scheduled workflow refreshes ranges from their
    sources (ASN prefixes) and opens a PR; the app downloads a signed catalog.
@@ -257,7 +276,7 @@ is the original work breakdown.
    real blocks and a VPN drop counted. Pending: the first tagged run of the
    release workflow (`v0.1.0`).
    Later: Developer ID signing and notarization (1.0, #15; the bundle
-   layout stays the same), Homebrew tap, winget, Linux packages.
+   layout stays the same), Homebrew tap, winget. Linux packages: milestone 3.
 
 ## Resume prompt
 
