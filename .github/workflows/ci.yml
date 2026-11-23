@@ -73,16 +73,35 @@ jobs:
       - run: go vet ./...
       - name: Unit tests
         run: go test ./internal/catalog/... ./internal/firewall/... ./internal/wfp/...
-      # The Windows-only tests of the service, pipe, probe and adapter rules.
-      # continue-on-error until the whole suite is ported (T14).
-      - name: Windows tests of the other packages
-        continue-on-error: true
-        run: go test -count=1 -v ./internal/ipc/ ./internal/probe/ ./internal/config/ ./internal/daemon/ ./cmd/leakguard/
+      # The tests that only Windows can run: pipe and token, probe binding,
+      # real adapters, the data directory ACL, the SCM, the service handler,
+      # the default route and the CLI's Windows wiring. Required: they gate
+      # merges. Every package is run, then the step fails if one failed.
+      - name: Windows-only tests (required)
+        shell: bash
+        run: |
+          failed=0
+          t() { go test -count=1 -v -run "$1" "$2" || failed=1; }
+          t '^(TestPipe.*|TestDefaultPathIsThePipe|TestAuthorize.*Token.*)$' ./internal/ipc/
+          t '^(TestBoundDial.*OnWindows)$' ./internal/probe/
+          t '^(TestRealWindowsAdapters.*|TestPrepareDir.*|TestLoadRefuses.*)$' ./internal/config/
+          t '^(TestSCM.*|TestWindowsDefaultPaths|TestWindowsLastLogLineReadsOnlyATrustedLog)$' ./internal/daemon/
+          t '^(TestWindowsCommandLineRoundTrip|TestUserLang|TestProgramFiles|TestQuerySCM|TestCheckInstalledCLIWindows|TestDialogsWithoutManifest|TestShellExecuteInfoSize|TestRunElevatedExitCode|TestRegistryRunKey)$' ./internal/menubar/
+          t '^(TestWindowsLoadsTheTrayIcons|TestWindowsPlatform)$' ./cmd/leakguard-menubar/
+          t '^(TestSystemIsRootIsTheElevatedToken|TestWindowsBackends|TestWFPFirewall|TestWindowsDefaultInterface.*|TestRouteTableReadsInterfaceMetrics|TestRunAsSystemServiceOutsideTheSCM|TestSCM.*|TestRunUnderSCM.*|TestUsageOnWindows|TestOpenServiceLog)$' ./cmd/leakguard/
+          exit $failed
       # Loads real filters, probes them and flushes them at the end.
       - name: Load real WFP filters and probe them
+        if: ${{ !cancelled() }}
         env:
           LEAKGUARD_WFP_INTEGRATION: "1"
         run: go test -count=1 -run Integration -v ./internal/wfp/
+      # The portable suite of these packages still assumes Unix in places:
+      # continue-on-error until it is ported (T14).
+      - name: Portable tests of the other packages
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: go test -count=1 ./internal/ipc/ ./internal/probe/ ./internal/config/ ./internal/daemon/ ./cmd/leakguard/
 
   package-linux:
     name: Linux packages build (not uploaded)
