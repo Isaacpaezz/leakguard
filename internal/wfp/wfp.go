@@ -1,10 +1,25 @@
 // Package wfp drives the Windows Filtering Platform. leakguard owns one
 // persistent provider and one sublayer with fixed GUIDs and adds its filters
 // there, for IPv4 and IPv6: at ALE_AUTH_CONNECT (this computer's
-// connections) and at IPFORWARD (traffic it routes for containers, virtual
-// machines, WSL2 in NAT mode or ICS), one block per protected range and,
-// above it, one permit per range for traffic that leaves on the VPN
-// adapter. Other providers' filters are never read or touched.
+// connections) and at IPFORWARD (packets it routes for others), one block
+// per protected range and, above it, one permit per range for traffic that
+// leaves on the VPN adapter. Other providers' filters are never read or
+// touched.
+//
+// What CI proved on windows-latest (Server 2025, run 45125443458):
+// process-isolated Windows containers on Docker's nat network share this
+// kernel, so their connects are authorized at this computer's
+// ALE_AUTH_CONNECT and never pass IPFORWARD. With the VPN down they are
+// blocked (WSAEACCES); with the VPN up they stay blocked too, because
+// their ALE local interface is the container's own vNIC, never the VPN's:
+// over-blocking that fails closed. The IPFORWARD filters stay: they are
+// harmless to this computer's own traffic and are what can see guests with
+// their own kernel (WSL2 in NAT mode, Hyper-V virtual machines and
+// isolated containers, ICS clients). That part is proven only where
+// TestIntegrationForwardedTraffic could start a Hyper-V isolated
+// container; GitHub's runners may lack nested virtualization. WSL2 in
+// mirrored mode and virtual machines bridged on an external switch are
+// not forwarded by this computer and are not covered.
 //
 // The filter set, the diff against what is loaded and the swap from the old
 // set to the new one are portable and run against an Engine; only the
@@ -76,8 +91,10 @@ const (
 	// LayerConnectV6 is ALE_AUTH_CONNECT_V6.
 	LayerConnectV6
 	// LayerForwardV4 is IPFORWARD_V4: packets this computer routes for
-	// others (containers, virtual machines, WSL2 in NAT mode, ICS), which
-	// never pass ALE_AUTH_CONNECT.
+	// guests with their own kernel (virtual machines, WSL2 in NAT mode,
+	// Hyper-V isolated containers, ICS clients), which never pass its
+	// ALE_AUTH_CONNECT. Process-isolated containers do not reach it (see
+	// the package documentation).
 	LayerForwardV4
 	// LayerForwardV6 is IPFORWARD_V6.
 	LayerForwardV6

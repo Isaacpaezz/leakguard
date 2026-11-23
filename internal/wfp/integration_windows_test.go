@@ -1,6 +1,7 @@
 package wfp
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -452,38 +454,41 @@ func removeForeign(t *testing.T) {
 // ever blocked, and only while the test runs.
 const forwardTarget = "1.1.1.1:443"
 
-// TestIntegrationForwardedTraffic (SF2) proves the IPFORWARD filters on
-// traffic this computer forwards for others. A Windows container on
-// Docker's nat network reaches the internet through WinNAT on the host, so
-// the host forwards its packets from the vEthernet (nat) adapter to the
-// real one. The test copies its own binary into a Nano Server container
-// matching this Windows build and runs TestForwardProbe there to connect to
+// TestIntegrationForwardedTraffic (SF2) probes protected traffic that
+// does not start in this computer's own processes, from Windows containers
+// on Docker's nat network. The test copies its own binary into a Nano
+// Server container and runs TestForwardProbe there to connect to
 // forwardTarget, protected for the test. The binary goes in with docker cp
 // into the created, not yet started, container, never through a bind
 // mount: a mounted host folder keeps the host's ACL, which the container's
-// account cannot use (CreateProcess fails with ERROR_ACCESS_DENIED), while
-// a copied file inherits the container's own C:\ ACL. The probe also runs
-// as ContainerAdministrator. The log names the container's isolation,
-// network and addresses, so it shows whether its traffic is NAT-forwarded.
-// Phases:
+// account cannot use (CreateProcess fails with ERROR_ACCESS_DENIED). The
+// log names the container's isolation, network and addresses.
 //
-//   - nothing loaded: the container connects (the network works);
-//   - IPFORWARD blocks only: the container cannot connect, while this
-//     computer still can (forwarded traffic is filtered at IPFORWARD, and
-//     IPFORWARD never touches this computer's own connections);
-//   - IPFORWARD blocks and permits for the adapter the route leaves on (the
-//     VPN's role here): the container connects again (the permit matches
-//     the interface packets are forwarded to);
-//   - Apply with the VPN down (every block): the container cannot connect
-//     and this computer gets WSAEACCES;
-//   - after Flush: the container connects.
+// A process-isolated container shares this kernel: CI (run 45125443458,
+// Server 2025) showed its connects are authorized at this computer's
+// ALE_AUTH_CONNECT and never pass IPFORWARD. So the test asserts:
 //
-// It also logs, without judging, what ALE alone and a full Apply with that
-// adapter as the VPN do to the container: a process-isolated container
-// shares this kernel, so its own connects may meet ALE_AUTH_CONNECT too.
-// It needs an elevated shell, Docker with Windows containers and
-// LEAKGUARD_WFP_FORWARD_INTEGRATION=1, and fails rather than skips when
-// one is missing.
+//   - nothing loaded: the container connects (positive control, retried;
+//     failing it is the environment, not a filter);
+//   - Apply with the VPN down: the container's connect fails at once with
+//     WSAEACCES, and so does this computer's;
+//   - after Flush: the container connects again.
+//
+// With the adapter the route leaves on as the VPN, the container is still
+// blocked (its ALE local interface is its own vNIC, never the VPN's): that
+// over-blocking fails closed and is logged, not judged.
+//
+// A Hyper-V isolated container has its own kernel, like WSL2 and virtual
+// machines, so only forwarding on this computer can see its packets. When
+// the runner can start one, the test asserts that with the VPN down its
+// connect times out or is refused (IPFORWARD drops it) and that Flush
+// restores it; when it cannot (no nested virtualization), it logs that
+// IPFORWARD for Hyper-V isolated guests is unverified and does not fail.
+//
+// A negative phase passes only on its expected outcome; any other one is
+// inconclusive and fails. It needs an elevated shell, Docker with Windows
+// containers and LEAKGUARD_WFP_FORWARD_INTEGRATION=1, and fails rather
+// than skips when one is missing.
 func TestIntegrationForwardedTraffic(t *testing.T) {
 	if os.Getenv("LEAKGUARD_WFP_FORWARD_INTEGRATION") != "1" {
 		t.Skip("set LEAKGUARD_WFP_FORWARD_INTEGRATION=1 in an elevated shell with Docker (Windows containers) to probe forwarded traffic")
@@ -493,65 +498,19 @@ func TestIntegrationForwardedTraffic(t *testing.T) {
 	}
 	docker, err := exec.LookPath("docker")
 	if err != nil {
-		t.Fatalf("LEAKGUARD_WFP_FORWARD_INTEGRATION=1 needs Docker with Windows containers: %v", err)
+		t.Fatalf("environment: LEAKGUARD_WFP_FORWARD_INTEGRATION=1 needs Docker with Windows containers: %v", err)
 	}
 	image := nanoserverImage(t)
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	dockerDo := func(args ...string) (string, error) {
-		out, err := exec.Command(docker, args...).CombinedOutput()
-		return strings.TrimSpace(string(out)), err
-	}
-	start := time.Now()
-	if out, err := dockerDo("pull", image); err != nil {
-		t.Fatalf("docker pull %s: %v\n%s", image, err, out)
-	}
-	t.Logf("pulled %s in %v", image, time.Since(start).Round(time.Second))
-	info, err := dockerDo("info", "--format", "default isolation {{.Isolation}}, OS {{.OperatingSystem}} {{.KernelVersion}}")
+	c := containers{t: t, docker: docker, image: image, exe: exe}
+	c.pull()
+	info, err := c.do("info", "--format", "default isolation {{.Isolation}}, OS {{.OperatingSystem}} {{.KernelVersion}}")
 	t.Logf("docker: %s (%v)", info, err)
-	info, err = dockerDo("network", "inspect", "nat", "--format", "network nat: driver {{.Driver}}, IPAM {{json .IPAM.Config}}, options {{json .Options}}")
+	info, err = c.do("network", "inspect", "nat", "--format", "network nat: driver {{.Driver}}, IPAM {{json .IPAM.Config}}")
 	t.Logf("docker: %s (%v)", info, err)
-	described := false
-	probe := func(phase string) bool {
-		t.Helper()
-		start := time.Now()
-		out, err := dockerDo("create", "--isolation=process", "--network=nat", "--user=ContainerAdministrator",
-			"-e", "LEAKGUARD_FORWARD_PROBE="+forwardTarget,
-			image, `C:\probe.exe`, "-test.run=^TestForwardProbe$", "-test.v")
-		if err != nil {
-			t.Fatalf("%s: docker create: %v\n%s", phase, err, out)
-		}
-		lines := strings.Fields(out)
-		id := lines[len(lines)-1]
-		defer dockerDo("rm", "--force", id)
-		if out, err := dockerDo("cp", exe, id+`:C:\probe.exe`); err != nil {
-			t.Fatalf("%s: docker cp the probe into the container: %v\n%s", phase, err, out)
-		}
-		if !described {
-			described = true
-			out, err := dockerDo("inspect", "--format", "isolation {{.HostConfig.Isolation}}, network mode {{.HostConfig.NetworkMode}}, user {{.Config.User}}", id)
-			t.Logf("container: %s (%v)", out, err)
-		}
-		out, err = dockerDo("start", "--attach", id)
-		var result string
-		ran := false
-		for _, l := range strings.Split(out, "\n") {
-			l = strings.TrimSpace(l)
-			if info, ok := strings.CutPrefix(l, "LEAKGUARD-PROBE-INFO: "); ok {
-				t.Logf("%s: in the container: %s", phase, info)
-			}
-			if r, ok := strings.CutPrefix(l, "LEAKGUARD-PROBE: "); ok {
-				result, ran = r, true
-			}
-		}
-		if !ran {
-			t.Fatalf("%s: the probe did not run in the container (%v):\n%s", phase, err, out)
-		}
-		t.Logf("%s: container connect %s after %v: %s", phase, forwardTarget, time.Since(start).Round(time.Millisecond), result)
-		return result == "connected"
-	}
 
 	f := Firewall{Check: func(string) error { return nil }} // config refuses Ethernet as the VPN
 	if err := f.Flush(); err != nil {
@@ -564,72 +523,238 @@ func TestIntegrationForwardedTraffic(t *testing.T) {
 		nothingLeft(t)
 	})
 	services := []catalog.Service{{ID: "forward-test", IPv4: []string{"1.1.1.1/32"}}}
-	only := func(luid uint64, forward bool) []Rule {
-		t.Helper()
-		rules, err := Rules(luid, services)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return slices.DeleteFunc(rules, func(r Rule) bool { return r.Layer.Forward() != forward })
-	}
-	out := routeTo(t, [4]byte{1, 1, 1, 1})
-	t.Logf("the route to %s leaves on %q, LUID %#x", forwardTarget, out.Alias, out.LUID)
+	route := routeTo(t, [4]byte{1, 1, 1, 1})
+	t.Logf("the route to %s leaves on %q, LUID %#x", forwardTarget, route.Alias, route.LUID)
 
-	if !probe("nothing loaded") {
-		t.Fatalf("with no filter loaded the container cannot reach %s: the runner's container network does not work, nothing was proven", forwardTarget)
+	// Process isolation: this computer's ALE_AUTH_CONNECT.
+	const process = "process"
+	if r := c.reach(process, "nothing loaded"); !r.ran || r.outcome != outConnected {
+		t.Fatalf("environment: with no filter loaded a process-isolated container cannot reach %s after %d tries (last: %s); nothing about the filters was tested", forwardTarget, reachTries, r)
 	}
-
-	if err := f.load(only(0, true)); err != nil {
-		t.Fatalf("load the IPFORWARD blocks: %v", err)
-	}
-	if probe("IPFORWARD blocks only") {
-		t.Errorf("forwarded traffic to %s passed the IPFORWARD block", forwardTarget)
-	}
-	if err := connect(forwardTarget, 5*time.Second); err != nil {
-		t.Errorf("with IPFORWARD filters only, this computer's own connect to %s: %s; IPFORWARD must not touch it", forwardTarget, classify(err))
-	}
-
-	if err := f.load(only(out.LUID, true)); err != nil {
-		t.Fatalf("load the IPFORWARD blocks and permits: %v", err)
-	}
-	if !probe("IPFORWARD blocks and permits for " + out.Alias) {
-		t.Errorf("forwarded traffic to %s leaving on %q (LUID %#x) was blocked: the permit must match the interface packets are forwarded to", forwardTarget, out.Alias, out.LUID)
-	}
-
-	if err := f.load(only(0, false)); err != nil {
-		t.Fatalf("load the ALE blocks: %v", err)
-	}
-	t.Logf("diagnostic, not judged: with ALE_AUTH_CONNECT blocks only, the container connected = %v", probe("ALE blocks only"))
-
 	if err := f.Apply(absentVPN, services); err != nil {
 		t.Fatalf("Apply(%q): %v", absentVPN, err)
 	}
 	if err := f.Verify(absentVPN, services); err != nil {
 		t.Errorf("Verify(%q): %v", absentVPN, err)
 	}
-	if probe("Apply with the VPN down") {
-		t.Errorf("with the VPN down, forwarded traffic to %s passed", forwardTarget)
-	}
+	c.expectDenied(c.probe(process, "Apply with the VPN down"))
 	if err := connect(forwardTarget, 5*time.Second); !errors.Is(err, windows.WSAEACCES) {
-		t.Errorf("with the VPN down, this computer's connect to %s: %s; want WSAEACCES", forwardTarget, classify(err))
+		t.Errorf("filter: with the VPN down, this computer's connect to %s: %s; want WSAEACCES", forwardTarget, classify(err))
 	}
-
-	if err := f.Apply(out.Alias, services); err != nil {
-		t.Fatalf("Apply(%q): %v", out.Alias, err)
+	if err := f.Apply(route.Alias, services); err != nil {
+		t.Fatalf("Apply(%q): %v", route.Alias, err)
 	}
-	t.Logf("diagnostic, not judged: with every filter and %q as the VPN, the container connected = %v", out.Alias, probe("Apply with "+out.Alias+" as the VPN"))
-
+	if r := c.probe(process, "Apply with "+route.Alias+" as the VPN"); r.outcome == outConnected {
+		t.Logf("diagnostic, not judged: with %q as the VPN a process-isolated container connected", route.Alias)
+	} else {
+		t.Logf("diagnostic, not judged (over-blocking, fails closed): with %q as the VPN a process-isolated container is still blocked (%s): its connects are authorized at this computer's ALE_AUTH_CONNECT with the container's own vNIC as the local interface, never the VPN's", route.Alias, r)
+	}
 	if err := f.Flush(); err != nil {
 		t.Fatalf("Flush: %v", err)
 	}
-	if !probe("after Flush") {
-		t.Errorf("after Flush the container cannot reach %s", forwardTarget)
+	if r := c.reach(process, "after Flush"); !r.ran || r.outcome != outConnected {
+		t.Errorf("after Flush a process-isolated container cannot reach %s after %d tries (last: %s): a filter was left behind, or the environment failed", forwardTarget, reachTries, r)
 	}
+
+	// Hyper-V isolation: its own kernel, so only IPFORWARD can see it.
+	const hyperv = "hyperv"
+	r := c.probe(hyperv, "Hyper-V isolation, nothing loaded")
+	if !r.ran {
+		t.Logf("IPFORWARD for Hyper-V isolated guests (WSL2, VMs) is unverified on this runner: a Hyper-V isolated container cannot start here (%s)", r.failure)
+		return
+	}
+	if r.outcome != outConnected {
+		if r = c.reach(hyperv, "Hyper-V isolation, nothing loaded"); !r.ran || r.outcome != outConnected {
+			t.Fatalf("environment: with no filter loaded a Hyper-V isolated container cannot reach %s after %d more tries (last: %s); IPFORWARD was not tested", forwardTarget, reachTries, r)
+		}
+	}
+	if err := f.Apply(absentVPN, services); err != nil {
+		t.Fatalf("Apply(%q): %v", absentVPN, err)
+	}
+	c.expectDropped(c.probe(hyperv, "Hyper-V isolation, Apply with the VPN down"))
+	if err := f.Apply(route.Alias, services); err != nil {
+		t.Fatalf("Apply(%q): %v", route.Alias, err)
+	}
+	t.Logf("diagnostic, not judged: with %q as the VPN a Hyper-V isolated container: %s", route.Alias, c.probe(hyperv, "Hyper-V isolation, Apply with "+route.Alias+" as the VPN"))
+	if err := f.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if r := c.reach(hyperv, "Hyper-V isolation, after Flush"); !r.ran || r.outcome != outConnected {
+		t.Errorf("after Flush a Hyper-V isolated container cannot reach %s after %d tries (last: %s): a filter was left behind, or the environment failed", forwardTarget, reachTries, r)
+	}
+}
+
+// The outcomes TestForwardProbe reports, first word of its result line.
+const (
+	outConnected = "connected"
+	outDenied    = "WSAEACCES" // refused by a WFP filter at ALE
+	outTimeout   = "timeout"   // the packets were dropped
+	outRefused   = "refused"   // WSAECONNREFUSED
+	outOther     = "other"
+)
+
+// outcome classifies a connect's result for TestForwardProbe.
+func outcome(err error) string {
+	var ne net.Error
+	switch {
+	case err == nil:
+		return outConnected
+	case errors.Is(err, windows.WSAEACCES):
+		return outDenied
+	case errors.Is(err, windows.WSAECONNREFUSED):
+		return outRefused
+	case errors.As(err, &ne) && ne.Timeout():
+		return outTimeout
+	}
+	return outOther
+}
+
+// reachTries is how often a positive control is tried before the
+// environment is blamed.
+const reachTries = 3
+
+// containers runs TestForwardProbe in Nano Server containers.
+type containers struct {
+	t                  *testing.T
+	docker, image, exe string
+	described          map[string]bool
+}
+
+// probeResult is what one container run reported.
+type probeResult struct {
+	ran     bool          // the probe printed its result
+	outcome string        // outConnected, outDenied, ...
+	took    time.Duration // as the probe measured the connect
+	detail  string
+	failure string // why the probe did not run
+}
+
+func (r probeResult) String() string {
+	if !r.ran {
+		return "the probe did not run: " + r.failure
+	}
+	return fmt.Sprintf("%s after %v: %s", r.outcome, r.took, r.detail)
+}
+
+// do runs docker, giving up after 10 minutes (a Hyper-V isolated
+// container that cannot start must not hang the step).
+func (c *containers) do(args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, c.docker, args...).CombinedOutput()
+	return strings.TrimSpace(string(out)), err
+}
+
+// pull pulls the image, retrying, and fails blaming the environment.
+func (c *containers) pull() {
+	c.t.Helper()
+	var out string
+	var err error
+	for i := 1; i <= reachTries; i++ {
+		start := time.Now()
+		if out, err = c.do("pull", c.image); err == nil {
+			c.t.Logf("pulled %s in %v", c.image, time.Since(start).Round(time.Second))
+			return
+		}
+		c.t.Logf("docker pull %s, try %d: %v\n%s", c.image, i, err, out)
+		time.Sleep(10 * time.Second)
+	}
+	c.t.Fatalf("environment: cannot pull %s after %d tries: %v\n%s", c.image, reachTries, err, out)
+}
+
+// reach probes until the container connects, at most reachTries times.
+func (c *containers) reach(isolation, phase string) probeResult {
+	c.t.Helper()
+	var r probeResult
+	for i := 1; i <= reachTries; i++ {
+		if r = c.probe(isolation, fmt.Sprintf("%s (try %d)", phase, i)); r.ran && r.outcome == outConnected {
+			return r
+		}
+		time.Sleep(5 * time.Second)
+	}
+	return r
+}
+
+// expectDenied passes only when the connect failed at once with
+// WSAEACCES, which a WFP filter at ALE_AUTH_CONNECT returns.
+func (c *containers) expectDenied(r probeResult) {
+	c.t.Helper()
+	switch {
+	case !r.ran:
+		c.t.Errorf("inconclusive: %s", r)
+	case r.outcome == outConnected:
+		c.t.Errorf("filter: with the VPN down the container reached %s: %s", forwardTarget, r)
+	case r.outcome != outDenied || r.took > 1500*time.Millisecond:
+		c.t.Errorf("inconclusive: with the VPN down the container's connect %s; want WSAEACCES at once", r)
+	}
+}
+
+// expectDropped passes only when the connect timed out or was refused:
+// IPFORWARD drops the guest's packets, so its own kernel gives up.
+func (c *containers) expectDropped(r probeResult) {
+	c.t.Helper()
+	switch {
+	case !r.ran:
+		c.t.Errorf("inconclusive: %s", r)
+	case r.outcome == outConnected:
+		c.t.Errorf("filter: with the VPN down the Hyper-V isolated container reached %s: IPFORWARD did not block it: %s", forwardTarget, r)
+	case r.outcome != outTimeout && r.outcome != outRefused:
+		c.t.Errorf("inconclusive: with the VPN down the Hyper-V isolated container's connect %s; want a timeout or a refusal", r)
+	}
+}
+
+// probe runs TestForwardProbe once in a new container with this isolation
+// and logs what it reports.
+func (c *containers) probe(isolation, phase string) probeResult {
+	c.t.Helper()
+	start := time.Now()
+	out, err := c.do("create", "--isolation="+isolation, "--network=nat", "--user=ContainerAdministrator",
+		"-e", "LEAKGUARD_FORWARD_PROBE="+forwardTarget,
+		c.image, `C:\probe.exe`, "-test.run=^TestForwardProbe$", "-test.v")
+	if err != nil {
+		r := probeResult{failure: fmt.Sprintf("docker create: %v: %s", err, out)}
+		c.t.Logf("%s: %s", phase, r)
+		return r
+	}
+	fields := strings.Fields(out)
+	id := fields[len(fields)-1]
+	defer c.do("rm", "--force", id)
+	if out, err := c.do("cp", c.exe, id+`:C:\probe.exe`); err != nil {
+		r := probeResult{failure: fmt.Sprintf("docker cp the probe into the container: %v: %s", err, out)}
+		c.t.Logf("%s: %s", phase, r)
+		return r
+	}
+	if c.described == nil {
+		c.described = map[string]bool{}
+	}
+	if !c.described[isolation] {
+		c.described[isolation] = true
+		out, err := c.do("inspect", "--format", "isolation {{.HostConfig.Isolation}}, network mode {{.HostConfig.NetworkMode}}, user {{.Config.User}}", id)
+		c.t.Logf("container: %s (%v)", out, err)
+	}
+	out, err = c.do("start", "--attach", id)
+	r := probeResult{failure: fmt.Sprintf("docker start: %v: %s", err, out)}
+	for _, l := range strings.Split(out, "\n") {
+		l = strings.TrimSpace(l)
+		if info, ok := strings.CutPrefix(l, "LEAKGUARD-PROBE-INFO: "); ok {
+			c.t.Logf("%s: in the container: %s", phase, info)
+		}
+		if res, ok := strings.CutPrefix(l, "LEAKGUARD-PROBE: "); ok {
+			parts := strings.SplitN(res, " ", 3)
+			if len(parts) == 3 {
+				ms, _ := strconv.Atoi(parts[1])
+				r = probeResult{ran: true, outcome: parts[0], took: time.Duration(ms) * time.Millisecond, detail: parts[2]}
+			}
+		}
+	}
+	c.t.Logf("%s (%s isolation, %v in all): container connect %s: %s", phase, isolation, time.Since(start).Round(time.Millisecond), forwardTarget, r)
+	return r
 }
 
 // TestForwardProbe is not a test of its own: TestIntegrationForwardedTraffic
 // runs this binary inside a Windows container, where it connects to the
-// address in LEAKGUARD_FORWARD_PROBE and prints the outcome.
+// address in LEAKGUARD_FORWARD_PROBE and prints "LEAKGUARD-PROBE: <outcome>
+// <milliseconds> <detail>".
 func TestForwardProbe(t *testing.T) {
 	target := os.Getenv("LEAKGUARD_FORWARD_PROBE")
 	if target == "" {
@@ -644,12 +769,14 @@ func TestForwardProbe(t *testing.T) {
 		}
 	}
 	fmt.Printf("LEAKGUARD-PROBE-INFO: addresses %s\n", strings.Join(addrs, ", "))
-	c, err := net.DialTimeout("tcp", target, 5*time.Second)
+	start := time.Now()
+	conn, err := net.DialTimeout("tcp", target, 5*time.Second)
+	took := time.Since(start)
 	if err == nil {
-		fmt.Printf("LEAKGUARD-PROBE-INFO: connected from %s to %s\n", c.LocalAddr(), c.RemoteAddr())
-		c.Close()
+		fmt.Printf("LEAKGUARD-PROBE-INFO: connected from %s to %s\n", conn.LocalAddr(), conn.RemoteAddr())
+		conn.Close()
 	}
-	fmt.Printf("LEAKGUARD-PROBE: %s\n", classify(err))
+	fmt.Printf("LEAKGUARD-PROBE: %s %d %s\n", outcome(err), took.Milliseconds(), classify(err))
 }
 
 // nanoserverImage is the Nano Server image a process-isolated container
