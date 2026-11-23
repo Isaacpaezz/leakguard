@@ -88,10 +88,13 @@ func VPNCandidates(names []string) []string {
 	return host.candidates(names)
 }
 
-// Load reads the configuration at path. A missing file returns ErrNotConfigured.
+// Load reads the configuration at path. A missing file returns
+// ErrNotConfigured. On Windows a file someone other than SYSTEM and
+// Administrators may write, or a link, is refused with ErrUnsafePath, so
+// the SYSTEM daemon never runs a configuration a user planted.
 func Load(path string) (Config, error) {
 	var c Config
-	data, err := os.ReadFile(path)
+	data, err := readTrusted(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return c, ErrNotConfigured
 	}
@@ -109,9 +112,20 @@ func Load(path string) (Config, error) {
 	return c, nil
 }
 
+// readTrusted reads the file OpenTrusted opens.
+func readTrusted(path string) ([]byte, error) {
+	f, err := OpenTrusted(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(f)
+}
+
 // Save writes the configuration atomically, readable by everyone and writable
 // only by its owner. The directory is made by PrepareDir: on Windows only
-// SYSTEM and Administrators can write it.
+// SYSTEM and Administrators can write it, and the new file replaces
+// whatever had the name (a file a user planted included) by a rename.
 func Save(path string, c Config) error {
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
@@ -130,6 +144,10 @@ func Save(path string, c Config) error {
 		return err
 	}
 	if err := tmp.Chmod(0o644); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := ownFile(tmp.Name()); err != nil {
 		tmp.Close()
 		return err
 	}

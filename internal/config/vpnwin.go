@@ -131,11 +131,18 @@ func classifyWindows(name string, a windowsAdapter) error {
 		if containsFold(desc, winVPNDescriptions) {
 			return nil
 		}
-		// RAS connections have no hardware address.
+		// RAS connections have no hardware address. A PPPoE WAN Miniport
+		// (PPP without a MAC) is accepted here too, like Linux ppp0: it
+		// is the real connection of some DSL users, but Windows cannot
+		// tell it from a PPP VPN, and the setup wizard picks the adapter
+		// that appears when the VPN connects.
 		if a.ifType != winVirtual && !a.hasMAC {
 			return nil
 		}
 	case winEthernet:
+		// AnyConnect and Fortinet adapters that report Ethernet are
+		// refused (fail closed): only these descriptions are trusted on
+		// an Ethernet type; the others need a tunnel, PPP or virtual one.
 		if containsFold(desc, winEthernetVPNDescriptions) {
 			return nil
 		}

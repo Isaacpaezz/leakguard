@@ -15,6 +15,8 @@ type fakeSCM struct {
 	calls []string
 	info  *ServiceInfo // nil: not installed
 	fail  map[string]error
+	// failN bounds how many calls of a method fail; absent: every call.
+	failN map[string]int
 	// stopKeepsRunning leaves the service running when Stop fails.
 	stopKeepsRunning bool
 }
@@ -22,7 +24,14 @@ type fakeSCM struct {
 func (f *fakeSCM) call(format string, a ...any) error {
 	c := fmt.Sprintf(format, a...)
 	f.calls = append(f.calls, c)
-	return f.fail[strings.Fields(c)[0]]
+	op := strings.Fields(c)[0]
+	if n, ok := f.failN[op]; ok {
+		if n == 0 {
+			return nil
+		}
+		f.failN[op] = n - 1
+	}
+	return f.fail[op]
 }
 
 func (f *fakeSCM) Query(name string) (ServiceInfo, error) {
@@ -113,6 +122,9 @@ func newWinHarness(t *testing.T, installed *ServiceInfo) *winHarness {
 			Log:     filepath.Join(dir, "ProgramData", "leakguard", "leakguard.log"),
 			SCM:     scm,
 			Sleep:   func(time.Duration) {},
+			// Windows reads only a log nobody else may write; the
+			// Windows tests prove that on real files.
+			openLog: os.Open,
 		},
 		scm: scm,
 		src: src,
@@ -307,6 +319,88 @@ func TestWindowsInstallFailsWhenTheSCMCannotBeQueried(t *testing.T) {
 	}
 	if _, serr := os.Stat(h.w.Binary); !errors.Is(serr, os.ErrNotExist) {
 		t.Fatalf("Install() wrote the binary: %v", serr)
+	}
+}
+
+// Once Install stopped the running service, every later failure starts it
+// again, so a failed upgrade never leaves the protection without its
+// daemon, and reports both what failed and whether the restart worked.
+func TestWindowsInstallStartsTheServiceAgainAfterAFailure(t *testing.T) {
+	busy := func(h *winHarness) {
+		h.w.Rename = func(oldpath, newpath string) error {
+			if h.scm.info.State == ServiceRunning {
+				return errors.New("Access is denied.")
+			}
+			return os.Rename(oldpath, newpath)
+		}
+	}
+	for _, tc := range []struct {
+		name  string
+		setup func(h *winHarness)
+		calls string
+		err   string
+	}{
+		{"second rename", func(h *winHarness) {
+			h.w.Rename = func(string, string) error { return errors.New("Access is denied.") }
+		}, "Query | Stop | Start", "cannot replace BIN: Access is denied."},
+		{"stop for the rename", func(h *winHarness) {
+			busy(h)
+			h.scm.fail["Stop"] = errors.New("timeout")
+		}, "Query | Stop | Start", "cannot stop the leakguard service to replace BIN: timeout"},
+		{"update", func(h *winHarness) {
+			busy(h)
+			h.scm.fail["Update"] = errors.New("boom")
+		}, "Query | Stop | Update | Start", "cannot set up the leakguard service: boom"},
+		{"recovery", func(h *winHarness) {
+			busy(h)
+			h.scm.fail["SetRecovery"] = errors.New("boom")
+		}, "Query | Stop | Update | SetRecovery | Start", "cannot set the recovery of the leakguard service: boom"},
+		{"stop for the restart", func(h *winHarness) {
+			h.scm.fail["Stop"] = errors.New("timeout")
+		}, "Query | Update | SetRecovery | Stop | Start", "the background service is not restarted: timeout"},
+		{"start", func(h *winHarness) {
+			busy(h)
+			h.scm.fail["Start"] = errors.New("The service did not respond")
+			h.scm.failN = map[string]int{"Start": 1}
+		}, "Query | Stop | Update | SetRecovery | Start | Start", "the background service is not started: The service did not respond"},
+	} {
+		for _, restartFails := range []bool{false, true} {
+			h := newWinHarness(t, &ServiceInfo{State: ServiceRunning, Command: wantCommand})
+			h.writeBinary(t, "old binary")
+			tc.setup(h)
+			want := strings.ReplaceAll(tc.err, "BIN", h.w.Binary) + "; the service was started again"
+			if restartFails {
+				h.scm.fail["Start"] = errors.New("Access is denied.")
+				delete(h.scm.failN, "Start")
+				if tc.name == "start" {
+					continue
+				}
+				want = strings.ReplaceAll(tc.err, "BIN", h.w.Binary) + "; the service could not be started again either: Access is denied."
+			}
+			err := h.w.Install(h.src)
+			if err == nil || err.Error() != want {
+				t.Errorf("%s fails (restart fails: %v): Install() = %v\nwant %s", tc.name, restartFails, err, want)
+			}
+			var ops []string
+			for _, c := range h.scm.calls {
+				ops = append(ops, strings.Fields(c)[0])
+			}
+			if got := strings.Join(ops, " | "); got != tc.calls {
+				t.Errorf("%s fails (restart fails: %v): calls = %s, want %s", tc.name, restartFails, got, tc.calls)
+			}
+			if !restartFails && h.scm.info.State != ServiceRunning {
+				t.Errorf("%s fails: the service is left %v", tc.name, h.scm.info.State)
+			}
+			h.noTemp(t)
+		}
+	}
+	// Both Start calls fail: both errors are reported.
+	h := newWinHarness(t, &ServiceInfo{State: ServiceRunning, Command: wantCommand})
+	h.scm.fail["Start"] = errors.New("The service did not respond")
+	err := h.w.Install(h.src)
+	want := "the background service is not started: The service did not respond; the service could not be started again either: The service did not respond"
+	if err == nil || err.Error() != want {
+		t.Errorf("Install() = %v\nwant %s", err, want)
 	}
 }
 

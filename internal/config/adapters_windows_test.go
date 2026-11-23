@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"unsafe"
@@ -34,24 +35,46 @@ func TestRealWindowsAdaptersAreClassified(t *testing.T) {
 // PrepareDir gives the directory to Administrators with a protected ACL.
 // It needs an elevated token, like the CI runner.
 func TestPrepareDirSecuresTheDirectory(t *testing.T) {
-	if !windows.GetCurrentProcessToken().IsElevated() {
-		t.Skip("needs an elevated token")
-	}
+	needElevated(t)
 	dir := filepath.Join(t.TempDir(), "leakguard")
 	if err := PrepareDir(dir); err != nil {
 		t.Fatalf("PrepareDir() = %v", err)
 	}
+	checkSecured(t, dir)
+	// Saving works inside it.
+	if err := Save(filepath.Join(dir, "config.json"), Config{VPNInterface: "WireGuard Tunnel", Services: []string{"anthropic"}}); err != nil {
+		t.Fatalf("Save() = %v", err)
+	}
+}
+
+// needElevated skips without an elevated token, except on CI, which must
+// run these tests elevated.
+func needElevated(t *testing.T) {
+	t.Helper()
+	if windows.GetCurrentProcessToken().IsElevated() {
+		return
+	}
+	if os.Getenv("CI") != "" {
+		t.Fatal("needs an elevated token, and CI runs elevated")
+	}
+	t.Skip("needs an elevated token")
+}
+
+// checkSecured checks that dir belongs to Administrators, has a protected
+// DACL, and only SYSTEM and Administrators may write it.
+func checkSecured(t *testing.T, dir string) {
+	t.Helper()
 	sd, err := windows.GetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
 	if err != nil {
 		t.Fatal(err)
 	}
 	owner, _, err := sd.Owner()
 	if err != nil || !owner.IsWellKnown(windows.WinBuiltinAdministratorsSid) {
-		t.Errorf("owner = %v, %v; want BUILTIN\\Administrators", owner, err)
+		t.Errorf("owner = %v, %v; want BUILTIN\\Administrators (%s)", owner, err, sd)
 	}
 	control, _, err := sd.Control()
 	if err != nil || control&windows.SE_DACL_PROTECTED == 0 {
-		t.Errorf("control = %#x, %v; want a protected DACL", control, err)
+		t.Errorf("control = %#x, %v; want a protected DACL (%s)", control, err, sd)
 	}
 	dacl, _, err := sd.DACL()
 	if err != nil {
@@ -75,10 +98,6 @@ func TestPrepareDirSecuresTheDirectory(t *testing.T) {
 		writers[sid.String()] = true
 	}
 	if !writers["S-1-5-18"] || !writers["S-1-5-32-544"] {
-		t.Errorf("writers = %v, want SYSTEM and Administrators", writers)
-	}
-	// Saving works inside it.
-	if err := Save(filepath.Join(dir, "config.json"), Config{VPNInterface: "WireGuard Tunnel", Services: []string{"anthropic"}}); err != nil {
-		t.Fatalf("Save() = %v", err)
+		t.Errorf("writers = %v, want SYSTEM and Administrators (%s)", writers, sd)
 	}
 }

@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/Isaacpaezz/leakguard/internal/config"
 )
 
 const (
@@ -120,6 +122,8 @@ type WindowsService struct {
 	Remove func(path string) error
 	// Sleep waits between removal tries. Nil means time.Sleep.
 	Sleep func(time.Duration)
+	// openLog opens the log for LastLogLine. Nil means config.OpenTrusted.
+	openLog func(string) (*os.File, error)
 }
 
 // NewWindowsService is the service manager of this computer's paths.
@@ -161,6 +165,7 @@ func (w WindowsService) sleep(d time.Duration) {
 // (re)starts it, so a new binary takes effect. The copy replaces the old
 // one atomically; a running service holds its binary, so when the
 // replacement fails it is stopped first and the replacement tried again.
+// Once Install stopped the service, any later failure starts it again.
 func (w WindowsService) Install(src string) error {
 	data, err := os.ReadFile(src)
 	if err != nil {
@@ -172,6 +177,10 @@ func (w WindowsService) Install(src string) error {
 		return fmt.Errorf("cannot query the %s service: %w", ServiceName, err)
 	}
 	running := exists && info.State != ServiceStopped
+	// stopped is set once Install stopped the running service: from then
+	// on every failure starts it again, so a failed upgrade never leaves
+	// the protection without its daemon.
+	stopped := false
 	tmp, err := writeTemp(w.Binary, data)
 	if err != nil {
 		return err
@@ -181,17 +190,19 @@ func (w WindowsService) Install(src string) error {
 		if !running {
 			return fmt.Errorf("cannot replace %s: %w", w.Binary, err)
 		}
+		// A failed stop may still have stopped it.
+		stopped, running = true, false
 		if serr := w.SCM.Stop(ServiceName); serr != nil {
-			return fmt.Errorf("cannot stop the %s service to replace %s: %w", ServiceName, w.Binary, serr)
+			return w.startAgain(fmt.Errorf("cannot stop the %s service to replace %s: %w", ServiceName, w.Binary, serr))
 		}
-		running = false
 		if err := w.rename(tmp, w.Binary); err != nil {
 			// The old binary is still there: run it again, so the rules
 			// keep being verified.
-			w.SCM.Start(ServiceName)
-			return fmt.Errorf("cannot replace %s: %w", w.Binary, err)
+			return w.startAgain(fmt.Errorf("cannot replace %s: %w", w.Binary, err))
 		}
 	}
+	// A service that exists is updated; Create only runs for a new
+	// service, which Install never stopped.
 	cfg := ServiceConfig{DisplayName: ServiceName, Command: w.command(), AutoStart: true, Account: ServiceAccount}
 	if exists {
 		err = w.SCM.Update(ServiceName, cfg)
@@ -199,20 +210,38 @@ func (w WindowsService) Install(src string) error {
 		err = w.SCM.Create(ServiceName, cfg)
 	}
 	if err != nil {
-		return fmt.Errorf("cannot set up the %s service: %w", ServiceName, err)
+		return w.startAgainIf(stopped, fmt.Errorf("cannot set up the %s service: %w", ServiceName, err))
 	}
 	if err := w.SCM.SetRecovery(ServiceName, Recovery{RestartDelay: RestartDelay, ResetPeriod: ResetPeriod}); err != nil {
-		return fmt.Errorf("cannot set the recovery of the %s service: %w", ServiceName, err)
+		return w.startAgainIf(stopped, fmt.Errorf("cannot set the recovery of the %s service: %w", ServiceName, err))
 	}
 	if running {
+		stopped = true
 		if err := w.SCM.Stop(ServiceName); err != nil {
-			return fmt.Errorf("the background service is not restarted: %w", err)
+			return w.startAgain(fmt.Errorf("the background service is not restarted: %w", err))
 		}
 	}
 	if err := w.SCM.Start(ServiceName); err != nil {
-		return fmt.Errorf("the background service is not started: %w", err)
+		return w.startAgainIf(stopped, fmt.Errorf("the background service is not started: %w", err))
 	}
 	return nil
+}
+
+// startAgainIf calls startAgain when Install stopped the service.
+func (w WindowsService) startAgainIf(stopped bool, err error) error {
+	if !stopped {
+		return err
+	}
+	return w.startAgain(err)
+}
+
+// startAgain starts the service Install stopped, after err, and reports
+// err with whether the service runs again.
+func (w WindowsService) startAgain(err error) error {
+	if serr := w.SCM.Start(ServiceName); serr != nil {
+		return fmt.Errorf("%w; the service could not be started again either: %v", err, serr)
+	}
+	return fmt.Errorf("%w; the service was started again", err)
 }
 
 // writeTemp writes data to a new temporary file next to path and returns
@@ -293,5 +322,13 @@ func (w WindowsService) Installed() bool {
 // LegacyInstalled is always false: the old kill switch was macOS only.
 func (WindowsService) LegacyInstalled() bool { return false }
 
-// LastLogLine returns the last non-empty line of the service log.
-func (w WindowsService) LastLogLine() (string, bool) { return lastLogLine(w.Log) }
+// LastLogLine returns the last non-empty line of the service log. On
+// Windows a log someone other than SYSTEM and Administrators may write,
+// or a link, is not read, so nobody can forge what status shows.
+func (w WindowsService) LastLogLine() (string, bool) {
+	open := w.openLog
+	if open == nil {
+		open = config.OpenTrusted
+	}
+	return lastLine(w.Log, open)
+}

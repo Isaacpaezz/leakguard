@@ -31,6 +31,8 @@ var windowsAdaptersFixture = []windowsAdapter{
 	{alias: "Cisco", description: "Cisco AnyConnect Secure Mobility Client Virtual Miniport Adapter", ifType: tVirtual, up: true},
 	{alias: "Forti", description: "Fortinet Virtual Ethernet Adapter (NDIS 6.30)", ifType: tPPP, up: true},
 	{alias: "FortiSSL", description: "FortiClient SSL VPN Adapter", ifType: tTunnel, up: true, hasMAC: true},
+	// PPPoE is accepted like Linux ppp0 (documented in classifyWindows).
+	{alias: "Broadband", description: "WAN Miniport (PPPOE)", ifType: tPPP, up: true},
 	// Refused.
 	{alias: "Ethernet", description: "Intel(R) Ethernet Connection I219-V", ifType: tEthernet, up: true, hasMAC: true},
 	{alias: "Wi-Fi", description: "Intel(R) Wi-Fi 6 AX201 160MHz", ifType: tWiFi, up: true, hasMAC: true},
@@ -57,7 +59,7 @@ func windowsRules(adapters []windowsAdapter, err error) rules {
 
 var windowsAccepted = []string{
 	"WireGuard Tunnel", "Conexión VPN", "Work IKEv2", "OpenVPN Wintun", "OpenVPN Data Channel Offload",
-	"Ethernet 3", "Mullvad", "Cisco", "Forti", "FortiSSL",
+	"Ethernet 3", "Mullvad", "Cisco", "Forti", "FortiSSL", "Broadband",
 }
 
 // S1, S7: tunnels, PPP and RAS connections and known VPN adapters are accepted.
