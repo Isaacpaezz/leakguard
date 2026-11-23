@@ -34,6 +34,23 @@ jobs:
       - name: README landing page is up to date
         run: go run ./tools/readmegen -check
 
+  test-linux-nftables:
+    name: Linux nftables integration (real rules, root)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Install nftables
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq nftables
+      - name: Load real rules and probe them
+        run: |
+          go test -c -o "$RUNNER_TEMP/nft.test" ./internal/nft/
+          sudo LEAKGUARD_NFT_INTEGRATION=1 "$RUNNER_TEMP/nft.test" -test.count=1 -test.run Integration -test.v
+
   test-macos:
     name: Test on macOS (real pfctl and plutil checks)
     runs-on: macos-latest
