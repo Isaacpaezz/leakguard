@@ -64,12 +64,16 @@ func TestViaExampleOnWindows(t *testing.T) {
 	}
 }
 
+// wordsChosen is set while a test chose the wording itself, so the
+// harness keeps it (see simulateMacOS).
+var wordsChosen bool
+
 // withAdminHint makes the "run as administrator" message that of goos.
 func withAdminHint(t *testing.T, goos string) {
 	t.Helper()
-	old := needAdmin
-	needAdmin = needAdminFor(goos)
-	t.Cleanup(func() { needAdmin = old })
+	old, oldChosen := needAdmin, wordsChosen
+	needAdmin, wordsChosen = needAdminFor(goos), true
+	t.Cleanup(func() { needAdmin, wordsChosen = old, oldChosen })
 }
 
 // S1, S8: on Windows a change needs an elevated token (IsRoot), and the

@@ -60,14 +60,15 @@ type serving struct {
 	client         ipc.Client
 }
 
-// startServe runs "serve" as root with a test socket, a no-op chown and an
-// accept-all peer check, and waits until the socket answers.
+// startServe runs "serve" as root with a test socket (a named pipe on
+// Windows), a no-op chown and an accept-all peer check, and waits until the
+// socket answers.
 func startServe(t *testing.T, h *harness) *serving {
 	t.Helper()
 	s := &serving{done: make(chan int, 1)}
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancel = cancel
-	h.env.Socket = shortSocket(t)
+	h.env.Socket = testSocket(t)
 	h.env.ChownSocket = func(string, int, int) error { return nil }
 	if h.env.Authorize == nil {
 		h.env.Authorize = allowAll
@@ -76,13 +77,13 @@ func startServe(t *testing.T, h *harness) *serving {
 		h.env.ApplyEvery = time.Hour
 	}
 	h.env.ServeContext = func() (context.Context, context.CancelFunc) { return ctx, cancel }
-	s.client = ipc.Client{Path: h.env.Socket}
+	s.client = ipc.Client{Path: h.env.Socket, CheckServer: allowAll}
 	go func() { s.done <- run([]string{"serve"}, &s.stdout, &s.stderr, h.env) }()
 	deadline := time.Now().Add(5 * time.Second)
 	// The socket file appears at bind(), a moment before listen(); only a
 	// successful connection proves serve is ready.
 	for {
-		if conn, err := net.Dial("unix", h.env.Socket); err == nil {
+		if conn, err := dialTestSocket(h.env.Socket); err == nil {
 			conn.Close()
 			break
 		}
@@ -143,7 +144,7 @@ var anthropicConfig = config.Config{VPNInterface: "ipsec0", Services: []string{"
 
 func TestServeRequiresRoot(t *testing.T) {
 	h := newHarness(t, false)
-	h.env.Socket = shortSocket(t)
+	h.env.Socket = testSocket(t)
 	code, out, errOut := h.run("serve")
 	expect(t, code, out, errOut, 1, nil, []string{"leakguard: run with sudo: sudo leakguard serve"})
 	if exists(h.env.Socket) || len(h.pfctl.calls) != 0 {
@@ -369,20 +370,20 @@ func TestServeRefusesUnauthorizedPeers(t *testing.T) {
 func TestServeFailsWhenTheSocketCannotBeCreated(t *testing.T) {
 	h := newHarness(t, true)
 	h.saveConfig(t, anthropicConfig)
-	h.env.Socket = shortSocket(t)
-	os.WriteFile(h.env.Socket, []byte("not a socket"), 0o644)
+	h.env.Socket = testSocket(t)
+	wantErr := occupySocket(t, h.env.Socket)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	h.env.ServeContext = func() (context.Context, context.CancelFunc) { return ctx, cancel }
 	h.env.ChownSocket = func(string, int, int) error { return nil }
 	code, out, errOut := h.run("serve")
-	expect(t, code, out, errOut, 1, []string{"Protected through ipsec0"}, []string{"leakguard: refusing to replace " + h.env.Socket + ": it is not a socket"})
+	expect(t, code, out, errOut, 1, []string{"Protected through ipsec0"}, []string{wantErr})
 }
 
 // fakeDaemon answers status requests with st on a test socket.
 func fakeDaemon(t *testing.T, st ipc.Status) string {
 	t.Helper()
-	path := shortSocket(t)
+	path := testSocket(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	srv := &ipc.Server{Path: path, Authorize: allowAll, Chown: func(string, int, int) error { return nil },
@@ -390,7 +391,7 @@ func fakeDaemon(t *testing.T, st ipc.Status) string {
 	go func() { srv.Serve(ctx); close(done) }()
 	t.Cleanup(func() { cancel(); <-done })
 	for i := 0; ; i++ {
-		if _, err := (ipc.Client{Path: path}).Status(); err == nil {
+		if _, err := (ipc.Client{Path: path, CheckServer: allowAll}).Status(); err == nil {
 			return path
 		}
 		if i > 5000 {
@@ -444,7 +445,7 @@ func TestStatusFromTheDaemonWhenNotProtected(t *testing.T) {
 func TestStatusFallsBackWhenTheDaemonDoesNotAnswer(t *testing.T) {
 	h := newHarness(t, false)
 	h.saveConfig(t, anthropicConfig)
-	h.env.Socket = shortSocket(t) // nothing listens there
+	h.env.Socket = testSocket(t) // nothing listens there
 	code, out, errOut := h.run("status")
 	expect(t, code, out, errOut, 0, []string{"ipsec0 (connected)", "not installed", `run "sudo leakguard status" to verify`}, nil)
 }
@@ -454,7 +455,7 @@ func TestStatusFallsBackWhenTheDaemonDoesNotAnswer(t *testing.T) {
 func TestStatusFallsBackWhenTheDaemonRefusesTheUser(t *testing.T) {
 	h := newHarness(t, false)
 	h.saveConfig(t, anthropicConfig)
-	path := shortSocket(t)
+	path := testSocket(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	srv := &ipc.Server{Path: path, Chown: func(string, int, int) error { return nil },
@@ -463,7 +464,7 @@ func TestStatusFallsBackWhenTheDaemonRefusesTheUser(t *testing.T) {
 	go func() { srv.Serve(ctx); close(done) }()
 	t.Cleanup(func() { cancel(); <-done })
 	for i := 0; ; i++ {
-		if _, err := (ipc.Client{Path: path}).Status(); err != nil && err.Error() == "not authorized" {
+		if _, err := (ipc.Client{Path: path, CheckServer: allowAll}).Status(); err != nil && err.Error() == "not authorized" {
 			break
 		}
 		if i > 5000 {

@@ -213,7 +213,8 @@ func (d *fakeDir) Close() error {
 	return nil
 }
 
-const dataDirPath = "/ProgramData/leakguard"
+// dataDirPath uses the separator of this system, as filepath does.
+var dataDirPath = filepath.FromSlash("/ProgramData/leakguard")
 
 func (f *fakeDataFS) callsString() string { return strings.Join(f.calls, " | ") }
 
@@ -285,7 +286,7 @@ func TestPrepareDataDirTakesOverAUserDirectory(t *testing.T) {
 	if err := prepareDataDir(f, dataDirPath); err != nil {
 		t.Fatalf("prepareDataDir() = %v", err)
 	}
-	wantCalls := "openDir {D} | secure {D} | remove {D}/sub | close {D}"
+	wantCalls := "openDir {D} | secure {D} | remove " + j("sub") + " | close {D}"
 	if got := f.callsString(); got != strings.ReplaceAll(wantCalls, "{D}", dataDirPath) {
 		t.Fatalf("calls = %s\nwant    %s", got, strings.ReplaceAll(wantCalls, "{D}", dataDirPath))
 	}
@@ -307,7 +308,7 @@ func TestPrepareDataDirSecuresBeforeItRemoves(t *testing.T) {
 	if err := prepareDataDir(f, dataDirPath); err != nil {
 		t.Fatalf("prepareDataDir() = %v", err)
 	}
-	want := strings.ReplaceAll("openDir {D} | secure {D} | remove {D}/config.json | close {D}", "{D}", dataDirPath)
+	want := strings.ReplaceAll("openDir {D} | secure {D} | remove "+filepath.Join(dataDirPath, "config.json")+" | close {D}", "{D}", dataDirPath)
 	if got := f.callsString(); got != want {
 		t.Fatalf("calls = %s\nwant    %s", got, want)
 	}

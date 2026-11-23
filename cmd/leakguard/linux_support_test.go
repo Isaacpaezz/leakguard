@@ -114,6 +114,9 @@ func writeProc(t *testing.T, v4, v6 string) string {
 
 // S1: "leakguard test" finds the real connection on Linux from /proc.
 func TestProcDefaultInterface(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Linux's /proc route table: its file errors and interface names follow Unix rules; Windows reads the route table with GetIpForwardTable2 (TestWindowsDefaultInterface)")
+	}
 	for _, tc := range []struct {
 		name, v4, v6, want, err string
 	}{

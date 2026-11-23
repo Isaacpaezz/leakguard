@@ -97,8 +97,13 @@ func loadedPfctl(t *testing.T, iface string) map[string]string {
 	}
 }
 
+// newHarness is a simulated Mac: pf, launchd and the interfaces en0, en1,
+// utun0 and ipsec0, all fakes. Linux judges those names by its own rules
+// (none exists in sysfs); Windows would ask its real adapters, so there
+// the harness takes the macOS interface rules and wording (simulateMacOS).
 func newHarness(t *testing.T, root bool) *harness {
 	t.Helper()
+	simulateMacOS(t)
 	h := &harness{
 		pfctl:     &fakePfctl{outputs: loadedPfctl(t, "ipsec0")},
 		launchctl: &fakeLaunchctl{},
@@ -111,8 +116,11 @@ func newHarness(t *testing.T, root bool) *harness {
 		Pfctl:     h.pfctl,
 		Launchctl: h.launchctl,
 		Secure:    func(string) error { return nil },
-		Firewall:  pfFirewall,
-		Services:  launchdServices,
+		// The test daemons are not the leakguard service, whose pipe
+		// "status" checks on Windows; macOS and Linux check nothing.
+		CheckServer: allowAll,
+		Firewall:    pfFirewall,
+		Services:    launchdServices,
 		Interfaces: func() ([]Interface, error) {
 			return []Interface{
 				{Name: "en0", Up: true, HasAddress: true},
@@ -444,7 +452,8 @@ func TestApplyFailsClosedWithoutAValidConfig(t *testing.T) {
 	if len(h.pfctl.calls) != 0 {
 		t.Fatalf("apply touched pf without a config: %v", h.pfctl.calls)
 	}
-	os.MkdirAll(filepath.Dir(h.path(config.DefaultPath)), 0o755)
+	// Made like Save makes it, so Windows trusts the file (S7).
+	config.PrepareDir(filepath.Dir(h.path(config.DefaultPath)))
 	os.WriteFile(h.path(config.DefaultPath), []byte(`{"vpn_interface":"en0","services":["anthropic"]}`), 0o644)
 	h.pfctl.outputs["-a "+pf.Anchor+" -s rules"] = "block return out quick from any to <leakguard>\n"
 	code, out, errOut = h.run("apply")

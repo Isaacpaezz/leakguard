@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -24,16 +25,36 @@ func TestValidateAccepts(t *testing.T) {
 	}
 }
 
+// testNames are interface names the host's rules refuse (see hostNames).
+type testNames struct{ invalid, loopback, physical string }
+
+// writeRaw writes a configuration file as given, bypassing Save, the way
+// Save leaves it: in a prepared directory and, on Windows, owned by
+// Administrators, so Load trusts it and reads what it holds.
+func writeRaw(t *testing.T, path, data string) {
+	t.Helper()
+	if err := PrepareDir(filepath.Dir(path)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ownFile(path); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestValidateRejects(t *testing.T) {
+	names := hostNames(t)
 	cases := []struct {
 		name string
 		cfg  Config
 		want string
 	}{
 		{"no interface", Config{Services: []string{"anthropic"}}, "VPN interface is not set"},
-		{"rule injection", Config{VPNInterface: "ipsec0 all", Services: []string{"anthropic"}}, "not a valid interface name"},
-		{"loopback", Config{VPNInterface: "lo0", Services: []string{"anthropic"}}, "not a VPN interface"},
-		{"physical", Config{VPNInterface: "en0", Services: []string{"anthropic"}}, "not a VPN interface"},
+		{"rule injection", Config{VPNInterface: names.invalid, Services: []string{"anthropic"}}, "not a valid interface name"},
+		{"loopback", Config{VPNInterface: names.loopback, Services: []string{"anthropic"}}, "not a VPN interface"},
+		{"physical", Config{VPNInterface: names.physical, Services: []string{"anthropic"}}, "not a VPN interface"},
 		{"no services", Config{VPNInterface: "utun4"}, "no services selected"},
 		{"unknown service", Config{VPNInterface: "utun4", Services: []string{"gemini"}}, `unknown service "gemini"`},
 		{"planned service", Config{VPNInterface: "utun4", Services: []string{"openai"}}, `service "openai" is not supported yet`},
@@ -62,8 +83,10 @@ func TestSaveThenLoadRoundTrips(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Load() = %+v, want %+v", got, want)
 	}
+	// Windows has no Unix modes; who may write the file there is checked
+	// by Load (TestLoadRefusesAConfigSomeoneElseMayWrite).
 	info, _ := os.Stat(path)
-	if info.Mode().Perm() != 0o644 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o644 {
 		t.Fatalf("mode = %v, want 0644", info.Mode().Perm())
 	}
 }
@@ -77,13 +100,22 @@ func TestLoadMissingFileIsNotConfigured(t *testing.T) {
 
 func TestLoadRejectsUnknownFields(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
-	os.WriteFile(path, []byte(`{"vpn_interface":"utun4","services":["anthropic"],"allow_leaks":true}`), 0o644)
+	writeRaw(t, path, `{"vpn_interface":"utun4","services":["anthropic"],"allow_leaks":true}`)
 	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "allow_leaks") {
 		t.Fatalf("Load() error = %v", err)
 	}
 }
 
 func TestVPNCandidates(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// Windows keeps only connected VPN adapters: never the loopback
+		// (connected), a real-connection name, nor a name no adapter has.
+		in := []string{hostNames(t).loopback, "Ethernet 99", "utun4", "ipsec0", "wg0"}
+		if got := VPNCandidates(in); len(got) != 0 {
+			t.Fatalf("VPNCandidates(%q) = %v, want none", in, got)
+		}
+		return
+	}
 	in := []string{"lo0", "en0", "utun4", "ipsec0", "awdl0", "ppp0", "wg0", "tun1", "bridge0"}
 	want := []string{"utun4", "ipsec0", "ppp0", "wg0", "tun1"}
 	if got := VPNCandidates(in); !reflect.DeepEqual(got, want) {
@@ -93,7 +125,7 @@ func TestVPNCandidates(t *testing.T) {
 
 func TestLoadRejectsTrailingData(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
-	os.WriteFile(path, []byte(`{"vpn_interface":"utun4","services":["anthropic"]} {"vpn_interface":"en0"}`), 0o644)
+	writeRaw(t, path, `{"vpn_interface":"utun4","services":["anthropic"]} {"vpn_interface":"en0"}`)
 	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "unexpected data after the configuration") {
 		t.Fatalf("Load() error = %v, want trailing data error", err)
 	}
@@ -101,7 +133,7 @@ func TestLoadRejectsTrailingData(t *testing.T) {
 
 func TestLoadAcceptsTrailingWhitespace(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
-	os.WriteFile(path, []byte("{\"vpn_interface\":\"utun4\",\"services\":[\"anthropic\"]}\n\n"), 0o644)
+	writeRaw(t, path, "{\"vpn_interface\":\"utun4\",\"services\":[\"anthropic\"]}\n\n")
 	if _, err := Load(path); err != nil {
 		t.Fatalf("Load() = %v", err)
 	}
@@ -113,11 +145,12 @@ func TestCheckVPNInterface(t *testing.T) {
 			t.Errorf("CheckVPNInterface(%q) = %v", ok, err)
 		}
 	}
+	names := hostNames(t)
 	cases := map[string]string{
-		"":           "VPN interface is not set",
-		"ipsec0 all": "not a valid interface name",
-		"en0":        "not a VPN interface",
-		"lo0":        "not a VPN interface",
+		"":             "VPN interface is not set",
+		names.invalid:  "not a valid interface name",
+		names.physical: "not a VPN interface",
+		names.loopback: "not a VPN interface",
 	}
 	for name, want := range cases {
 		if err := CheckVPNInterface(name); err == nil || !strings.Contains(err.Error(), want) {
@@ -127,7 +160,12 @@ func TestCheckVPNInterface(t *testing.T) {
 }
 
 func TestValidInterfaceName(t *testing.T) {
-	for name, want := range map[string]bool{"en0": true, "ipsec0": true, "en0;": false, "": false, "a b": false} {
+	cases := map[string]bool{"en0": true, "ipsec0": true, "en0;": false, "": false, "a b": false}
+	if runtime.GOOS == "windows" {
+		// An adapter alias: 1 to 256 bytes of UTF-8 without control characters.
+		cases = map[string]bool{"en0": true, "WireGuard Tunnel": true, "en0;": true, "": false, "a\tb": false, strings.Repeat("a", 257): false}
+	}
+	for name, want := range cases {
 		if got := ValidInterfaceName(name); got != want {
 			t.Errorf("ValidInterfaceName(%q) = %v, want %v", name, got, want)
 		}

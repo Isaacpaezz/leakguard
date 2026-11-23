@@ -68,7 +68,7 @@ func TestSystemdInstallCopiesBinaryWritesUnitAndRestarts(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if info.Mode().Perm() != want.mode {
+		if unixModes && info.Mode().Perm() != want.mode {
 			t.Errorf("%s mode = %v, want %v", path, info.Mode().Perm(), want.mode)
 		}
 		if data, _ := os.ReadFile(path); string(data) != want.data {

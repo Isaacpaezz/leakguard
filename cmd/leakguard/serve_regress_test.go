@@ -203,24 +203,17 @@ func TestServeLoadsTheRulesWithCorruptStats(t *testing.T) {
 // S5b: a pause whose config save fails flushed the counter; the reload that
 // follows never counts a block twice.
 func TestServePauseWithAFailedSaveNeverDoubleCounts(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("root ignores directory permissions, so the save cannot be made to fail")
-	}
+	skipUnlessSavesCanFail(t)
 	h, p := statefulHarness(t)
 	h.env.ApplyEvery = 5 * time.Millisecond
 	s := startServe(t, h)
 	dir := filepath.Dir(h.path(config.DefaultPath))
-	t.Cleanup(func() { os.Chmod(dir, 0o755) })
 	p.block(5)
-	if err := os.Chmod(dir, 0o555); err != nil {
-		t.Fatal(err)
-	}
+	unblock := blockConfigSaves(t, dir)
 	if _, err := s.client.Pause(); err == nil || !strings.HasPrefix(err.Error(), "could not save the pause: ") {
 		t.Fatalf("Pause() = %v", err)
 	}
-	if err := os.Chmod(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	unblock()
 	eventually(t, "a reload", func() bool { return p.loadedRules() && p.count(loadAnchor) >= 2 })
 	p.block(2)
 	eventually(t, "7 blocks", func() bool { return todayBlocks(s) == 7 })

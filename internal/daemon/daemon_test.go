@@ -11,6 +11,11 @@ import (
 	"time"
 )
 
+// unixModes is false on Windows, where Go reports no Unix permission bits
+// (only 0666, or 0444 for a read-only file). The launchd and systemd files
+// whose modes the tests check are only installed on macOS and Linux.
+var unixModes = runtime.GOOS != "windows"
+
 type fakeLaunchctl struct {
 	calls []string
 	fail  map[string]error
@@ -113,7 +118,7 @@ func TestInstallCopiesBinaryWritesPlistAndBootstraps(t *testing.T) {
 	if err != nil || string(data) != "binary-v1" {
 		t.Fatalf("installed binary = %q, %v", data, err)
 	}
-	if info, _ := os.Stat(bin); info.Mode().Perm() != 0o755 {
+	if info, _ := os.Stat(bin); unixModes && info.Mode().Perm() != 0o755 {
 		t.Fatalf("binary mode = %v, want 0755", info.Mode().Perm())
 	}
 	plist := filepath.Join(d.Root, PlistPath)
@@ -121,7 +126,7 @@ func TestInstallCopiesBinaryWritesPlistAndBootstraps(t *testing.T) {
 	if err != nil || string(data) != Plist(BinaryPath) {
 		t.Fatalf("plist = %q, %v", data, err)
 	}
-	if info, _ := os.Stat(plist); info.Mode().Perm() != 0o644 {
+	if info, _ := os.Stat(plist); unixModes && info.Mode().Perm() != 0o644 {
 		t.Fatalf("plist mode = %v, want 0644", info.Mode().Perm())
 	}
 	want := "bootout system/" + Label + "|" + printJob + "|bootstrap system " + plist
