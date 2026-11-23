@@ -1,0 +1,208 @@
+; The leakguard installer for Windows: scripts/build-windows.sh builds it
+; with makensis, once per architecture. It installs per machine into
+; %ProgramFiles%\leakguard (the CLI leakguard.exe, the tray leakguard-tray.exe
+; and the guide), adds a Start menu shortcut and the Settings > Apps entry.
+; It never installs the background service: the tray's setup does, with
+; leakguard.exe enable. On an upgrade with the service installed it runs
+; leakguard.exe reinstall-service, so the service runs the new copy with
+; the saved choice. The uninstaller runs leakguard.exe disable first.
+;
+; Defines (makensis -D): VERSION (0.2.0 or 0.2.0-beta.1), VIVERSION (its
+; numeric form, 0.2.0.0), ARCH (amd64 or arm64), BINDIR (leakguard.exe and
+; leakguard-tray.exe), LICENSEFILE, OUTFILE, and GUIDE (optional:
+; docs/install-windows.md).
+
+Unicode true
+ManifestDPIAware true
+SetCompressor /SOLID lzma
+
+!macro Require NAME
+  !ifndef ${NAME}
+    !error "Define ${NAME} (see scripts/build-windows.sh)"
+  !endif
+!macroend
+!insertmacro Require VERSION
+!insertmacro Require VIVERSION
+!insertmacro Require ARCH
+!insertmacro Require BINDIR
+!insertmacro Require LICENSEFILE
+!insertmacro Require OUTFILE
+!if "${ARCH}" != "amd64"
+  !if "${ARCH}" != "arm64"
+    !error "ARCH must be amd64 or arm64"
+  !endif
+!endif
+
+!include MUI2.nsh
+!include LogicLib.nsh
+!include x64.nsh
+!include FileFunc.nsh
+
+!define APPNAME "leakguard"
+!define UNINSTKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\leakguard"
+!define SERVICEKEY "SYSTEM\CurrentControlSet\Services\leakguard"
+!define RUNKEY "Software\Microsoft\Windows\CurrentVersion\Run"
+
+Name "${APPNAME}"
+OutFile "${OUTFILE}"
+InstallDir "$PROGRAMFILES64\leakguard"
+RequestExecutionLevel admin
+BrandingText "${APPNAME} ${VERSION}"
+ShowInstDetails show
+ShowUninstDetails show
+
+!define MUI_ABORTWARNING
+!insertmacro MUI_PAGE_WELCOME
+!insertmacro MUI_PAGE_INSTFILES
+; Open the tray as the signed-in user, never elevated like this installer.
+!define MUI_FINISHPAGE_RUN
+!define MUI_FINISHPAGE_RUN_TEXT "$(OpenLeakguard)"
+!define MUI_FINISHPAGE_RUN_FUNCTION LaunchTray
+!insertmacro MUI_PAGE_FINISH
+
+!insertmacro MUI_UNPAGE_CONFIRM
+!insertmacro MUI_UNPAGE_INSTFILES
+
+; English first: Windows in another language than these two gets English.
+!insertmacro MUI_LANGUAGE "English"
+!insertmacro MUI_LANGUAGE "Spanish"
+
+LangString OpenLeakguard ${LANG_ENGLISH} "Open leakguard"
+LangString OpenLeakguard ${LANG_SPANISH} "Abrir leakguard"
+LangString Needs64Bit ${LANG_ENGLISH} "leakguard needs 64-bit Windows."
+LangString Needs64Bit ${LANG_SPANISH} "leakguard necesita Windows de 64 bits."
+LangString NeedsARM64 ${LANG_ENGLISH} "This installer is for Windows on ARM. Download the installer that ends in windows-amd64-setup.exe."
+LangString NeedsARM64 ${LANG_SPANISH} "Este instalador es para Windows en ARM. Descarga el instalador que termina en windows-amd64-setup.exe."
+LangString ClosingTray ${LANG_ENGLISH} "Closing the leakguard icon so it can be updated"
+LangString ClosingTray ${LANG_SPANISH} "Cerrando el icono de leakguard para poder actualizarlo"
+LangString UpdatingService ${LANG_ENGLISH} "Updating the leakguard background service (your choice of services is kept)"
+LangString UpdatingService ${LANG_SPANISH} "Actualizando el servicio de leakguard (se conservan los servicios que elegiste)"
+LangString ServiceNotUpdated ${LANG_ENGLISH} "leakguard was installed, but its background service could not be updated (code $0). Your protection keeps working with the previous version.$\r$\n$\r$\nTo update it, open a terminal as administrator and run:$\r$\n$\"$INSTDIR\leakguard.exe$\" reinstall-service"
+LangString ServiceNotUpdated ${LANG_SPANISH} "leakguard se instaló, pero su servicio en segundo plano no se pudo actualizar (código $0). Tu protección sigue funcionando con la versión anterior.$\r$\n$\r$\nPara actualizarlo, abre una terminal como administrador y ejecuta:$\r$\n$\"$INSTDIR\leakguard.exe$\" reinstall-service"
+LangString RemovingService ${LANG_ENGLISH} "Removing the leakguard background service and its firewall filters"
+LangString RemovingService ${LANG_SPANISH} "Quitando el servicio de leakguard y sus filtros del firewall"
+LangString ServiceNotRemoved ${LANG_ENGLISH} "The leakguard background service and its firewall filters could not be removed (code $0), so the protected services may stay blocked. The uninstall continues.$\r$\n$\r$\nTo remove them, open a terminal as administrator and run:$\r$\n$\"$INSTDIR\service\leakguard.exe$\" disable"
+LangString ServiceNotRemoved ${LANG_SPANISH} "No se pudo quitar el servicio de leakguard ni sus filtros del firewall (código $0), así que los servicios protegidos pueden seguir bloqueados. La desinstalación continúa.$\r$\n$\r$\nPara quitarlos, abre una terminal como administrador y ejecuta:$\r$\n$\"$INSTDIR\service\leakguard.exe$\" disable"
+
+VIProductVersion "${VIVERSION}"
+VIFileVersion "${VIVERSION}"
+VIAddVersionKey /LANG=${LANG_ENGLISH} "ProductName" "${APPNAME}"
+VIAddVersionKey /LANG=${LANG_ENGLISH} "ProductVersion" "${VERSION}"
+VIAddVersionKey /LANG=${LANG_ENGLISH} "FileVersion" "${VERSION}"
+VIAddVersionKey /LANG=${LANG_ENGLISH} "FileDescription" "${APPNAME} ${VERSION} setup (${ARCH})"
+VIAddVersionKey /LANG=${LANG_ENGLISH} "LegalCopyright" "MIT License"
+
+; A 64-bit build needs 64-bit Windows; the arm64 build needs Windows on
+; ARM (Windows on ARM runs the amd64 build too).
+!macro CheckArch
+  !if "${ARCH}" == "arm64"
+    ${IfNot} ${IsNativeARM64}
+      MessageBox MB_OK|MB_ICONSTOP "$(NeedsARM64)" /SD IDOK
+      Abort
+    ${EndIf}
+  !else
+    ${IfNot} ${RunningX64}
+      MessageBox MB_OK|MB_ICONSTOP "$(Needs64Bit)" /SD IDOK
+      Abort
+    ${EndIf}
+  !endif
+!macroend
+
+Function .onInit
+  !insertmacro CheckArch
+  SetShellVarContext all
+  SetRegView 64
+FunctionEnd
+
+Function un.onInit
+  !insertmacro CheckArch
+  SetShellVarContext all
+  SetRegView 64
+FunctionEnd
+
+; explorer.exe opens the tray in the signed-in user's session, not elevated.
+Function LaunchTray
+  Exec '"$WINDIR\explorer.exe" "$INSTDIR\leakguard-tray.exe"'
+FunctionEnd
+
+; The running tray holds its file: close it before the files are replaced
+; or removed. Nothing to do when it is not running.
+!macro CloseTray
+  DetailPrint "$(ClosingTray)"
+  nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM leakguard-tray.exe'
+  Pop $0
+!macroend
+
+Section "leakguard" SecMain
+  SectionIn RO
+  SetRegView 64
+  SetShellVarContext all
+  !insertmacro CloseTray
+
+  SetOutPath "$INSTDIR"
+  File "/oname=leakguard.exe" "${BINDIR}/leakguard.exe"
+  File "/oname=leakguard-tray.exe" "${BINDIR}/leakguard-tray.exe"
+  File "/oname=LICENSE.txt" "${LICENSEFILE}"
+  !ifdef GUIDE
+    File "/oname=install-windows.md" "${GUIDE}"
+  !endif
+  WriteUninstaller "$INSTDIR\uninstall.exe"
+
+  CreateShortcut "$SMPROGRAMS\leakguard.lnk" "$INSTDIR\leakguard-tray.exe"
+
+  WriteRegStr HKLM "${UNINSTKEY}" "DisplayName" "${APPNAME}"
+  WriteRegStr HKLM "${UNINSTKEY}" "DisplayVersion" "${VERSION}"
+  WriteRegStr HKLM "${UNINSTKEY}" "Publisher" "${APPNAME}"
+  WriteRegStr HKLM "${UNINSTKEY}" "DisplayIcon" "$\"$INSTDIR\leakguard-tray.exe$\""
+  WriteRegStr HKLM "${UNINSTKEY}" "InstallLocation" "$INSTDIR"
+  WriteRegStr HKLM "${UNINSTKEY}" "URLInfoAbout" "https://github.com/Isaacpaezz/leakguard"
+  WriteRegStr HKLM "${UNINSTKEY}" "UninstallString" "$\"$INSTDIR\uninstall.exe$\""
+  WriteRegStr HKLM "${UNINSTKEY}" "QuietUninstallString" "$\"$INSTDIR\uninstall.exe$\" /S"
+  WriteRegDWORD HKLM "${UNINSTKEY}" "NoModify" 1
+  WriteRegDWORD HKLM "${UNINSTKEY}" "NoRepair" 1
+  ${GetSize} "$INSTDIR" "/S=0K" $0 $1 $2
+  WriteRegDWORD HKLM "${UNINSTKEY}" "EstimatedSize" "$0"
+
+  ; An upgrade: the service runs its own copy in $INSTDIR\service, which
+  ; reinstall-service replaces with the new leakguard.exe before it
+  ; restarts the service. The filters stay loaded meanwhile. A failure
+  ; never fails the install: the old service keeps protecting.
+  ClearErrors
+  ReadRegStr $0 HKLM "${SERVICEKEY}" "ImagePath"
+  ${IfNot} ${Errors}
+    DetailPrint "$(UpdatingService)"
+    nsExec::ExecToLog '"$INSTDIR\leakguard.exe" reinstall-service'
+    Pop $0
+    ${If} $0 != "0"
+      MessageBox MB_OK|MB_ICONEXCLAMATION "$(ServiceNotUpdated)" /SD IDOK
+    ${EndIf}
+  ${EndIf}
+SectionEnd
+
+Section "Uninstall"
+  SetRegView 64
+  SetShellVarContext all
+  !insertmacro CloseTray
+
+  ; disable stops and deletes the service, removes its copy and the
+  ; filters. It runs even without a service: persistent WFP filters left
+  ; behind would keep the protected services blocked with no app to lift
+  ; them. A failure is shown, and the uninstall goes on.
+  DetailPrint "$(RemovingService)"
+  nsExec::ExecToLog '"$INSTDIR\leakguard.exe" disable'
+  Pop $0
+  ${If} $0 != "0"
+    MessageBox MB_OK|MB_ICONEXCLAMATION "$(ServiceNotRemoved)" /SD IDOK
+  ${EndIf}
+
+  Delete "$INSTDIR\leakguard.exe"
+  Delete "$INSTDIR\leakguard-tray.exe"
+  Delete "$INSTDIR\LICENSE.txt"
+  Delete "$INSTDIR\install-windows.md"
+  Delete "$INSTDIR\uninstall.exe"
+  RMDir "$INSTDIR\service"
+  RMDir "$INSTDIR"
+  Delete "$SMPROGRAMS\leakguard.lnk"
+  DeleteRegValue HKCU "${RUNKEY}" "leakguard"
+  DeleteRegKey HKLM "${UNINSTKEY}"
+SectionEnd
