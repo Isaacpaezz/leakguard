@@ -91,8 +91,7 @@ and Docker Desktop do not go through leakguard yet (see
 A shield in the macOS menu bar, the Linux top bar (system tray) or the
 Windows notification area. Its menu says whether you are protected, how your
 VPN session is going, and how many times leakguard blocked a protected
-service today (Windows does not show the blocks count yet). The pictures
-show macOS:
+service today (Windows does not show the blocks count yet). On macOS:
 
 <p align="center">
   <picture>
@@ -117,6 +116,39 @@ first line of the menu says why); a shield with a slash means leakguard is not
 set up yet. A **block** is a packet to a protected service that leakguard
 rejected because it tried to leave outside the VPN, so it is an approximate
 count of blocked connection attempts. "Today" starts at local midnight.
+
+The same menu on Linux (GNOME top bar) and on Windows (notification area,
+next to the clock):
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/menu-linux-dark.svg">
+    <img src="docs/assets/menu-linux-light.svg" width="400" alt="The leakguard menu under its green shield in the GNOME top bar: Protected, VPN connected for 2 h 15 min, Today: 14 blocks · VPN dropped 2 times, Anthropic (Claude) ticked, OpenAI (ChatGPT, Codex) coming soon, Change VPN…, Pause protection, Open at login, Uninstall leakguard… and Quit.">
+  </picture>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/menu-windows-dark.svg">
+    <img src="docs/assets/menu-windows-light.svg" width="420" alt="On the Windows 11 taskbar, clicking the green leakguard shield next to the clock opens its menu: Protected, VPN connected for 2 h 15 min, Today: VPN dropped 2 times, Anthropic (Claude) ticked, OpenAI coming soon, Change VPN…, Pause protection, Open at login, Uninstall leakguard… and Quit.">
+  </picture>
+</p>
+
+<details>
+<summary>The 3-step setup on Linux and Windows</summary>
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/setup-linux-dark.svg">
+    <img src="docs/assets/setup-linux-light.svg" width="880" alt="The 3-step setup on Linux: tick Anthropic (Claude), disconnect and reconnect your VPN until leakguard finds it (WireGuard), then turn on the protection with your administrator password once.">
+  </picture>
+</p>
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/setup-windows-dark.svg">
+    <img src="docs/assets/setup-windows-light.svg" width="880" alt="Three Windows dialogs: Step 1 asks Choose Anthropic (Claude)? with Yes, No and Cancel; Step 2 finds your VPN as you disconnect and reconnect it, ending with We found your VPN!; Step 3 turns on the protection and Windows asks for administrator permission once.">
+  </picture>
+</p>
+
+</details>
 
 ## Which file do I download?
 
@@ -404,7 +436,7 @@ Un escudo en la barra de menú de macOS, en la barra superior (bandeja del
 sistema) de Linux o en el área de notificación de Windows. Su menú te dice si
 estás protegido, cuánto tiempo lleva conectada tu VPN y cuántas veces
 leakguard bloqueó hoy un servicio protegido (Windows todavía no muestra los
-bloqueos). Las imágenes son de macOS:
+bloqueos). En macOS:
 
 <p align="center">
   <picture>
@@ -430,6 +462,39 @@ protegido o que la protección está en pausa (la primera línea del menú dice
 por qué). Un **bloqueo** es un intento de un servicio protegido de salir sin
 la VPN que leakguard detuvo; es un conteo aproximado. "Hoy" empieza a la
 medianoche.
+
+El mismo menú en Linux (barra superior de GNOME) y en Windows (área de
+notificación, junto al reloj):
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/menu-linux-es-dark.svg">
+    <img src="docs/assets/menu-linux-es-light.svg" width="400" alt="El menú de leakguard bajo su escudo verde en la barra superior de GNOME: Protegido, VPN conectada hace 2 h 15 min, Hoy: 14 bloqueos · la VPN se cayó 2 veces, Anthropic (Claude) marcado, OpenAI (ChatGPT, Codex) próximamente, Cambiar de VPN…, Pausar la protección, Abrir al iniciar sesión, Desinstalar leakguard… y Salir.">
+  </picture>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/menu-windows-es-dark.svg">
+    <img src="docs/assets/menu-windows-es-light.svg" width="420" alt="En la barra de tareas de Windows 11, un clic en el escudo verde de leakguard junto al reloj abre su menú: Protegido, VPN conectada hace 2 h 15 min, Hoy: la VPN se cayó 2 veces, Anthropic (Claude) marcado, OpenAI próximamente, Cambiar de VPN…, Pausar la protección, Abrir al iniciar sesión, Desinstalar leakguard… y Salir.">
+  </picture>
+</p>
+
+<details>
+<summary>La configuración de 3 pasos en Linux y Windows</summary>
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/setup-linux-es-dark.svg">
+    <img src="docs/assets/setup-linux-es-light.svg" width="880" alt="La configuración en 3 pasos en Linux: marca Anthropic (Claude), desconecta y vuelve a conectar tu VPN hasta que leakguard la encuentre (WireGuard) y activa la protección con tu contraseña de administrador una sola vez.">
+  </picture>
+</p>
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/setup-windows-es-dark.svg">
+    <img src="docs/assets/setup-windows-es-light.svg" width="880" alt="Tres ventanas de Windows: el Paso 1 pregunta ¿Elegir Anthropic (Claude)? con Sí, No y Cancelar; el Paso 2 encuentra tu VPN mientras la desconectas y la vuelves a conectar, hasta ¡Encontramos tu VPN!; el Paso 3 activa la protección y Windows pide permiso de administrador una sola vez.">
+  </picture>
+</p>
+
+</details>
 
 ### ¿Qué archivo descargo?
 

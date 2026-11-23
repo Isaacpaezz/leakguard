@@ -6,6 +6,11 @@ All notable changes to leakguard are documented here. The format follows
 
 The newest section is shown automatically on the README landing page.
 
+## [Unreleased]
+
+### Fixed
+- On Windows, the tray menu and `leakguard status` no longer say "no blocks": Windows cannot count blocks yet, so the "Today" line shows only how many times the VPN dropped (and the menu hides it when the VPN never dropped).
+
 ## [0.3.0] - 2026-11-23
 
 leakguard for Windows (pre-release). Its firewall is tested

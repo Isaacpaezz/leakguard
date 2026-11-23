@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 302" width="940" height="302" role="img" aria-labelledby="t d" font-family="'Segoe UI Variable Text', 'Segoe UI', -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">
+<title id="t">The 3-step setup of leakguard on Windows</title>
+<desc id="d">Three Windows dialogs appear one after another. Step 1 of 3 asks: Choose Anthropic (Claude)? with Yes, No and Cancel, and says OpenAI (ChatGPT, Codex) is coming soon. Step 2 of 3 finds your VPN: disconnect it and click Next, connect it again and click Next, and leakguard says: We found your VPN! Step 3 of 3 turns on the protection: Windows asks for administrator permission only this once.</desc>
+<style>
+.k1,.k2,.k3{animation:k1 12s infinite}
+.k2{animation-name:k2}.k3{animation-name:k3}
+.fa{opacity:0;animation:fa 12s steps(1) infinite}
+.fb{opacity:0;animation:fb 12s steps(1) infinite}
+.fc{opacity:1;animation:fc 12s steps(1) infinite}
+@keyframes k1{0%{opacity:0;transform:translateY(8px)}5%,93%{opacity:1;transform:translateY(0)}100%{opacity:0}}
+@keyframes k2{0%,18%{opacity:0;transform:translateY(8px)}23%,93%{opacity:1;transform:translateY(0)}100%{opacity:0}}
+@keyframes k3{0%,64%{opacity:0;transform:translateY(8px)}69%,93%{opacity:1;transform:translateY(0)}100%{opacity:0}}
+@keyframes fa{0%{opacity:1}36%,100%{opacity:0}}
+@keyframes fb{0%{opacity:0}36%{opacity:1}50%,100%{opacity:0}}
+@keyframes fc{0%{opacity:0}50%,100%{opacity:1}}
+@media (prefers-reduced-motion: reduce){*{animation:none!important}}</style>
+<defs><filter id="sh" x="-10%" y="-10%" width="120%" height="125%"><feDropShadow dx="0" dy="4" stdDeviation="6" flood-opacity=".18"/></filter></defs>
+<g class="k1">
+<rect x="12" y="16" width="292" height="270" rx="8" fill="#ffffff" stroke="#cfcfcf" filter="url(#sh)"/>
+<path d="M12 24 a8 8 0 0 1 8 -8 h276 a8 8 0 0 1 8 8 v24 h-292 z" fill="#f3f3f3"/>
+<text x="24" y="37" font-size="12" fill="#1a1a1a">Step 1 of 3</text>
+<path d="M276 27 l10 10 m0 -10 l-10 10" stroke="#1a1a1a" stroke-width="1.1" stroke-linecap="round"/>
+<path d="M12 242 h292 v36 a8 8 0 0 1 -8 8 h-276 a8 8 0 0 1 -8 -8 z" fill="#f0f0f0"/>
+<line x1="12" y1="242.5" x2="304" y2="242.5" stroke="#dfdfdf"/>
+<rect x="12" y="16" width="292" height="270" rx="8" fill="none" stroke="#cfcfcf"/>
+<circle cx="40" cy="74" r="12" fill="#0067c0"/>
+<circle cx="40" cy="68" r="1.6" fill="#ffffff"/>
+<rect x="38.6" y="71.5" width="2.8" height="9" rx="1.2" fill="#ffffff"/>
+<text x="64" y="79" font-size="14.5" fill="#003399">Choose Anthropic (Claude)?</text>
+<text x="64" y="106" font-size="12" fill="#1a1a1a">Choose what to protect.</text>
+<text x="64" y="138" font-size="12" fill="#1a1a1a">These services may only use your</text>
+<text x="64" y="154" font-size="12" fill="#1a1a1a">VPN: if your VPN drops, they stop</text>
+<text x="64" y="170" font-size="12" fill="#1a1a1a">connecting until it is back.</text>
+<text x="64" y="202" font-size="12" fill="#1a1a1a">Coming soon: OpenAI (ChatGPT,</text>
+<text x="64" y="218" font-size="12" fill="#1a1a1a">Codex).</text>
+<rect x="78.75" y="252.75" width="64.5" height="22.5" rx="4" fill="#fdfdfd" stroke="#0067c0" stroke-width="1.5"/>
+<text x="111" y="268" font-size="12" fill="#1a1a1a" text-anchor="middle">Yes</text>
+<rect x="152.5" y="252.5" width="65" height="23" rx="4" fill="#fdfdfd" stroke="#d0d0d0"/>
+<text x="185" y="268" font-size="12" fill="#1a1a1a" text-anchor="middle">No</text>
+<rect x="226.5" y="252.5" width="65" height="23" rx="4" fill="#fdfdfd" stroke="#d0d0d0"/>
+<text x="259" y="268" font-size="12" fill="#1a1a1a" text-anchor="middle">Cancel</text>
+</g>
+<g class="k2">
+<rect x="324" y="16" width="292" height="270" rx="8" fill="#ffffff" stroke="#cfcfcf" filter="url(#sh)"/>
+<path d="M324 24 a8 8 0 0 1 8 -8 h276 a8 8 0 0 1 8 8 v24 h-292 z" fill="#f3f3f3"/>
+<text x="336" y="37" font-size="12" fill="#1a1a1a">Step 2 of 3</text>
+<path d="M588 27 l10 10 m0 -10 l-10 10" stroke="#1a1a1a" stroke-width="1.1" stroke-linecap="round"/>
+<path d="M324 242 h292 v36 a8 8 0 0 1 -8 8 h-276 a8 8 0 0 1 -8 -8 z" fill="#f0f0f0"/>
+<line x1="324" y1="242.5" x2="616" y2="242.5" stroke="#dfdfdf"/>
+<rect x="324" y="16" width="292" height="270" rx="8" fill="none" stroke="#cfcfcf"/>
+<circle cx="352" cy="74" r="12" fill="#0067c0"/>
+<circle cx="352" cy="68" r="1.6" fill="#ffffff"/>
+<rect x="350.6" y="71.5" width="2.8" height="9" rx="1.2" fill="#ffffff"/>
+<g class="fa">
+<text x="376" y="78" font-size="12" fill="#1a1a1a">Now let's find your VPN.</text>
+<text x="376" y="110" font-size="12" fill="#1a1a1a">Disconnect your VPN, then click</text>
+<text x="376" y="126" font-size="12" fill="#1a1a1a">Next.</text>
+<rect x="464.75" y="252.75" width="64.5" height="22.5" rx="4" fill="#fdfdfd" stroke="#0067c0" stroke-width="1.5"/>
+<text x="497" y="268" font-size="12" fill="#1a1a1a" text-anchor="middle">Next</text>
+<rect x="538.5" y="252.5" width="65" height="23" rx="4" fill="#fdfdfd" stroke="#d0d0d0"/>
+<text x="571" y="268" font-size="12" fill="#1a1a1a" text-anchor="middle">Cancel</text>
+</g>
+<g class="fb">
+<text x="376" y="78" font-size="12" fill="#1a1a1a">Now connect it again, then click</text>
+<text x="376" y="94" font-size="12" fill="#1a1a1a">Next.</text>
+<rect x="464.75" y="252.75" width="64.5" height="22.5" rx="4" fill="#fdfdfd" stroke="#0067c0" stroke-width="1.5"/>
+<text x="497" y="268" font-size="12" fill="#1a1a1a" text-anchor="middle">Next</text>
+<rect x="538.5" y="252.5" width="65" height="23" rx="4" fill="#fdfdfd" stroke="#d0d0d0"/>
+<text x="571" y="268" font-size="12" fill="#1a1a1a" text-anchor="middle">Cancel</text>
+</g>
+<g class="fc">
+<text x="376" y="78" font-size="12" fill="#1a1a1a">We found your VPN!</text>
+<text x="376" y="110" font-size="12" fill="#1a1a1a">The one you connected shows up as:</text>
+<text x="376" y="126" font-size="12" fill="#1a1a1a">VPN.</text>
+<text x="376" y="158" font-size="12" fill="#1a1a1a">If it is not yours, click Choose</text>
+<text x="376" y="174" font-size="12" fill="#1a1a1a">another.</text>
+<rect x="348.75" y="252.75" width="64.5" height="22.5" rx="4" fill="#fdfdfd" stroke="#0067c0" stroke-width="1.5"/>
+<text x="381" y="268" font-size="12" fill="#1a1a1a" text-anchor="middle">Next</text>
+<rect x="422.5" y="252.5" width="107" height="23" rx="4" fill="#fdfdfd" stroke="#d0d0d0"/>
+<text x="476" y="268" font-size="12" fill="#1a1a1a" text-anchor="middle">Choose another</text>
+<rect x="538.5" y="252.5" width="65" height="23" rx="4" fill="#fdfdfd" stroke="#d0d0d0"/>
+<text x="571" y="268" font-size="12" fill="#1a1a1a" text-anchor="middle">Cancel</text>
+</g>
+</g>
+<g class="k3">
+<rect x="636" y="16" width="292" height="270" rx="8" fill="#ffffff" stroke="#cfcfcf" filter="url(#sh)"/>
+<path d="M636 24 a8 8 0 0 1 8 -8 h276 a8 8 0 0 1 8 8 v24 h-292 z" fill="#f3f3f3"/>
+<text x="648" y="37" font-size="12" fill="#1a1a1a">Step 3 of 3</text>
+<path d="M900 27 l10 10 m0 -10 l-10 10" stroke="#1a1a1a" stroke-width="1.1" stroke-linecap="round"/>
+<path d="M636 242 h292 v36 a8 8 0 0 1 -8 8 h-276 a8 8 0 0 1 -8 -8 z" fill="#f0f0f0"/>
+<line x1="636" y1="242.5" x2="928" y2="242.5" stroke="#dfdfdf"/>
+<rect x="636" y="16" width="292" height="270" rx="8" fill="none" stroke="#cfcfcf"/>
+<circle cx="664" cy="74" r="12" fill="#0067c0"/>
+<circle cx="664" cy="68" r="1.6" fill="#ffffff"/>
+<rect x="662.6" y="71.5" width="2.8" height="9" rx="1.2" fill="#ffffff"/>
+<text x="688" y="78" font-size="12" fill="#1a1a1a">Turn on the protection.</text>
+<text x="688" y="110" font-size="12" fill="#1a1a1a">Windows will ask for administrator</text>
+<text x="688" y="126" font-size="12" fill="#1a1a1a">permission. We need it only this</text>
+<text x="688" y="142" font-size="12" fill="#1a1a1a">once, to install the background</text>
+<text x="688" y="158" font-size="12" fill="#1a1a1a">service that blocks Anthropic</text>
+<text x="688" y="174" font-size="12" fill="#1a1a1a">(Claude) if your VPN drops.</text>
+<rect x="776.75" y="252.75" width="64.5" height="22.5" rx="4" fill="#fdfdfd" stroke="#0067c0" stroke-width="1.5"/>
+<text x="809" y="268" font-size="12" fill="#1a1a1a" text-anchor="middle">Activate</text>
+<rect x="850.5" y="252.5" width="65" height="23" rx="4" fill="#fdfdfd" stroke="#d0d0d0"/>
+<text x="883" y="268" font-size="12" fill="#1a1a1a" text-anchor="middle">Cancel</text>
+</g>
+<path d="M308 151 l12 0 m-5 -6 l6 6 l-6 6" fill="none" stroke="#656d76" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M620 151 l12 0 m-5 -6 l6 6 l-6 6" fill="none" stroke="#656d76" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

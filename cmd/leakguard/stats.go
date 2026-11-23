@@ -225,8 +225,13 @@ func printStats(w io.Writer, st *ipc.Stats, now time.Time) {
 	if st.TodayDrops > 0 {
 		drops = "VPN dropped " + plural(uint64(st.TodayDrops), "time", "times")
 	}
-	fmt.Fprintf(w, "Today:\t%s · %s · %s on the VPN\n", blocks, drops,
-		stats.FormatDuration(time.Duration(st.TodayVPNSeconds)*time.Second))
+	vpn := stats.FormatDuration(time.Duration(st.TodayVPNSeconds) * time.Second)
+	if windowsWords {
+		// Windows cannot count blocks yet: never claim "no blocks" there.
+		fmt.Fprintf(w, "Today:\t%s · %s on the VPN\n", drops, vpn)
+		return
+	}
+	fmt.Fprintf(w, "Today:\t%s · %s · %s on the VPN\n", blocks, drops, vpn)
 }
 
 func plural(n uint64, one, many string) string {
