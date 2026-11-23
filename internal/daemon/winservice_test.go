@@ -91,7 +91,7 @@ func (f *fakeSCM) Delete(name string) error {
 	return nil
 }
 
-const winBinary = `C:\Program Files\leakguard\leakguard.exe`
+const winBinary = `C:\Program Files\leakguard\service\leakguard.exe`
 
 var (
 	wantCommand  = `"` + winBinary + `" serve`
@@ -105,6 +105,9 @@ type winHarness struct {
 	w   WindowsService
 	scm *fakeSCM
 	src string
+	// prepared and owned record the directories PrepareDir and the files
+	// OwnFile were called with.
+	prepared, owned []string
 }
 
 func newWinHarness(t *testing.T, installed *ServiceInfo) *winHarness {
@@ -115,9 +118,9 @@ func newWinHarness(t *testing.T, installed *ServiceInfo) *winHarness {
 		t.Fatal(err)
 	}
 	scm := &fakeSCM{info: installed, fail: map[string]error{}}
-	return &winHarness{
+	h := &winHarness{
 		w: WindowsService{
-			Binary:  filepath.Join(dir, "Program Files", "leakguard", "leakguard.exe"),
+			Binary:  filepath.Join(dir, "Program Files", "leakguard", "service", "leakguard.exe"),
 			Command: wantCommand,
 			Log:     filepath.Join(dir, "ProgramData", "leakguard", "leakguard.log"),
 			SCM:     scm,
@@ -129,6 +132,16 @@ func newWinHarness(t *testing.T, installed *ServiceInfo) *winHarness {
 		scm: scm,
 		src: src,
 	}
+	// The Windows tests prove the real directory ACL and owner.
+	h.w.PrepareDir = func(d string) error {
+		h.prepared = append(h.prepared, d)
+		return os.MkdirAll(d, 0o755)
+	}
+	h.w.OwnFile = func(p string) error {
+		h.owned = append(h.owned, p)
+		return nil
+	}
+	return h
 }
 
 func (h *winHarness) calls() string { return strings.Join(h.scm.calls, " | ") }
@@ -165,9 +178,9 @@ func (h *winHarness) noTemp(t *testing.T) {
 
 func TestWindowsPaths(t *testing.T) {
 	for _, tc := range []struct{ programFiles, programData, binary, log string }{
-		{"", "", `C:\Program Files\leakguard\leakguard.exe`, `C:\ProgramData\leakguard\leakguard.log`},
-		{`D:\Apps`, `E:\Data\`, `D:\Apps\leakguard\leakguard.exe`, `E:\Data\leakguard\leakguard.log`},
-		{`D:\Apps\`, `E:\Data`, `D:\Apps\leakguard\leakguard.exe`, `E:\Data\leakguard\leakguard.log`},
+		{"", "", `C:\Program Files\leakguard\service\leakguard.exe`, `C:\ProgramData\leakguard\leakguard.log`},
+		{`D:\Apps`, `E:\Data\`, `D:\Apps\leakguard\service\leakguard.exe`, `E:\Data\leakguard\leakguard.log`},
+		{`D:\Apps\`, `E:\Data`, `D:\Apps\leakguard\service\leakguard.exe`, `E:\Data\leakguard\leakguard.log`},
 	} {
 		binary, log := WindowsPaths(tc.programFiles, tc.programData)
 		if binary != tc.binary || log != tc.log {
@@ -179,7 +192,7 @@ func TestWindowsPaths(t *testing.T) {
 	if got := ServiceCommand(winBinary); got != wantCommand {
 		t.Errorf("ServiceCommand() = %q, want %q", got, wantCommand)
 	}
-	if got := ServiceCommand(`D:\leakguard\leakguard.exe`); got != `"D:\leakguard\leakguard.exe" serve` {
+	if got := ServiceCommand(`D:\leakguard\service\leakguard.exe`); got != `"D:\leakguard\service\leakguard.exe" serve` {
 		t.Errorf("ServiceCommand() = %q", got)
 	}
 	if ServiceName != "leakguard" {
@@ -204,6 +217,129 @@ func TestWindowsInstallCreatesTheService(t *testing.T) {
 	h.noTemp(t)
 	if !h.w.Installed() {
 		t.Fatal("Installed() = false after Install")
+	}
+}
+
+// S6: the service directory is prepared (only SYSTEM and Administrators
+// may write it) before anything is written there, and the copy is given to
+// Administrators before it replaces the binary the service runs.
+func TestWindowsInstallSecuresTheServiceDirectoryAndTheCopy(t *testing.T) {
+	h := newWinHarness(t, &ServiceInfo{State: ServiceStopped, Command: wantCommand})
+	h.writeBinary(t, "old binary")
+	dir := filepath.Dir(h.w.Binary)
+	h.w.PrepareDir = func(d string) error {
+		h.prepared = append(h.prepared, d)
+		if got := h.binary(t); got != "old binary" {
+			t.Errorf("binary when the directory is prepared = %q", got)
+		}
+		entries, _ := os.ReadDir(dir)
+		if len(entries) != 1 {
+			t.Errorf("the directory held %d entries when prepared, want only the binary", len(entries))
+		}
+		return nil
+	}
+	h.w.OwnFile = func(p string) error {
+		h.owned = append(h.owned, p)
+		if filepath.Dir(p) != dir || p == h.w.Binary {
+			t.Errorf("OwnFile(%s), want a copy next to %s", p, h.w.Binary)
+		}
+		if data, err := os.ReadFile(p); err != nil || string(data) != "new binary" {
+			t.Errorf("the copy given to Administrators = %q, %v", data, err)
+		}
+		if got := h.binary(t); got != "old binary" {
+			t.Errorf("binary when the copy is given to Administrators = %q, want it not replaced yet", got)
+		}
+		return nil
+	}
+	if err := h.w.Install(h.src); err != nil {
+		t.Fatalf("Install() = %v", err)
+	}
+	if len(h.prepared) != 1 || h.prepared[0] != dir {
+		t.Fatalf("PrepareDir calls = %q, want [%s]", h.prepared, dir)
+	}
+	if len(h.owned) != 1 {
+		t.Fatalf("OwnFile calls = %q, want one", h.owned)
+	}
+	if got := h.binary(t); got != "new binary" {
+		t.Fatalf("binary = %q", got)
+	}
+	h.noTemp(t)
+}
+
+// A service directory that cannot be secured fails Install before it
+// writes anything or touches the service, which keeps running.
+func TestWindowsInstallFailsWhenTheServiceDirectoryCannotBeSecured(t *testing.T) {
+	h := newWinHarness(t, &ServiceInfo{State: ServiceRunning, Command: wantCommand})
+	h.writeBinary(t, "old binary")
+	h.w.PrepareDir = func(string) error { return errors.New("Access is denied.") }
+	err := h.w.Install(h.src)
+	want := "cannot secure the service directory " + filepath.Dir(h.w.Binary) + ": Access is denied."
+	if err == nil || err.Error() != want {
+		t.Fatalf("Install() = %v\nwant %s", err, want)
+	}
+	if got := h.calls(); got != "Query leakguard" {
+		t.Fatalf("calls = %s, want only the query", got)
+	}
+	if got := h.binary(t); got != "old binary" || h.scm.info.State != ServiceRunning {
+		t.Fatalf("binary = %q, service %v", got, h.scm.info.State)
+	}
+	h.noTemp(t)
+}
+
+// A copy that cannot be given to Administrators never replaces the binary.
+func TestWindowsInstallFailsWhenTheCopyCannotBeOwned(t *testing.T) {
+	h := newWinHarness(t, &ServiceInfo{State: ServiceRunning, Command: wantCommand})
+	h.writeBinary(t, "old binary")
+	h.w.OwnFile = func(string) error { return errors.New("Access is denied.") }
+	err := h.w.Install(h.src)
+	if err == nil || err.Error() != "cannot give the new copy of leakguard to Administrators: Access is denied." {
+		t.Fatalf("Install() = %v", err)
+	}
+	if got := h.calls(); got != "Query leakguard" {
+		t.Fatalf("calls = %s, want only the query", got)
+	}
+	if got := h.binary(t); got != "old binary" || h.scm.info.State != ServiceRunning {
+		t.Fatalf("binary = %q, service %v", got, h.scm.info.State)
+	}
+	h.noTemp(t)
+}
+
+// S6: an upgrade (reinstall-service after the installer) replaces the copy
+// the running service holds, updates the service and restarts it on the
+// new copy; it never touches the saved choice next to the log.
+func TestWindowsInstallUpgradesTheRunningService(t *testing.T) {
+	h := newWinHarness(t, &ServiceInfo{State: ServiceRunning, Command: wantCommand})
+	h.writeBinary(t, "old binary")
+	cfg := filepath.Join(filepath.Dir(h.w.Log), "config.json")
+	if err := os.MkdirAll(filepath.Dir(cfg), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const choice = `{"vpn_interface":"WireGuard Tunnel","services":["anthropic"]}`
+	if err := os.WriteFile(cfg, []byte(choice), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !h.w.Installed() {
+		t.Fatal("Installed() = false for the service on the service copy")
+	}
+	h.scm.calls = nil
+	h.w.Rename = func(oldpath, newpath string) error {
+		if h.scm.info.State == ServiceRunning {
+			return errors.New("Access is denied.")
+		}
+		return os.Rename(oldpath, newpath)
+	}
+	if err := h.w.Install(h.src); err != nil {
+		t.Fatalf("Install() = %v", err)
+	}
+	want := "Query leakguard | Stop leakguard | Update leakguard " + wantConfig + " | " + wantRecovery + " | Start leakguard"
+	if got := h.calls(); got != want {
+		t.Fatalf("calls = %s\nwant    %s", got, want)
+	}
+	if got := h.binary(t); got != "new binary" || h.scm.info.State != ServiceRunning {
+		t.Fatalf("binary = %q, service %v", got, h.scm.info.State)
+	}
+	if data, err := os.ReadFile(cfg); err != nil || string(data) != choice {
+		t.Fatalf("saved choice = %q, %v", data, err)
 	}
 }
 
@@ -427,11 +563,55 @@ func TestWindowsUninstallRemovesEverything(t *testing.T) {
 	if got, want := h.calls(), "Query leakguard | Stop leakguard | Delete leakguard"; got != want {
 		t.Fatalf("calls = %s, want %s", got, want)
 	}
-	if _, err := os.Stat(filepath.Dir(h.w.Binary)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("the program directory is still there: %v", err)
+	// The empty service directory goes, and the empty leakguard folder in
+	// Program Files with it.
+	for _, d := range []string{filepath.Dir(h.w.Binary), filepath.Dir(filepath.Dir(h.w.Binary))} {
+		if _, err := os.Stat(d); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s is still there: %v", d, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Dir(filepath.Dir(filepath.Dir(h.w.Binary)))); err != nil {
+		t.Fatalf("Program Files went too: %v", err)
 	}
 	if h.w.Installed() {
 		t.Fatal("Installed() = true after Uninstall")
+	}
+}
+
+// S6: the installer keeps its files in the leakguard folder, next to the
+// service directory: Uninstall removes only the service directory then.
+func TestWindowsUninstallKeepsTheInstalledFiles(t *testing.T) {
+	h := newWinHarness(t, &ServiceInfo{State: ServiceRunning, Command: wantCommand})
+	h.writeBinary(t, "binary")
+	cli := filepath.Join(filepath.Dir(filepath.Dir(h.w.Binary)), "leakguard.exe")
+	if err := os.WriteFile(cli, []byte("installed CLI"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.w.Uninstall(); err != nil {
+		t.Fatalf("Uninstall() = %v", err)
+	}
+	if _, err := os.Stat(filepath.Dir(h.w.Binary)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the service directory is still there: %v", err)
+	}
+	if data, err := os.ReadFile(cli); err != nil || string(data) != "installed CLI" {
+		t.Fatalf("installed CLI = %q, %v", data, err)
+	}
+}
+
+// A directory other than "service" is never taken for the leakguard folder:
+// only the binary's own directory is removed, when empty.
+func TestWindowsUninstallRemovesOnlyItsOwnDirectories(t *testing.T) {
+	h := newWinHarness(t, nil)
+	h.w.Binary = filepath.Join(t.TempDir(), "Apps", "leakguard.exe")
+	h.writeBinary(t, "binary")
+	if err := h.w.Uninstall(); err != nil {
+		t.Fatalf("Uninstall() = %v", err)
+	}
+	if _, err := os.Stat(filepath.Dir(h.w.Binary)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the binary's directory is still there: %v", err)
+	}
+	if _, err := os.Stat(filepath.Dir(filepath.Dir(h.w.Binary))); err != nil {
+		t.Fatalf("the parent directory went too: %v", err)
 	}
 }
 

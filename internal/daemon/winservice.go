@@ -27,11 +27,18 @@ const (
 	// stopped process may still hold for a moment.
 	removeTries = 10
 	removeDelay = 200 * time.Millisecond
+	// serviceDirName is the directory of the service's copy, inside the
+	// leakguard folder in %ProgramFiles%.
+	serviceDirName = "service"
 )
 
-// WindowsBinaryPath is the copy the Windows service runs, in
-// %ProgramFiles%, which only administrators can write. WindowsLogPath is
-// its log, in %ProgramData%\leakguard with the config and the stats.
+// WindowsBinaryPath is the copy the Windows service runs:
+// %ProgramFiles%\leakguard\service\leakguard.exe, in a directory only
+// SYSTEM and Administrators may write. It is the service's own copy, apart
+// from the leakguard.exe the installer puts in %ProgramFiles%\leakguard,
+// so an upgrade never has to replace the binary the running service holds.
+// WindowsLogPath is its log, in %ProgramData%\leakguard with the config and
+// the stats.
 var WindowsBinaryPath, WindowsLogPath = WindowsPaths(os.Getenv("ProgramFiles"), os.Getenv("ProgramData"))
 
 // ErrServiceNotInstalled is what a ServiceManager returns for a service
@@ -47,7 +54,7 @@ func WindowsPaths(programFiles, programData string) (binary, log string) {
 	if programData == "" {
 		programData = `C:\ProgramData`
 	}
-	binary = strings.TrimRight(programFiles, `\/`) + `\leakguard\leakguard.exe`
+	binary = strings.TrimRight(programFiles, `\/`) + `\leakguard\` + serviceDirName + `\leakguard.exe`
 	log = strings.TrimRight(programData, `\/`) + `\leakguard\leakguard.log`
 	return binary, log
 }
@@ -122,6 +129,12 @@ type WindowsService struct {
 	Remove func(path string) error
 	// Sleep waits between removal tries. Nil means time.Sleep.
 	Sleep func(time.Duration)
+	// PrepareDir makes the binary's directory one only SYSTEM and
+	// Administrators may write. Nil means config.PrepareDir.
+	PrepareDir func(dir string) error
+	// OwnFile gives the new copy to Administrators. Nil means
+	// ownByAdministrators.
+	OwnFile func(path string) error
 	// openLog opens the log for LastLogLine. Nil means config.OpenTrusted.
 	openLog func(string) (*os.File, error)
 }
@@ -152,6 +165,20 @@ func (w WindowsService) remove(path string) error {
 	return os.Remove(path)
 }
 
+func (w WindowsService) prepareDir(dir string) error {
+	if w.PrepareDir != nil {
+		return w.PrepareDir(dir)
+	}
+	return config.PrepareDir(dir)
+}
+
+func (w WindowsService) ownFile(path string) error {
+	if w.OwnFile != nil {
+		return w.OwnFile(path)
+	}
+	return ownByAdministrators(path)
+}
+
 func (w WindowsService) sleep(d time.Duration) {
 	if w.Sleep != nil {
 		w.Sleep(d)
@@ -162,10 +189,16 @@ func (w WindowsService) sleep(d time.Duration) {
 
 // Install copies the executable at src to Binary, creates or updates the
 // service (automatic start, LocalSystem, restart on failure) and
-// (re)starts it, so a new binary takes effect. The copy replaces the old
-// one atomically; a running service holds its binary, so when the
-// replacement fails it is stopped first and the replacement tried again.
-// Once Install stopped the service, any later failure starts it again.
+// (re)starts it, so a new binary takes effect. Before it writes anything,
+// Binary's directory is made one only SYSTEM and Administrators may write
+// (PrepareDir: a junction there is replaced by a real directory, and an
+// entry someone else could write is removed), and the copy is given to
+// Administrators before it replaces the old one, atomically. A running
+// service holds its binary, so when the replacement fails it is stopped
+// first and the replacement tried again. Once Install stopped the
+// service, any later failure starts it again. The saved choice and the
+// loaded filters are never touched: "leakguard reinstall-service" uses
+// Install after an upgrade.
 func (w WindowsService) Install(src string) error {
 	data, err := os.ReadFile(src)
 	if err != nil {
@@ -181,11 +214,18 @@ func (w WindowsService) Install(src string) error {
 	// on every failure starts it again, so a failed upgrade never leaves
 	// the protection without its daemon.
 	stopped := false
+	dir := filepath.Dir(w.Binary)
+	if err := w.prepareDir(dir); err != nil {
+		return fmt.Errorf("cannot secure the service directory %s: %w", dir, err)
+	}
 	tmp, err := writeTemp(w.Binary, data)
 	if err != nil {
 		return err
 	}
 	defer os.Remove(tmp)
+	if err := w.ownFile(tmp); err != nil {
+		return fmt.Errorf("cannot give the new copy of leakguard to Administrators: %w", err)
+	}
 	if err := w.rename(tmp, w.Binary); err != nil {
 		if !running {
 			return fmt.Errorf("cannot replace %s: %w", w.Binary, err)
@@ -268,10 +308,12 @@ func writeTemp(path string, data []byte) (string, error) {
 	return f.Name(), nil
 }
 
-// Uninstall stops and deletes the service and removes its binary. A
-// service that is not installed is fine. When the service cannot be
-// stopped and still runs, Uninstall fails and removes nothing, so a
-// running daemon is never orphaned.
+// Uninstall stops and deletes the service and removes its binary, then
+// its directory and, for the service directory, the leakguard folder
+// around it, each only when empty (the installer's files stay). A service
+// that is not installed is fine. When the service cannot be stopped and
+// still runs, Uninstall fails and removes nothing, so a running daemon is
+// never orphaned.
 func (w WindowsService) Uninstall() error {
 	info, err := w.SCM.Query(ServiceName)
 	switch {
@@ -293,8 +335,12 @@ func (w WindowsService) Uninstall() error {
 	if err := w.removeBinary(); err != nil {
 		return err
 	}
-	// Remove the leakguard program directory only when it is empty.
-	os.Remove(filepath.Dir(w.Binary))
+	// Remove the directories only when they are empty.
+	dir := filepath.Dir(w.Binary)
+	os.Remove(dir)
+	if filepath.Base(dir) == serviceDirName {
+		os.Remove(filepath.Dir(dir))
+	}
 	return nil
 }
 
