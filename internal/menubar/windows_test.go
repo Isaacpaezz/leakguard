@@ -2,18 +2,32 @@ package menubar
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
+	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 	"syscall"
 	"testing"
+	"unicode"
+	"unicode/utf8"
 
+	"github.com/Isaacpaezz/leakguard/internal/catalog"
+	"github.com/Isaacpaezz/leakguard/internal/config"
 	"github.com/Isaacpaezz/leakguard/internal/daemon"
 )
 
 const (
-	winTray      = `C:\Users\Ana María\AppData\Local\leakguard\leakguard-tray.exe`
-	winNextToApp = `C:\Users\Ana María\AppData\Local\leakguard\leakguard.exe`
-	winInstalled = `C:\Program Files\leakguard\leakguard.exe`
+	// The installer puts the tray app and the CLI in %ProgramFiles%\leakguard
+	// and the service runs its own copy in the service folder below it.
+	winTray      = `C:\Program Files\leakguard\leakguard-tray.exe`
+	winNextToApp = `C:\Program Files\leakguard\leakguard.exe`
+	winInstalled = `C:\Program Files\leakguard\service\leakguard.exe`
+	// A tray app copied to a user's folder, with a non-ASCII name.
+	winUserTray = `C:\Users\Ana María\AppData\Local\leakguard\leakguard-tray.exe`
+	winUserCLI  = `C:\Users\Ana María\AppData\Local\leakguard\leakguard.exe`
+	winReport   = `C:\Users\Ana María\AppData\Local\Temp\leakguard-report-123.txt`
 )
 
 // fakeSCM answers Query from services; every other call fails, so a test
@@ -62,7 +76,8 @@ func TestWindowsInstalledState(t *testing.T) {
 	}{
 		{"no service", fakeSCM{}, InstallNone},
 		{"current service", serviceRunning(current), InstallCurrent},
-		{"current service, other case", serviceRunning(`"C:\PROGRAM FILES\leakguard\leakguard.exe" serve`), InstallCurrent},
+		{"current service, other case", serviceRunning(`"C:\PROGRAM FILES\leakguard\SERVICE\leakguard.exe" serve`), InstallCurrent},
+		{"the service running the CLI next to the tray: an older install", serviceRunning(`"` + winNextToApp + `" serve`), InstallOld},
 		{"stopped current service", fakeSCM{services: map[string]daemon.ServiceInfo{daemon.ServiceName: {State: daemon.ServiceStopped, Command: current}}}, InstallCurrent},
 		{"another command", serviceRunning(`"` + winInstalled + `" apply`), InstallOld},
 		{"another binary", serviceRunning(`"C:\Temp\leakguard.exe" serve`), InstallOld},
@@ -76,7 +91,7 @@ func TestWindowsInstalledState(t *testing.T) {
 	if got, want := WindowsInstalledCLI(`C:\Program Files`), winInstalled; got != want {
 		t.Errorf("WindowsInstalledCLI = %q, want %q", got, want)
 	}
-	if got, want := WindowsInstalledCLI(`D:\Programas\`), `D:\Programas\leakguard\leakguard.exe`; got != want {
+	if got, want := WindowsInstalledCLI(`D:\Programas\`), `D:\Programas\leakguard\service\leakguard.exe`; got != want {
 		t.Errorf("WindowsInstalledCLI(D:) = %q, want %q", got, want)
 	}
 	if got, want := WindowsInstalledCLI(""), winInstalled; got != want {
@@ -111,6 +126,8 @@ func TestFindWindowsCLI(t *testing.T) {
 		{"nothing at all", winTray, InstallNone, none, adminOnly, "", ErrNoCLI},
 		{"unknown tray path", "", InstallNone, func(string) bool { return true }, adminOnly, "", ErrNoCLI},
 		{"relative tray path", `leakguard\leakguard-tray.exe`, InstallNone, func(string) bool { return true }, adminOnly, "", ErrNoCLI},
+		{"tray in a user's folder: the one next to it", winUserTray, InstallNone, func(p string) bool { return p == winUserCLI }, adminOnly, winUserCLI, nil},
+		{"tray in a user's folder, current service: the installed copy", winUserTray, InstallCurrent, func(p string) bool { return p == winUserCLI }, adminOnly, winInstalled, nil},
 	}
 	for _, tc := range tests {
 		got, err := FindWindowsCLI(tc.exe, tc.inst, winInstalled, tc.isFile, tc.check)
@@ -124,21 +141,35 @@ func TestFindWindowsCLI(t *testing.T) {
 }
 
 // S1: the Windows setup and uninstall run the CLI itself, elevated, with
-// its arguments as a list; the path must be an absolute Windows path.
+// its arguments as a list; the path must be an absolute Windows path. The
+// report file comes first, so the CLI reads it before any other mistake.
 func TestWindowsSetupCommand(t *testing.T) {
 	d := Draft{VPNInterface: "ipsec0", Services: []string{"anthropic", "mistral"}}
-	got, err := WindowsSetupCommand(winInstalled, d, fullCatalog)
-	want := []string{winInstalled, "enable", "--vpn", "ipsec0", "anthropic", "mistral"}
+	got, err := WindowsSetupCommand(winInstalled, d, fullCatalog, winReport)
+	want := []string{winInstalled, "enable", "--report-file", winReport, "--vpn", "ipsec0", "anthropic", "mistral"}
 	if err != nil || !slices.Equal(got, want) {
 		t.Errorf("WindowsSetupCommand = %q, %v; want %q", got, err, want)
+	}
+	// No report file, or one that is not a plain absolute path: no flag,
+	// the run still works and only its exit status is known.
+	for _, report := range []string{"", "report.txt", `C:\Temp\a"b.txt`, "C:\\Temp\\a\nb.txt", `C:\Temp\..\x.txt`} {
+		got, err := WindowsSetupCommand(winInstalled, d, fullCatalog, report)
+		want := []string{winInstalled, "enable", "--vpn", "ipsec0", "anthropic", "mistral"}
+		if err != nil || !slices.Equal(got, want) {
+			t.Errorf("report %q: WindowsSetupCommand = %q, %v; want %q", report, got, err, want)
+		}
+		got, err = WindowsDisableCommand(winInstalled, report)
+		if want := []string{winInstalled, "disable"}; err != nil || !slices.Equal(got, want) {
+			t.Errorf("report %q: WindowsDisableCommand = %q, %v; want %q", report, got, err, want)
+		}
 	}
 	for _, bad := range []string{"leakguard.exe", `\leakguard\leakguard.exe`, `\\server\share\leakguard.exe`,
 		`\\?\C:\leakguard.exe`, `C:leakguard.exe`, `C:\a"b\leakguard.exe`, "C:\\a\nb\\leakguard.exe",
 		"C:\\\xff\\leakguard.exe", `C:\a\..\leakguard.exe`, "/usr/bin/leakguard", ""} {
-		if _, err := WindowsSetupCommand(bad, d, fullCatalog); !errors.Is(err, ErrUnsafeCLIPath) {
+		if _, err := WindowsSetupCommand(bad, d, fullCatalog, winReport); !errors.Is(err, ErrUnsafeCLIPath) {
 			t.Errorf("WindowsSetupCommand(%q) err = %v, want ErrUnsafeCLIPath", bad, err)
 		}
-		if _, err := WindowsDisableCommand(bad); !errors.Is(err, ErrUnsafeCLIPath) {
+		if _, err := WindowsDisableCommand(bad, winReport); !errors.Is(err, ErrUnsafeCLIPath) {
 			t.Errorf("WindowsDisableCommand(%q) err = %v, want ErrUnsafeCLIPath", bad, err)
 		}
 	}
@@ -148,13 +179,48 @@ func TestWindowsSetupCommand(t *testing.T) {
 		{VPNInterface: "ipsec0"},
 		{VPNInterface: "", Services: []string{"anthropic"}},
 	} {
-		if _, err := WindowsSetupCommand(winInstalled, bad, fullCatalog); !errors.Is(err, ErrInvalidChoice) {
+		if _, err := WindowsSetupCommand(winInstalled, bad, fullCatalog, winReport); !errors.Is(err, ErrInvalidChoice) {
 			t.Errorf("WindowsSetupCommand(%+v) err = %v, want ErrInvalidChoice", bad, err)
 		}
 	}
-	got, err = WindowsDisableCommand(winInstalled)
-	if want := []string{winInstalled, "disable"}; err != nil || !slices.Equal(got, want) {
+	got, err = WindowsDisableCommand(winInstalled, winReport)
+	if want := []string{winInstalled, "disable", "--report-file", winReport}; err != nil || !slices.Equal(got, want) {
 		t.Errorf("WindowsDisableCommand = %q, %v; want %q", got, err, want)
+	}
+}
+
+// windowsAliasRules stands in for the Windows adapter rules on other
+// systems (config uses the rules of the system it runs on): any alias
+// that is valid UTF-8 without control characters, as an adapter that does
+// not exist yet is judged. windows_windows_test.go runs the real ones.
+func windowsAliasRules(c config.Config, all []catalog.Service) error {
+	if c.VPNInterface == "" || !utf8.ValidString(c.VPNInterface) ||
+		strings.ContainsFunc(c.VPNInterface, unicode.IsControl) {
+		return fmt.Errorf("%q is not a valid interface name", c.VPNInterface)
+	}
+	return c.ValidateServices(all)
+}
+
+// S1: Windows adapter aliases hold spaces and any letter: the setup passes
+// them to the elevated CLI as one argument, unchanged.
+func TestWindowsSetupCommandAliases(t *testing.T) {
+	for _, alias := range []string{"WireGuard Tunnel", "Conexión VPN", "VPN \"oficina\" 2"} {
+		d := Draft{VPNInterface: alias, Services: []string{"anthropic"}}
+		got, err := windowsSetupCommand(winInstalled, d, fullCatalog, winReport, windowsAliasRules)
+		want := []string{winInstalled, "enable", "--report-file", winReport, "--vpn", alias, "anthropic"}
+		if err != nil || !slices.Equal(got, want) {
+			t.Errorf("alias %q: %q, %v; want %q", alias, got, err, want)
+		}
+	}
+	got, err := windowsSetupCommand(winInstalled, Draft{VPNInterface: "WireGuard Tunnel", Services: []string{"anthropic"}},
+		fullCatalog, "", windowsAliasRules)
+	if line := WindowsCommandLine(got[1:]); err != nil || line != `enable --vpn "WireGuard Tunnel" anthropic` {
+		t.Errorf("command line = %s, %v", line, err)
+	}
+	_, err = windowsSetupCommand(winInstalled, Draft{VPNInterface: "VPN\x00", Services: []string{"anthropic"}},
+		fullCatalog, "", windowsAliasRules)
+	if !errors.Is(err, ErrInvalidChoice) {
+		t.Errorf("alias with a NUL: err = %v, want ErrInvalidChoice", err)
 	}
 }
 
@@ -186,24 +252,76 @@ func TestWindowsCommandLine(t *testing.T) {
 
 // S1: how the elevated run ended: the user declining UAC (ERROR_CANCELLED)
 // is a cancel, any other launch failure and any non-zero exit an error.
+// A failed run says the message the CLI wrote to the report file, or its
+// exit status when it wrote none.
 func TestElevationError(t *testing.T) {
-	if err := ElevationError(nil, 0); err != nil {
+	if err := ElevationError(nil, 0, ""); err != nil {
 		t.Errorf("exit 0: %v", err)
 	}
-	if err := ElevationError(syscall.Errno(1223), 0); !errors.Is(err, ErrCancelled) {
+	if err := ElevationError(nil, 0, "stale text"); err != nil {
+		t.Errorf("exit 0 with a report: %v, want nil", err)
+	}
+	if err := ElevationError(syscall.Errno(1223), 0, ""); !errors.Is(err, ErrCancelled) {
 		t.Errorf("ERROR_CANCELLED: err = %v, want ErrCancelled", err)
 	}
-	if got := WizardMessage(Spanish.ForOS("windows"), ElevationError(syscall.Errno(1223), 0)); got != "" {
+	if got := WizardMessage(Spanish.ForOS("windows"), ElevationError(syscall.Errno(1223), 0, "")); got != "" {
 		t.Errorf("a declined UAC prompt says %q, want nothing", got)
 	}
-	launch := ElevationError(syscall.Errno(2), 0)
+	launch := ElevationError(syscall.Errno(2), 0, "")
 	if launch == nil || errors.Is(launch, ErrCancelled) || launch.Error() != "could not start leakguard as administrator: "+syscall.Errno(2).Error() {
 		t.Errorf("launch failure: err = %v", launch)
 	}
-	if err := ElevationError(nil, 1); err == nil || err.Error() != "leakguard exited with status 1" {
+	if err := ElevationError(nil, 1, ""); err == nil || err.Error() != "leakguard exited with status 1" {
 		t.Errorf("exit 1: err = %v", err)
 	}
-	if err := ElevationError(nil, 0xC0000005); err == nil || err.Error() != "leakguard exited with status 3221225477" {
+	if err := ElevationError(nil, 1, " \n\t"); err == nil || err.Error() != "leakguard exited with status 1" {
+		t.Errorf("exit 1 with a blank report: err = %v", err)
+	}
+	if err := ElevationError(nil, 0xC0000005, ""); err == nil || err.Error() != "leakguard exited with status 3221225477" {
 		t.Errorf("crash: err = %v", err)
+	}
+	msg := `could not apply the firewall rules: "Conexión VPN" is not a VPN interface; it is a real connection`
+	err := ElevationError(nil, 1, msg+"\n")
+	if err == nil || err.Error() != msg {
+		t.Errorf("exit 1 with a report: err = %v, want %q", err, msg)
+	}
+	if got, want := WizardMessage(English.ForOS("windows"), err), English.ForOS("windows").Text(msgWizardFailed, msg); got != want {
+		t.Errorf("the wizard says %q, want %q", got, want)
+	}
+	if got := Explain(Spanish.ForOS("windows"), err); !strings.Contains(got, msg) {
+		t.Errorf("Explain = %q, want it to hold %q", got, msg)
+	}
+}
+
+// S1: the report file is read capped at maxElevationReport bytes, as
+// valid UTF-8 and trimmed; a missing or unreadable one is no report.
+func TestReadElevationReport(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, text string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	tests := []struct {
+		path string
+		want string
+	}{
+		{write("ok.txt", "could not install the background service: access denied\n"), "could not install the background service: access denied"},
+		{write("empty.txt", ""), ""},
+		{write("invalid.txt", "bad \xff byte\r\n"), "bad \uFFFD byte"},
+		{filepath.Join(dir, "missing.txt"), ""},
+		{dir, ""},
+		{"", ""},
+	}
+	for _, tc := range tests {
+		if got := ReadElevationReport(tc.path); got != tc.want {
+			t.Errorf("ReadElevationReport(%s) = %q, want %q", filepath.Base(tc.path), got, tc.want)
+		}
+	}
+	long := write("long.txt", strings.Repeat("ñ", maxElevationReport))
+	if got := ReadElevationReport(long); len(got) > maxElevationReport || !utf8.ValidString(got) || !strings.HasPrefix(got, "ññ") {
+		t.Errorf("long report: %d bytes, valid UTF-8 %v", len(got), utf8.ValidString(got))
 	}
 }

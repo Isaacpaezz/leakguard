@@ -2,6 +2,7 @@ package menubar
 
 import (
 	"errors"
+	"flag"
 	"fmt"
 	"io/fs"
 	"os"
@@ -53,6 +54,38 @@ func TestWindowsCommandLineRoundTrip(t *testing.T) {
 	}
 }
 
+// S1: on the real Windows adapter rules, aliases with spaces and non-ASCII
+// letters (adapters that do not exist here, judged by name) pass the
+// setup's validation and reach the elevated command line unchanged.
+func TestWindowsSetupCommandRealAliases(t *testing.T) {
+	report := filepath.Join(t.TempDir(), "leakguard-report.txt")
+	for _, alias := range []string{"WireGuard Tunnel", "Conexión VPN"} {
+		d := Draft{VPNInterface: alias, Services: []string{"anthropic"}}
+		argv, err := WindowsSetupCommand(winInstalled, d, fullCatalog, report)
+		want := []string{winInstalled, "enable", "--report-file", report, "--vpn", alias, "anthropic"}
+		if err != nil || fmt.Sprintf("%q", argv) != fmt.Sprintf("%q", want) {
+			t.Fatalf("alias %q: %q, %v; want %q", alias, argv, err, want)
+		}
+		cmd, err := windows.UTF16PtrFromString(WindowsCommandLine(argv))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var argc int32
+		parsed, err := windows.CommandLineToArgv(cmd, &argc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, p := range parsed[:argc] {
+			got = append(got, windows.UTF16PtrToString(&p[0]))
+		}
+		windows.LocalFree(windows.Handle(unsafe.Pointer(parsed)))
+		if fmt.Sprintf("%q", got) != fmt.Sprintf("%q", want) {
+			t.Errorf("alias %q: CommandLineToArgvW read back %q, want %q", alias, got, want)
+		}
+	}
+}
+
 // S1: the language comes from GetUserDefaultUILanguage.
 func TestUserLang(t *testing.T) {
 	id := userUILanguage()
@@ -68,12 +101,13 @@ func TestUserLang(t *testing.T) {
 	}
 }
 
-// S1: the installed copy's path comes from the Program Files known folder.
+// S1: the installed copy's path comes from the Program Files known folder:
+// the service's own copy in %ProgramFiles%\leakguard\service.
 func TestProgramFiles(t *testing.T) {
 	dir := ProgramFiles()
 	cli := WindowsInstalledCLI(dir)
 	t.Logf("Program Files = %q, installed CLI = %q", dir, cli)
-	if checkWindowsPath(dir) != nil || !strings.EqualFold(cli, filepath.Join(dir, "leakguard", "leakguard.exe")) {
+	if checkWindowsPath(dir) != nil || !strings.EqualFold(cli, filepath.Join(dir, "leakguard", "service", "leakguard.exe")) {
 		t.Errorf("Program Files = %q, installed CLI = %q", dir, cli)
 	}
 }
@@ -189,6 +223,79 @@ func TestRunElevatedExitCode(t *testing.T) {
 	}
 	if err := RunElevated(nil); err == nil {
 		t.Error("RunElevated(nil): no error")
+	}
+}
+
+// reportHelperArg makes TestHelperElevatedReport act: the elevated copy of
+// this test binary writes a message to the report file and exits 3, like
+// a failed leakguard enable.
+const reportHelperArg = "leakguard-report-helper"
+
+// TestHelperElevatedReport is the elevated program of
+// TestRunElevatedWithReport; run on its own it does nothing.
+func TestHelperElevatedReport(t *testing.T) {
+	args := flag.Args()
+	if len(args) != 3 || args[0] != reportHelperArg {
+		return
+	}
+	if args[2] != "" {
+		f, err := os.OpenFile(args[1], os.O_WRONLY|os.O_TRUNC, 0)
+		if err != nil {
+			os.Exit(4)
+		}
+		f.WriteString(args[2] + "\n")
+		f.Close()
+	}
+	os.Exit(3)
+}
+
+// S1: the tray creates a report file in the user's temporary folder,
+// passes it to the elevated program, shows the message written there
+// instead of the exit status, and removes the file. Like
+// TestRunElevatedExitCode, it runs only elevated (as on windows-latest).
+func TestRunElevatedWithReport(t *testing.T) {
+	if !windows.GetCurrentProcessToken().IsElevated() {
+		t.Skip("needs an elevated process: otherwise Windows would show the UAC prompt")
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg := `could not apply the firewall rules: "Conexión VPN" is not a VPN interface`
+	for _, tc := range []struct{ write, want string }{
+		{msg, msg},
+		{"", "leakguard exited with status 3"},
+	} {
+		var report string
+		done := make(chan error, 1)
+		go func() {
+			done <- RunElevatedWithReport(func(path string) ([]string, error) {
+				report = path
+				if _, err := os.Stat(path); err != nil {
+					return nil, fmt.Errorf("the report file does not exist before the run: %w", err)
+				}
+				return []string{exe, "-test.run=^TestHelperElevatedReport$", reportHelperArg, path, tc.write}, nil
+			})
+		}()
+		select {
+		case err = <-done:
+		case <-time.After(60 * time.Second):
+			t.Fatal("no answer in 60 s: a UAC prompt may be waiting")
+		}
+		if err == nil || err.Error() != tc.want {
+			t.Errorf("RunElevatedWithReport = %v, want %q", err, tc.want)
+		}
+		tmp := os.TempDir()
+		if report == "" || !strings.EqualFold(filepath.Dir(report), filepath.Clean(tmp)) {
+			t.Errorf("report file %q is not in the user's temporary folder %q", report, tmp)
+		}
+		if _, err := os.Stat(report); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("the report file %q was kept: %v", report, err)
+		}
+	}
+	built := errors.New("not a valid choice")
+	if err := RunElevatedWithReport(func(string) ([]string, error) { return nil, built }); !errors.Is(err, built) {
+		t.Errorf("a command that cannot be built: err = %v", err)
 	}
 }
 

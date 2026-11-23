@@ -2,6 +2,7 @@ package menubar
 
 import (
 	"errors"
+	"os"
 	"runtime"
 	"syscall"
 	"unsafe"
@@ -54,7 +55,34 @@ func RunElevated(argv []string) error {
 		return err
 	}
 	code, err := runElevated(argv[0], WindowsCommandLine(argv[1:]))
-	return ElevationError(err, code)
+	return ElevationError(err, code, "")
+}
+
+// RunElevatedWithReport is RunElevated for the leakguard CLI, whose
+// console cannot be read: it creates an empty report file in the user's
+// temporary folder, builds the command with its path (see
+// WindowsSetupCommand), and a failure says the message the CLI wrote
+// there. The file is removed afterwards; without it, build gets "" and
+// only the exit status is known.
+func RunElevatedWithReport(build func(report string) ([]string, error)) error {
+	report := ""
+	if f, err := os.CreateTemp("", "leakguard-report-*.txt"); err == nil {
+		report = f.Name()
+		f.Close()
+		defer os.Remove(report)
+	}
+	argv, err := build(report)
+	if err != nil {
+		return err
+	}
+	if len(argv) == 0 {
+		return errors.New("no administrator command to run")
+	}
+	if err := checkWindowsCLIPath(argv[0]); err != nil {
+		return err
+	}
+	code, err := runElevated(argv[0], WindowsCommandLine(argv[1:]))
+	return ElevationError(err, code, ReadElevationReport(report))
 }
 
 // runElevated starts file with the "runas" verb and params, waits for it

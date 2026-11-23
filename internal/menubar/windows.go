@@ -3,6 +3,8 @@ package menubar
 import (
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 	"syscall"
 	"unicode/utf16"
@@ -122,28 +124,75 @@ func checkWindowsCLIPath(cli string) error {
 	return nil
 }
 
-// WindowsSetupCommand is the argv that runs "cli enable --vpn ALIAS
-// SERVICE..." once elevated, the Windows counterpart of SetupCommand. The
-// alias may hold spaces and any letter; RunElevated quotes each argument.
-// cli and the draft are checked like in SetupScript.
-func WindowsSetupCommand(cli string, d Draft, all []catalog.Service) ([]string, error) {
+// reportFileFlag is the CLI's internal flag that names the file where the
+// elevated enable or disable writes its final error message.
+const reportFileFlag = "--report-file"
+
+// maxElevationReport bounds what the tray reads of a report file, in
+// bytes, like the CLI bounds what it writes.
+const maxElevationReport = 4096
+
+// WindowsSetupCommand is the argv that runs "cli enable --report-file
+// REPORT --vpn ALIAS SERVICE..." once elevated, the Windows counterpart of
+// SetupCommand. The alias may hold spaces and any letter; RunElevated
+// quotes each argument. cli and the draft are checked like in SetupScript.
+// report is the file for the CLI's error message (see RunElevatedWithReport);
+// "" or a path that is not a plain absolute Windows path leaves the flag
+// out, and only the exit status is known.
+func WindowsSetupCommand(cli string, d Draft, all []catalog.Service, report string) ([]string, error) {
+	return windowsSetupCommand(cli, d, all, report, config.Config.Validate)
+}
+
+// windowsSetupCommand is WindowsSetupCommand with the draft checked by
+// validate; tests on other systems pass the Windows alias rules.
+func windowsSetupCommand(cli string, d Draft, all []catalog.Service, report string, validate func(config.Config, []catalog.Service) error) ([]string, error) {
 	if err := checkWindowsCLIPath(cli); err != nil {
 		return nil, err
 	}
-	if err := (config.Config{VPNInterface: d.VPNInterface, Services: d.Services}).Validate(all); err != nil {
+	if err := validate(config.Config{VPNInterface: d.VPNInterface, Services: d.Services}, all); err != nil {
 		return nil, invalidChoice(err)
 	}
-	argv := []string{cli, "enable", "--vpn", d.VPNInterface}
+	argv := append([]string{cli, "enable"}, reportArgs(report)...)
+	argv = append(argv, "--vpn", d.VPNInterface)
 	return append(argv, d.Services...), nil
 }
 
-// WindowsDisableCommand is the argv that runs "cli disable" once
-// elevated, for the uninstall.
-func WindowsDisableCommand(cli string) ([]string, error) {
+// WindowsDisableCommand is the argv that runs "cli disable --report-file
+// REPORT" once elevated, for the uninstall; report as in
+// WindowsSetupCommand.
+func WindowsDisableCommand(cli, report string) ([]string, error) {
 	if err := checkWindowsCLIPath(cli); err != nil {
 		return nil, err
 	}
-	return []string{cli, "disable"}, nil
+	return append([]string{cli, "disable"}, reportArgs(report)...), nil
+}
+
+// reportArgs passes report to the CLI, first, so the CLI reads it before
+// any other mistake; nothing for a path that is not plain.
+func reportArgs(report string) []string {
+	if report == "" || checkWindowsPath(report) != nil {
+		return nil
+	}
+	return []string{reportFileFlag, report}
+}
+
+// ReadElevationReport is the message the elevated CLI wrote to the report
+// file at path: at most maxElevationReport bytes, valid UTF-8, trimmed.
+// A missing or unreadable file, or a folder, is no message.
+func ReadElevationReport(path string) string {
+	if path == "" {
+		return ""
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, maxElevationReport))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(strings.ToValidUTF8(string(b), "\uFFFD"))
 }
 
 // WindowsCommandLine joins args into the parameters of an elevated run,
@@ -195,17 +244,21 @@ func escapeWindowsArg(s string) string {
 }
 
 // ElevationError explains how an elevated run ended: launchErr is
-// ShellExecuteExW's error and exitCode the process's exit code. Declining
-// the UAC prompt (ERROR_CANCELLED) is ErrCancelled. The elevated CLI's own
-// output cannot be read, so a failure says its exit code.
-func ElevationError(launchErr error, exitCode uint32) error {
+// ShellExecuteExW's error, exitCode the process's exit code and report
+// what the CLI wrote to the report file. Declining the UAC prompt
+// (ERROR_CANCELLED) is ErrCancelled. A failure says the CLI's message,
+// or its exit code when it wrote none: its console cannot be read.
+func ElevationError(launchErr error, exitCode uint32, report string) error {
 	switch {
 	case errors.Is(launchErr, errorCancelled):
 		return ErrCancelled
 	case launchErr != nil:
 		return fmt.Errorf("could not start leakguard as administrator: %s", firstLine(launchErr.Error()))
-	case exitCode != 0:
-		return fmt.Errorf("leakguard exited with status %d", exitCode)
+	case exitCode == 0:
+		return nil
 	}
-	return nil
+	if msg := strings.TrimSpace(report); msg != "" {
+		return errors.New(msg)
+	}
+	return fmt.Errorf("leakguard exited with status %d", exitCode)
 }

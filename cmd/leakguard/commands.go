@@ -250,6 +250,7 @@ func (c *cli) detectVPN() (string, error) {
 func (c *cli) enable(args []string) error {
 	fs := flag.NewFlagSet("enable", flag.ContinueOnError)
 	vpn := fs.String("vpn", "", "VPN interface")
+	c.reportFlag(fs)
 	ids, err := c.parse(fs, args, true)
 	if err != nil {
 		return err
@@ -319,7 +320,9 @@ func (c *cli) enable(args []string) error {
 }
 
 func (c *cli) disable(args []string) error {
-	if _, err := c.parse(flag.NewFlagSet("disable", flag.ContinueOnError), args, false); err != nil {
+	fs := flag.NewFlagSet("disable", flag.ContinueOnError)
+	c.reportFlag(fs)
+	if _, err := c.parse(fs, args, false); err != nil {
 		return err
 	}
 	if err := c.requireRoot("disable"); err != nil {

@@ -70,11 +70,9 @@ func (p windowsPlatform) setUp(_ menubar.Lang, all []catalog.Service, d menubar.
 	if err != nil {
 		return err
 	}
-	argv, err := menubar.WindowsSetupCommand(cli, d, all)
-	if err != nil {
-		return err
-	}
-	return menubar.RunElevated(argv)
+	return menubar.RunElevatedWithReport(func(report string) ([]string, error) {
+		return menubar.WindowsSetupCommand(cli, d, all, report)
+	})
 }
 
 func (p windowsPlatform) disable(menubar.Lang) error {
@@ -82,11 +80,9 @@ func (p windowsPlatform) disable(menubar.Lang) error {
 	if err != nil {
 		return err
 	}
-	argv, err := menubar.WindowsDisableCommand(cli)
-	if err != nil {
-		return err
-	}
-	return menubar.RunElevated(argv)
+	return menubar.RunElevatedWithReport(func(report string) ([]string, error) {
+		return menubar.WindowsDisableCommand(cli, report)
+	})
 }
 
 func (p windowsPlatform) loginMenu() menubar.LoginMenuItem {

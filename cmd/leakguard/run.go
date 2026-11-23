@@ -280,6 +280,9 @@ var commands = []command{
 type cli struct {
 	stdout, stderr io.Writer
 	env            Env
+	// report is the internal --report-file of enable and disable: the
+	// final error message is written there too (see writeReport).
+	report string
 }
 
 func run(args []string, stdout, stderr io.Writer, env Env) int {
@@ -295,7 +298,14 @@ func run(args []string, stdout, stderr io.Writer, env Env) int {
 	c := &cli{stdout: stdout, stderr: stderr, env: env}
 	for _, cmd := range commands {
 		if cmd.name == args[0] {
-			return c.exit(cmd.run(c, args[1:]))
+			err := cmd.run(c, args[1:])
+			code := c.exit(err)
+			if c.report != "" {
+				if rerr := writeReport(c.report, err); rerr != nil {
+					c.warn("could not write the report file: %v", rerr)
+				}
+			}
+			return code
 		}
 	}
 	fmt.Fprintf(stderr, "leakguard: unknown command %q\n\n%s", args[0], usage)
