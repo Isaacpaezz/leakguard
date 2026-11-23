@@ -303,7 +303,7 @@ func (a *app) wizard(needsPassword bool) menubar.Wizard {
 // "leakguard enable" once through the administrator prompt; with a daemon
 // that has no choice yet, it saves the choice without a password.
 func (a *app) startSetUp() {
-	if a.wizardOpen || !a.menu.SetUp || a.catalogErr != nil || a.mustMove() {
+	if a.wizardOpen || !a.menu.SetUp || a.catalogErr != nil || a.guardMoveIfNeeded() {
 		return
 	}
 	a.wizardOpen = true
@@ -320,12 +320,12 @@ func (a *app) startSetUp() {
 	}()
 }
 
-// mustMove reports whether the app runs from where it cannot be set up (on
-// macOS, the mounted DMG or a translocated copy: see
-// menubar.MustMoveToApplications). Then it asks the user, in one dialog of
-// its own goroutine, to move the app to Applications first, and setup and
-// uninstall do nothing else.
-func (a *app) mustMove() bool {
+// guardMoveIfNeeded reports whether the app runs from where it cannot be
+// set up (the platform's mustMove: on macOS, the mounted DMG or a
+// translocated copy, see menubar.MustMoveToApplications). Then it asks the
+// user, in one dialog of its own goroutine, to move the app to Applications
+// first, and setup and uninstall do nothing else.
+func (a *app) guardMoveIfNeeded() bool {
 	if !a.plat.mustMove() {
 		return false
 	}
@@ -385,7 +385,7 @@ func install(client ipc.Client, plat platform, lang menubar.Lang, all []catalog.
 // "leakguard disable", then the login item and the preferences go. The app
 // quits once it is done.
 func (a *app) startUninstall() {
-	if a.wizardOpen || a.mustMove() {
+	if a.wizardOpen || a.guardMoveIfNeeded() {
 		return
 	}
 	a.wizardOpen = true

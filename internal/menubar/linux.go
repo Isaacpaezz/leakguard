@@ -10,26 +10,29 @@ import (
 	"github.com/Isaacpaezz/leakguard/internal/daemon"
 )
 
-// EnvLang is the language of a Linux desktop session: the first locale set
-// in LANGUAGE (its first entry), LC_ALL, LC_MESSAGES or LANG decides.
-// Spanish when it is Spanish ("es", "es_VE.UTF-8", "es_ES@euro"), English
-// otherwise, including "C" and nothing set.
+// EnvLang is the language of a Linux desktop session, chosen like gettext
+// does: the message locale is the first set of LC_ALL, LC_MESSAGES and LANG
+// ("C" when none is); LANGUAGE (its first entry) overrides it unless that
+// locale is "C" or "POSIX". Spanish when the result is Spanish ("es",
+// "es_VE.UTF-8", "es_ES@euro"), English otherwise, including "C".
 func EnvLang(getenv func(string) string) Lang {
-	for _, key := range []string{"LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG"} {
-		v := getenv(key)
-		if key == "LANGUAGE" {
-			v = firstEntry(v)
+	locale := "C"
+	for _, key := range []string{"LC_ALL", "LC_MESSAGES", "LANG"} {
+		if v := getenv(key); v != "" {
+			locale = v
+			break
 		}
-		if v == "" {
-			continue
-		}
-		// Drop the codeset and the modifier: es_VE.UTF-8, es_ES@euro.
-		if i := strings.IndexAny(v, ".@"); i >= 0 {
-			v = v[:i]
-		}
-		return ParseLang(v)
 	}
-	return English
+	if locale != "C" && locale != "POSIX" {
+		if v := firstEntry(getenv("LANGUAGE")); v != "" {
+			locale = v
+		}
+	}
+	// Drop the codeset and the modifier: es_VE.UTF-8, es_ES@euro.
+	if i := strings.IndexAny(locale, ".@"); i >= 0 {
+		locale = locale[:i]
+	}
+	return ParseLang(locale)
 }
 
 // firstEntry is the first non-empty entry of a colon-separated list.

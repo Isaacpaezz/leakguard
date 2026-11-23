@@ -101,7 +101,11 @@ func adminCLI() (string, error) {
 }
 
 // runAdmin runs argv, which starts with pkexec, and explains how it ended.
+// An empty argv is an error, never a run.
 func runAdmin(argv []string) error {
+	if len(argv) == 0 {
+		return errors.New("no administrator command to run")
+	}
 	r, err := runTool(argv[0], argv[1:]...)
 	if err != nil {
 		return err

@@ -64,7 +64,8 @@ func kdialogText(s string) string {
 // buttons sorts d's buttons into the tool's roles: ok answers with exit 0,
 // cancel with exit 1 (zenity) and real tells whether it is d's cancel
 // button; extra holds the rest, in order. With no cancel button of its own,
-// the first other button takes that role.
+// the first other button takes that role; the tools answer for it exactly
+// as for a closed dialog, so ParseAsk reads it as ErrCancelled.
 func buttons(d Dialog) (ok, cancel int, real bool, extra []int) {
 	n := len(d.Buttons)
 	valid := func(i int) bool { return i >= 0 && i < n }
@@ -113,33 +114,43 @@ func AskArgs(tool DialogTool, d Dialog) ([]string, error) {
 		return []string{"--info", title, "--text=" + zenityText(d.Text), "--ok-label=" + d.Buttons[0], "--width=420"}, nil
 	}
 	ok, cancel, real, extra := buttons(d)
+	defaultCancel := real && d.Default == cancel
 	if tool == KDialog {
+		// kdialog cannot move the focus, but its warning boxes focus the
+		// button that cancels (No, or Cancel with three buttons), which
+		// is d's cancel button here; Escape picks it in every box.
+		kind := "--"
+		if defaultCancel {
+			kind = "--warning"
+		}
 		args := []string{title, "--yes-label=" + d.Buttons[ok]}
 		if len(extra) == 0 {
-			return append(args, "--no-label="+d.Buttons[cancel], "--yesno="+kdialogText(d.Text)), nil
+			return append(args, "--no-label="+d.Buttons[cancel], kind+"yesno="+kdialogText(d.Text)), nil
 		}
 		return append(args, "--no-label="+d.Buttons[extra[0]], "--cancel-label="+d.Buttons[cancel],
-			"--yesnocancel="+kdialogText(d.Text)), nil
+			kind+"yesnocancel="+kdialogText(d.Text)), nil
 	}
 	args := []string{"--question", title, "--text=" + zenityText(d.Text),
 		"--ok-label=" + d.Buttons[ok], "--cancel-label=" + d.Buttons[cancel]}
 	for _, i := range extra {
 		args = append(args, "--extra-button="+d.Buttons[i])
 	}
-	if real && d.Default == cancel {
+	if defaultCancel {
 		args = append(args, "--default-cancel")
 	}
 	return append(args, "--width=420"), nil
 }
 
 // ParseAsk returns the index of the button the user clicked in d, or
-// ErrCancelled for d's cancel button or a closed dialog.
+// ErrCancelled for d's cancel button or a closed dialog. A closed dialog
+// answers like the button in the cancel role, so without a cancel button of
+// its own that answer is ErrCancelled too: closing never picks a button.
 func ParseAsk(tool DialogTool, d Dialog, r ToolResult) (int, error) {
 	n := len(d.Buttons)
 	if n == 0 {
 		return 0, errors.New("a dialog needs a button")
 	}
-	ok, cancel, real, extra := buttons(d)
+	ok, cancel, _, extra := buttons(d)
 	pick := -1
 	switch {
 	case r.Code == 0:
@@ -168,17 +179,19 @@ func ParseAsk(tool DialogTool, d Dialog, r ToolResult) (int, error) {
 	default:
 		return 0, toolFailed(tool, r)
 	}
-	if pick == cancel && real {
+	if pick == cancel {
 		return 0, ErrCancelled
 	}
 	return pick, nil
 }
 
 // ChooseArgs is the argv, without the program, that shows l with tool:
-// checkboxes for several items, a plain list for one. Each item is tagged
+// checkboxes for several items, none ticked; radio buttons for one, with
+// the first chosen, so OK always answers with an item. Each item is tagged
 // with its 1-based position, which the tool prints back.
 func ChooseArgs(tool DialogTool, l List) []string {
 	title := "--title=" + l.Title
+	chosen := func(i int) bool { return i == 0 && !l.Multiple }
 	if tool == KDialog {
 		args := []string{title, "--ok-label=" + l.OK, "--cancel-label=" + l.Cancel}
 		if l.Multiple {
@@ -188,33 +201,34 @@ func ChooseArgs(tool DialogTool, l List) []string {
 		}
 		args = append(args, "--")
 		for i, item := range l.Items {
-			args = append(args, strconv.Itoa(i+1), item, "off")
+			state := "off"
+			if chosen(i) {
+				state = "on"
+			}
+			args = append(args, strconv.Itoa(i+1), item, state)
 		}
 		return args
 	}
-	args := []string{"--list"}
+	kind := "--radiolist"
 	if l.Multiple {
-		args = append(args, "--checklist")
+		kind = "--checklist"
 	}
-	args = append(args, title, "--text="+zenityText(l.Text), "--ok-label="+l.OK, "--cancel-label="+l.Cancel)
-	tag := "1"
-	if l.Multiple {
-		args = append(args, "--column=")
-		tag = "2"
-	}
-	args = append(args, "--column=", "--column=", "--hide-header", "--hide-column="+tag, "--print-column="+tag,
-		"--separator=,", "--width=420", "--height=320", "--")
+	args := []string{"--list", kind, title, "--text=" + zenityText(l.Text), "--ok-label=" + l.OK, "--cancel-label=" + l.Cancel,
+		"--column=", "--column=", "--column=", "--hide-header", "--hide-column=2", "--print-column=2",
+		"--separator=,", "--width=420", "--height=320", "--"}
 	for i, item := range l.Items {
-		if l.Multiple {
-			args = append(args, "FALSE")
+		state := "FALSE"
+		if chosen(i) {
+			state = "TRUE"
 		}
-		args = append(args, strconv.Itoa(i+1), item)
+		args = append(args, state, strconv.Itoa(i+1), item)
 	}
 	return args
 }
 
 // ParseChoose returns the 0-based indexes the user chose in l (none when
-// the user chose nothing), or ErrCancelled.
+// the user ticked nothing in a list of several), or ErrCancelled, also for
+// a list of one choice answered with none: it is never an empty choice.
 func ParseChoose(tool DialogTool, l List, r ToolResult) ([]int, error) {
 	switch r.Code {
 	case 0:
@@ -230,6 +244,9 @@ func ParseChoose(tool DialogTool, l List, r ToolResult) ([]int, error) {
 		}
 	}
 	if len(tags) == 0 {
+		if !l.Multiple {
+			return nil, ErrCancelled
+		}
 		return []int{}, nil
 	}
 	return ParseChoice(strings.Join(tags, ","), l)

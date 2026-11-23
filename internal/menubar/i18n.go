@@ -8,25 +8,41 @@ import (
 // Lang is the language of every user-facing string: the dialogs and the menu
 // follow the Mac's first preferred language, or the Linux session's locale.
 // A Lang made with ForOS("linux") also reads the Linux wording.
-type Lang string
+//
+// The system is a field of its own, apart from the language, and Lang
+// cannot be compared with ==: a Linux Spanish Lang is not equal to Spanish,
+// so every language decision asks IsSpanish instead.
+type Lang struct {
+	spanish, linux bool
+	_              [0]func() // not comparable
+}
 
-const (
-	Spanish Lang = "es"
-	English Lang = "en"
+var (
+	Spanish = Lang{spanish: true}
+	English = Lang{}
 )
 
-// linuxSuffix marks a Lang that reads the Linux wording (see ForOS).
-const linuxSuffix = "+linux"
+// IsSpanish reports whether l is Spanish, on any system.
+func (l Lang) IsSpanish() bool { return l.spanish }
+
+// String is "es" or "en", with "+linux" for the Linux wording.
+func (l Lang) String() string {
+	s := "en"
+	if l.spanish {
+		s = "es"
+	}
+	if l.linux {
+		s += "+linux"
+	}
+	return s
+}
 
 // ForOS returns l with the wording for the operating system goos: "linux"
 // reads linuxMessages where they exist, so no text names a Mac thing; any
 // other system reads the macOS wording.
 func (l Lang) ForOS(goos string) Lang {
-	base := Lang(strings.TrimSuffix(string(l), linuxSuffix))
-	if goos == "linux" {
-		return base + linuxSuffix
-	}
-	return base
+	l.linux = goos == "linux"
+	return l
 }
 
 // ParseLang returns the language for the output of
@@ -284,31 +300,36 @@ var messages = [msgCount]text{
 // menu bar, Applications, the Trash) on Linux. The move to Applications and
 // quarantine messages have none: the Linux tray never shows them. On Linux
 // uninstalling from the tray keeps the program installed until the user
-// removes the package.
+// removes the package. apt only knows the .deb package, so the removal
+// names both ways leakguard is installed.
 var linuxMessages = map[Msg]text{
 	MsgMenuOpenAtLoginTip:     {"Abre este menú cada vez que inicias sesión; no pide contraseña", "Opens this menu every time you log in; no password needed"},
 	msgExplainNotSetUp:        {"leakguard no está configurado en esta computadora", "leakguard is not set up on this computer"},
 	msgExplainNotAuthorized:   {"Solo un administrador de esta computadora puede cambiar leakguard", "Only administrators can change leakguard"},
 	msgStep3Password:          {"Activar la protección.\n\nTu computadora te va a pedir tu contraseña de administrador. La necesitamos una sola vez, para instalar el servicio que bloquea %s si tu VPN se cae.", "Turn on the protection.\n\nYour computer will ask for your administrator password. We need it only this once, to install the background service that blocks %s if your VPN drops."},
 	msgDoneShield:             {"El escudo verde en la barra superior significa que estás protegido.", "A green shield in the top bar means you are protected."},
-	msgUninstallConfirm:       {"¿Quieres desinstalar leakguard?\n\nSe quitarán las reglas de protección, el servicio de fondo y la apertura al iniciar sesión. Los servicios que protegías volverán a usar tu conexión normal.\n\nEl programa sigue instalado: después puedes quitarlo con sudo apt remove leakguard. Tu computadora te va a pedir tu contraseña de administrador.", "Do you want to uninstall leakguard?\n\nThis removes the protection rules, the background service and the login item. The services you protected will use your normal connection again.\n\nThe program stays installed: afterwards you can remove it with sudo apt remove leakguard. Your computer will ask for your administrator password."},
-	msgUninstallCleanupFailed: {"leakguard se desinstaló, pero no se pudo quitar la apertura al iniciar sesión: %s\n\nPara quitar el programa, ejecuta: sudo apt remove leakguard", "leakguard was uninstalled, but the login item could not be removed: %s\n\nTo remove the program, run: sudo apt remove leakguard"},
-	msgUninstallDone:          {"leakguard se desinstaló. Para quitar el programa, ejecuta: sudo apt remove leakguard", "leakguard was uninstalled. To remove the program, run: sudo apt remove leakguard"},
+	msgUninstallConfirm:       {"¿Quieres desinstalar leakguard?\n\nSe quitarán las reglas de protección, el servicio de fondo y la apertura al iniciar sesión. Los servicios que protegías volverán a usar tu conexión normal.\n\nEl programa sigue instalado: después puedes quitarlo con sudo apt remove leakguard si usaste el paquete .deb, o borrando los archivos que copiaste si usaste el .tar.gz. Tu computadora te va a pedir tu contraseña de administrador.", "Do you want to uninstall leakguard?\n\nThis removes the protection rules, the background service and the login item. The services you protected will use your normal connection again.\n\nThe program stays installed: afterwards you can remove it with sudo apt remove leakguard if you used the .deb package, or by deleting the files you copied if you used the .tar.gz. Your computer will ask for your administrator password."},
+	msgUninstallCleanupFailed: {"leakguard se desinstaló, pero no se pudo quitar la apertura al iniciar sesión: %s\n\n" + linuxRemoveES, "leakguard was uninstalled, but the login item could not be removed: %s\n\n" + linuxRemoveEN},
+	msgUninstallDone:          {"leakguard se desinstaló. " + linuxRemoveES, "leakguard was uninstalled. " + linuxRemoveEN},
 }
 
+// How to remove the program on Linux, for the .deb and the .tar.gz.
+const (
+	linuxRemoveES = "Para quitar el programa: si usaste el paquete .deb, ejecuta sudo apt remove leakguard; si usaste el .tar.gz, borra los archivos que copiaste."
+	linuxRemoveEN = "To remove the program: if you used the .deb package, run sudo apt remove leakguard; if you used the .tar.gz, delete the files you copied."
+)
+
 // Text returns message m in language l, formatted with args when given.
-// Any language other than Spanish reads English.
 func (l Lang) Text(m Msg, args ...any) string {
 	if m < 0 || m >= msgCount {
 		return ""
 	}
 	t := messages[m]
-	base, linux := strings.CutSuffix(string(l), linuxSuffix)
-	if v, ok := linuxMessages[m]; ok && linux {
+	if v, ok := linuxMessages[m]; ok && l.linux {
 		t = v
 	}
 	s := t.en
-	if Lang(base) == Spanish {
+	if l.spanish {
 		s = t.es
 	}
 	if len(args) > 0 {

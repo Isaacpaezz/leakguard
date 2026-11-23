@@ -58,6 +58,10 @@ var (
 	nextDialog   = Dialog{Title: "Step 2 of 3", Text: "Disconnect", Buttons: []string{"Cancel", "Next"}, Default: 1, Cancel: 0}
 	foundDialog  = Dialog{Title: "Step 2 of 3", Text: "Found", Buttons: []string{"Cancel", "Choose another", "Use this VPN"}, Default: 2, Cancel: 0}
 	uninstDialog = Dialog{Title: "Uninstall leakguard", Text: "Sure?", Buttons: []string{"Cancel", "Uninstall"}, Default: 0, Cancel: 0}
+	// No dialog of the app has these; they pin the tools' closing rule.
+	safe3Dialog   = Dialog{Title: "T", Text: "Sure?", Buttons: []string{"Cancel", "Keep", "Erase"}, Default: 0, Cancel: 0}
+	noCancelTwo   = Dialog{Title: "T", Text: "Pick", Buttons: []string{"Later", "Now"}, Default: 1, Cancel: -1}
+	noCancelThree = Dialog{Title: "T", Text: "Pick", Buttons: []string{"A", "B", "C"}, Default: 2, Cancel: -1}
 )
 
 func TestAskArgsZenity(t *testing.T) {
@@ -87,6 +91,10 @@ func TestAskArgsKDialog(t *testing.T) {
 		{tellDialog, []string{"--title=leakguard", "--ok-label=OK", "--msgbox=<qt>Done</qt>"}},
 		{nextDialog, []string{"--title=Step 2 of 3", "--yes-label=Next", "--no-label=Cancel", "--yesno=<qt>Disconnect</qt>"}},
 		{foundDialog, []string{"--title=Step 2 of 3", "--yes-label=Use this VPN", "--no-label=Choose another", "--cancel-label=Cancel", "--yesnocancel=<qt>Found</qt>"}},
+		// Return must not uninstall: kdialog's warning boxes focus the
+		// cancelling button (No, or Cancel with three) and Escape picks it.
+		{uninstDialog, []string{"--title=Uninstall leakguard", "--yes-label=Uninstall", "--no-label=Cancel", "--warningyesno=<qt>Sure?</qt>"}},
+		{safe3Dialog, []string{"--title=T", "--yes-label=Erase", "--no-label=Keep", "--cancel-label=Cancel", "--warningyesnocancel=<qt>Sure?</qt>"}},
 	}
 	for _, tc := range tests {
 		got, err := AskArgs(KDialog, tc.d)
@@ -145,13 +153,15 @@ func TestChooseArgs(t *testing.T) {
 		{Zenity, multi, []string{"--list", "--checklist", "--title=Step 1 of 3", "--text=Choose", "--ok-label=Next", "--cancel-label=Cancel",
 			"--column=", "--column=", "--column=", "--hide-header", "--hide-column=2", "--print-column=2", "--separator=,", "--width=420", "--height=320",
 			"--", "FALSE", "1", "Claude", "FALSE", "2", "OpenAI"}},
-		{Zenity, single, []string{"--list", "--title=Change VPN", "--text=Which", "--ok-label=Next", "--cancel-label=Cancel",
-			"--column=", "--column=", "--hide-header", "--hide-column=1", "--print-column=1", "--separator=,", "--width=420", "--height=320",
-			"--", "1", "WireGuard (wg0)", "2", "VPN (tun0)"}},
+		// One choice: radio buttons with the first row chosen, so OK always
+		// answers with a row.
+		{Zenity, single, []string{"--list", "--radiolist", "--title=Change VPN", "--text=Which", "--ok-label=Next", "--cancel-label=Cancel",
+			"--column=", "--column=", "--column=", "--hide-header", "--hide-column=2", "--print-column=2", "--separator=,", "--width=420", "--height=320",
+			"--", "TRUE", "1", "WireGuard (wg0)", "FALSE", "2", "VPN (tun0)"}},
 		{KDialog, multi, []string{"--title=Step 1 of 3", "--ok-label=Next", "--cancel-label=Cancel", "--separate-output", "--checklist=<qt>Choose</qt>",
 			"--", "1", "Claude", "off", "2", "OpenAI", "off"}},
 		{KDialog, single, []string{"--title=Change VPN", "--ok-label=Next", "--cancel-label=Cancel", "--radiolist=<qt>Which</qt>",
-			"--", "1", "WireGuard (wg0)", "off", "2", "VPN (tun0)", "off"}},
+			"--", "1", "WireGuard (wg0)", "on", "2", "VPN (tun0)", "off"}},
 	}
 	for _, tc := range tests {
 		if got := ChooseArgs(tc.tool, tc.l); !slices.Equal(got, tc.want) {
@@ -184,6 +194,23 @@ func TestParseAsk(t *testing.T) {
 		{KDialog, foundDialog, ToolResult{Code: 0}, 2, nil},
 		{KDialog, foundDialog, ToolResult{Code: 1}, 1, nil},
 		{KDialog, foundDialog, ToolResult{Code: 2}, 0, ErrCancelled},
+		{KDialog, uninstDialog, ToolResult{Code: 0}, 1, nil},
+		{KDialog, uninstDialog, ToolResult{Code: 1}, 0, ErrCancelled},
+		{KDialog, safe3Dialog, ToolResult{Code: 0}, 2, nil},
+		{KDialog, safe3Dialog, ToolResult{Code: 1}, 1, nil},
+		{KDialog, safe3Dialog, ToolResult{Code: 2}, 0, ErrCancelled},
+		// Without a cancel button of its own, closing the dialog (Escape,
+		// the window's close button) never picks a button.
+		{Zenity, noCancelTwo, ToolResult{Code: 0}, 1, nil},
+		{Zenity, noCancelTwo, ToolResult{Code: 1}, 0, ErrCancelled},
+		{KDialog, noCancelTwo, ToolResult{Code: 0}, 1, nil},
+		{KDialog, noCancelTwo, ToolResult{Code: 1}, 0, ErrCancelled},
+		{Zenity, noCancelThree, ToolResult{Code: 0}, 2, nil},
+		{Zenity, noCancelThree, ToolResult{Code: 1, Stdout: "B\n"}, 1, nil},
+		{Zenity, noCancelThree, ToolResult{Code: 1}, 0, ErrCancelled},
+		{KDialog, noCancelThree, ToolResult{Code: 0}, 2, nil},
+		{KDialog, noCancelThree, ToolResult{Code: 1}, 1, nil},
+		{KDialog, noCancelThree, ToolResult{Code: 2}, 0, ErrCancelled},
 	}
 	for i, tc := range tests {
 		got, err := ParseAsk(tc.tool, tc.d, tc.r)
@@ -223,6 +250,11 @@ func TestParseChoose(t *testing.T) {
 		{KDialog, single, ToolResult{Stdout: "2\n"}, []int{1}, nil},
 		{KDialog, single, ToolResult{Stdout: "4\n"}, nil, ErrUnexpectedAnswer},
 		{KDialog, single, ToolResult{Code: 1}, nil, ErrCancelled},
+		// OK with no row chosen is never an empty choice of one.
+		{Zenity, single, ToolResult{Stdout: "\n"}, nil, ErrCancelled},
+		{Zenity, single, ToolResult{Stdout: ""}, nil, ErrCancelled},
+		{KDialog, single, ToolResult{Stdout: ""}, nil, ErrCancelled},
+		{KDialog, single, ToolResult{Stdout: "\n"}, nil, ErrCancelled},
 	}
 	for i, tc := range tests {
 		got, err := ParseChoose(tc.tool, tc.l, tc.r)

@@ -36,9 +36,19 @@ func TestEnvLang(t *testing.T) {
 		{map[string]string{"LANGUAGE": "en_GB:es", "LANG": "es_VE.UTF-8"}, English},
 		{map[string]string{"LANGUAGE": ":es_VE", "LANG": "en_US.UTF-8"}, Spanish},
 		{map[string]string{"LANGUAGE": "", "LANG": "es_VE.UTF-8"}, Spanish},
+		// gettext ignores LANGUAGE when the message locale (LC_ALL, else
+		// LC_MESSAGES, else LANG; C when none is set) is C or POSIX.
+		{map[string]string{"LANGUAGE": "es", "LANG": "C"}, English},
+		{map[string]string{"LANGUAGE": "es", "LANG": "POSIX"}, English},
+		{map[string]string{"LANGUAGE": "es", "LC_ALL": "C", "LANG": "es_VE.UTF-8"}, English},
+		{map[string]string{"LANGUAGE": "es", "LC_MESSAGES": "POSIX", "LANG": "es_VE.UTF-8"}, English},
+		{map[string]string{"LANGUAGE": "es"}, English},
+		{map[string]string{"LANGUAGE": "es", "LC_ALL": "en_US.UTF-8", "LANG": "C"}, Spanish},
+		{map[string]string{"LANGUAGE": "es", "LC_MESSAGES": "en_US.UTF-8", "LANG": "C"}, Spanish},
+		{map[string]string{"LC_ALL": "C", "LANG": "es_VE.UTF-8"}, English},
 	}
 	for _, tc := range tests {
-		if got := EnvLang(envOf(tc.env)); got != tc.want {
+		if got := EnvLang(envOf(tc.env)); got.String() != tc.want.String() {
 			t.Errorf("EnvLang(%v) = %q, want %q", tc.env, got, tc.want)
 		}
 	}
