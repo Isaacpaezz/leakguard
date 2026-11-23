@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 	"testing"
 	"time"
 
@@ -184,8 +186,9 @@ func inNetns(ns string, f func() error) error {
 			return
 		}
 		defer syscall.Close(fd)
-		if _, _, errno := syscall.RawSyscall(syscall.SYS_SETNS, uintptr(fd), syscall.CLONE_NEWNET, 0); errno != 0 {
-			done <- fmt.Errorf("setns %s: %w", ns, errno)
+		// unix.Setns: the syscall package has no SYS_SETNS on amd64.
+		if err := unix.Setns(fd, unix.CLONE_NEWNET); err != nil {
+			done <- fmt.Errorf("setns %s: %w", ns, err)
 			return
 		}
 		done <- f()
