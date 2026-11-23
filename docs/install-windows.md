@@ -122,8 +122,10 @@ espacios. `.\leakguard services` lista lo que puedes proteger. `status` y
 - Windows todavía no cuenta los **bloqueos**: el menú muestra cuánto tiempo
   lleva conectada tu VPN y cuántas veces se cayó hoy, pero no cuántas veces
   leakguard bloqueó un servicio. La protección funciona igual.
-- **WSL2** (en su modo normal, NAT), las **máquinas virtuales de Hyper-V**
-  y los **contenedores de Hyper-V** todavía no pasan por leakguard: si la
+- **WSL2** (en su modo normal, NAT), las **máquinas virtuales de Hyper-V**,
+  los **contenedores de Hyper-V** y **Docker Desktop** (sus contenedores
+  Linux corren dentro de WSL2 y, en Windows 10 y 11, sus contenedores
+  Windows usan Hyper-V) todavía no pasan por leakguard: si la
   VPN se cae, un programa dentro de ellos puede llegar a los servicios
   protegidos por tu conexión normal. Para estar protegido, usa Claude Code
   y herramientas parecidas directamente en Windows, no dentro de WSL2 ni de
@@ -285,8 +287,10 @@ work in a normal terminal.
 - Windows does not count **blocks** yet: the menu shows how long your VPN
   has been connected and how many times it dropped today, but not how many
   times leakguard blocked a service. The protection works the same.
-- **WSL2** (in its default NAT mode), **Hyper-V virtual machines** and
-  **Hyper-V containers** do not go through leakguard yet: if the VPN
+- **WSL2** (in its default NAT mode), **Hyper-V virtual machines**,
+  **Hyper-V containers** and **Docker Desktop** (its Linux containers run
+  inside WSL2 and, on Windows 10 and 11, its Windows containers use
+  Hyper-V) do not go through leakguard yet: if the VPN
   drops, a program inside them can reach the protected services over your
   real connection. To be protected, run Claude Code and similar tools
   directly on Windows, not inside WSL2 or a virtual machine.
