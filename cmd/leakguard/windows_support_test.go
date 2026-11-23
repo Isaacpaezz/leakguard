@@ -31,6 +31,7 @@ func TestUsageOnWindows(t *testing.T) {
 		`%ProgramData%\leakguard\stats.json`,
 		`\\.\pipe\leakguard`,
 		"It also ends a pause from the tray app.",
+		"checks them\n      every 30 seconds and as soon as the VPN connects or drops,",
 		`  leakguard enable --vpn "WireGuard Tunnel" anthropic   (admin)` + "\n",
 		"Exit status: 0 on success, 1 on failure, 2 on a usage error.\n",
 	} {
@@ -270,7 +271,9 @@ func TestRunUnderSCMStartsAndStops(t *testing.T) {
 	waitStates(t, &r.mu, &r.states, scmStartPending, scmRunning, scmRunning, scmStopPending)
 }
 
-// Shutdown stops serve like Stop, and serve's exit code is returned.
+// Shutdown stops serve like Stop. A requested stop always ends with exit
+// code 0, even when serve's shutdown failed, so Windows' recovery never
+// restarts a service that was stopped on purpose.
 func TestRunUnderSCMShutdown(t *testing.T) {
 	r := startSCMRun(func(ctx context.Context, ready func()) int {
 		ready()
@@ -279,10 +282,31 @@ func TestRunUnderSCMShutdown(t *testing.T) {
 	})
 	waitStates(t, &r.mu, &r.states, scmStartPending, scmRunning)
 	r.reqs <- scmShutdown
-	if code := r.wait(t); code != 1 {
-		t.Fatalf("exit code = %d, want 1", code)
+	if code := r.wait(t); code != 0 {
+		t.Fatalf("exit code = %d, want 0 after a requested stop", code)
 	}
 	waitStates(t, &r.mu, &r.states, scmStartPending, scmRunning, scmStopPending)
+}
+
+// Stop and Shutdown are accepted from the start (a disable right after an
+// enable or a boot), with a wait hint while a state is pending.
+func TestSCMStatesAcceptStopFromTheStart(t *testing.T) {
+	for _, tc := range []struct {
+		state   scmState
+		accepts bool
+		pending bool
+	}{
+		{scmStartPending, true, true},
+		{scmRunning, true, false},
+		{scmStopPending, false, true},
+	} {
+		if got := tc.state.acceptsStop(); got != tc.accepts {
+			t.Errorf("state %d: acceptsStop() = %v, want %v", tc.state, got, tc.accepts)
+		}
+		if got := tc.state.waitHint(); (got > 0) != tc.pending || got > time.Minute {
+			t.Errorf("state %d: waitHint() = %v, want a hint only while pending", tc.state, got)
+		}
+	}
 }
 
 // A serve that fails on its own ends the service with its exit code, so
@@ -295,11 +319,12 @@ func TestRunUnderSCMServeFails(t *testing.T) {
 	waitStates(t, &r.mu, &r.states, scmStartPending)
 }
 
-// A stop that arrives before the rules are loaded still stops serve.
+// A stop that arrives before the rules are loaded still stops serve, with
+// exit code 0.
 func TestRunUnderSCMStopWhileStarting(t *testing.T) {
 	r := startSCMRun(func(ctx context.Context, ready func()) int {
 		<-ctx.Done()
-		return 0
+		return 1
 	})
 	waitStates(t, &r.mu, &r.states, scmStartPending)
 	r.reqs <- scmStop
@@ -332,7 +357,8 @@ func TestServeCallsReadyAfterTheFirstLoad(t *testing.T) {
 }
 
 // S1: "leakguard test" finds the real connection on Windows from the route
-// table: the IPv4 default route with the lowest metric, else the IPv6 one.
+// table: the IPv4 default route with the lowest metric (route metric plus
+// interface metric, as Windows ranks them), else the IPv6 one.
 func TestWindowsDefaultInterface(t *testing.T) {
 	aliases := map[uint32]string{7: "Wi-Fi", 9: "Ethernet", 12: "WireGuard Tunnel", 15: "Conexión de área local"}
 	alias := func(i uint32) (string, error) {
@@ -355,14 +381,18 @@ func TestWindowsDefaultInterface(t *testing.T) {
 		want   string
 		err    string
 	}{
-		{"lowest metric", table([]routeRow{{0, 9, 25}, {0, 7, 10}, {24, 9, 1}}, nil, nil), "Wi-Fi", ""},
-		{"VPN default route", table([]routeRow{{0, 7, 35}, {0, 12, 5}}, nil, nil), "WireGuard Tunnel", ""},
-		{"split routes are not the default", table([]routeRow{{1, 12, 0}, {1, 12, 0}, {0, 9, 50}}, nil, nil), "Ethernet", ""},
-		{"interface 0 is not a route", table([]routeRow{{0, 0, 0}, {0, 15, 3}}, nil, nil), "Conexión de área local", ""},
-		{"IPv6 only", table(nil, []routeRow{{0, 9, 256}}, nil), "Ethernet", ""},
-		{"no default route", table([]routeRow{{8, 7, 1}}, []routeRow{{64, 7, 1}}, nil), "", "no default route found"},
+		{"lowest metric", table([]routeRow{{0, 9, 25, 0}, {0, 7, 10, 0}, {24, 9, 1, 0}}, nil, nil), "Wi-Fi", ""},
+		{"VPN default route", table([]routeRow{{0, 7, 35, 0}, {0, 12, 5, 0}}, nil, nil), "WireGuard Tunnel", ""},
+		{"split routes are not the default", table([]routeRow{{1, 12, 0, 0}, {1, 12, 0, 0}, {0, 9, 50, 0}}, nil, nil), "Ethernet", ""},
+		{"interface 0 is not a route", table([]routeRow{{0, 0, 0, 0}, {0, 15, 3, 0}}, nil, nil), "Conexión de área local", ""},
+		{"IPv6 only", table(nil, []routeRow{{0, 9, 256, 0}}, nil), "Ethernet", ""},
+		{"interface metric breaks a route metric tie", table([]routeRow{{0, 7, 0, 35}, {0, 9, 0, 25}}, nil, nil), "Ethernet", ""},
+		{"route plus interface metric", table([]routeRow{{0, 7, 10, 50}, {0, 9, 25, 5}}, nil, nil), "Ethernet", ""},
+		{"equal sums keep the first", table([]routeRow{{0, 7, 20, 10}, {0, 9, 10, 20}}, nil, nil), "Wi-Fi", ""},
+		{"no overflow", table([]routeRow{{0, 7, 1, ^uint32(0)}, {0, 9, ^uint32(0), ^uint32(0)}}, nil, nil), "Wi-Fi", ""},
+		{"no default route", table([]routeRow{{8, 7, 1, 0}}, []routeRow{{64, 7, 1, 0}}, nil), "", "no default route found"},
 		{"unreadable", table(nil, nil, errors.New("GetIpForwardTable2: access denied")), "", "GetIpForwardTable2: access denied"},
-		{"unnamed adapter", table([]routeRow{{0, 99, 1}}, nil, nil), "", "cannot name the adapter of the default route (index 99): Element not found."},
+		{"unnamed adapter", table([]routeRow{{0, 99, 1, 0}}, nil, nil), "", "cannot name the adapter of the default route (index 99): Element not found."},
 	} {
 		got, err := windowsDefaultInterfaceFrom(tc.routes, alias)
 		if got != tc.want || (tc.err == "") != (err == nil) || (err != nil && err.Error() != tc.err) {

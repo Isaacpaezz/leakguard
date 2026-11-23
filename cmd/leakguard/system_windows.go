@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"time"
 	"unsafe"
@@ -31,7 +32,10 @@ func windowsDefaultInterface() (string, error) {
 	})
 }
 
-// routeTable reads the IPv4 or IPv6 route table with GetIpForwardTable2.
+// routeTable reads the IPv4 or IPv6 route table with GetIpForwardTable2,
+// and the interface metric of each default route with
+// GetIpInterfaceEntry. A default route whose interface cannot be read
+// ranks last.
 func routeTable(ipv6 bool) ([]routeRow, error) {
 	family := uint16(windows.AF_INET)
 	if ipv6 {
@@ -44,7 +48,16 @@ func routeTable(ipv6 bool) ([]routeRow, error) {
 	defer windows.FreeMibTable(unsafe.Pointer(table))
 	var out []routeRow
 	for _, r := range table.Rows() {
-		out = append(out, routeRow{prefixLen: r.DestinationPrefix.PrefixLength, ifIndex: r.InterfaceIndex, metric: r.Metric})
+		row := routeRow{prefixLen: r.DestinationPrefix.PrefixLength, ifIndex: r.InterfaceIndex, metric: r.Metric}
+		if row.prefixLen == 0 {
+			ifRow := windows.MibIpInterfaceRow{Family: family, InterfaceLuid: r.InterfaceLuid}
+			if err := windows.GetIpInterfaceEntry(&ifRow); err != nil {
+				row.ifMetric = math.MaxUint32
+			} else {
+				row.ifMetric = ifRow.Metric
+			}
+		}
+		out = append(out, row)
 	}
 	return out, nil
 }
@@ -115,14 +128,19 @@ func (h scmHandler) Execute(_ []string, r <-chan svc.ChangeRequest, changes chan
 		}
 	}()
 	report := func(s scmState) {
+		st := svc.Status{WaitHint: uint32(s.waitHint().Milliseconds())}
 		switch s {
 		case scmStartPending:
-			changes <- svc.Status{State: svc.StartPending}
+			st.State = svc.StartPending
 		case scmRunning:
-			changes <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown}
+			st.State = svc.Running
 		case scmStopPending:
-			changes <- svc.Status{State: svc.StopPending}
+			st.State = svc.StopPending
 		}
+		if s.acceptsStop() {
+			st.Accepts = svc.AcceptStop | svc.AcceptShutdown
+		}
+		changes <- st
 	}
 	return false, runUnderSCM(reqs, report, h.serve)
 }

@@ -17,10 +17,33 @@ import (
 	"github.com/Isaacpaezz/leakguard/internal/probe"
 )
 
-const notConfiguredHelp = `Start with: sudo leakguard enable --vpn IFACE SERVICE...
-See your VPN interfaces with: leakguard interfaces`
+// windowsWords makes messages name an administrator terminal instead of
+// sudo, and a VPN adapter instead of an interface.
+var windowsWords = runtime.GOOS == "windows"
 
-var errNotConfigured = errors.New("not configured yet; run: sudo leakguard enable --vpn IFACE SERVICE...")
+// adminCommand is how to run "leakguard args" as an administrator:
+// "sudo leakguard args", or on Windows "leakguard args (in an administrator
+// terminal)".
+func adminCommand(args string) string {
+	if windowsWords {
+		return "leakguard " + strings.ReplaceAll(args, "IFACE", "ADAPTER") + " (in an administrator terminal)"
+	}
+	return "sudo leakguard " + args
+}
+
+// notConfiguredHelp is what status prints before the first enable.
+func notConfiguredHelp() string {
+	return "Start with: " + adminCommand("enable --vpn IFACE SERVICE...") + "\nSee your VPN interfaces with: leakguard interfaces"
+}
+
+// notConfiguredError is errNotConfigured; its text follows windowsWords.
+type notConfiguredError struct{}
+
+func (notConfiguredError) Error() string {
+	return "not configured yet; run: " + adminCommand("enable --vpn IFACE SERVICE...")
+}
+
+var errNotConfigured error = notConfiguredError{}
 
 func (c *cli) configPath() string { return rooted(c.env.Root, config.DefaultPath) }
 
@@ -50,7 +73,7 @@ func (e vpnRefusedError) reason(verr error) string {
 	if verr != nil {
 		return fmt.Sprintf("the saved VPN %q is not a VPN interface, and protected services are not blocked: %v", e.vpn, verr)
 	}
-	return fmt.Sprintf("protected services are blocked: the saved VPN %q is not a VPN interface; choose yours with: sudo leakguard enable --vpn IFACE", e.vpn)
+	return fmt.Sprintf("protected services are blocked: the saved VPN %q is not a VPN interface; choose yours with: %s", e.vpn, adminCommand("enable --vpn IFACE"))
 }
 
 // asVPNRefused reports whether err is a loadValid error for a configuration
@@ -196,7 +219,7 @@ func (c *cli) interfaces(args []string) error {
 	}
 	w.Flush()
 	fmt.Fprintln(c.stdout, "\nYour VPN is usually the one that appears when you connect it.")
-	fmt.Fprintln(c.stdout, "Use it with: sudo leakguard enable --vpn NAME SERVICE...")
+	fmt.Fprintln(c.stdout, "Use it with: "+adminCommand("enable --vpn NAME SERVICE..."))
 	return nil
 }
 
@@ -252,7 +275,11 @@ func (c *cli) enable(args []string) error {
 		cfg.Services = saved.Services
 	}
 	if len(cfg.Services) == 0 {
-		return usagef("name at least one service, for example: sudo leakguard enable anthropic (see leakguard services)")
+		example := "sudo leakguard enable anthropic (see leakguard services)"
+		if windowsWords {
+			example = "leakguard enable anthropic (in an administrator terminal; see leakguard services)"
+		}
+		return usagef("name at least one service, for example: %s", example)
 	}
 	if cfg.VPNInterface == "" {
 		cfg.VPNInterface = saved.VPNInterface
@@ -383,7 +410,7 @@ func (c *cli) status(args []string) error {
 	}
 	cfg, services, err := c.loadValid()
 	if errors.Is(err, errNotConfigured) {
-		fmt.Fprintf(c.stdout, "leakguard is not configured yet.\n%s\n", notConfiguredHelp)
+		fmt.Fprintf(c.stdout, "leakguard is not configured yet.\n%s\n", notConfiguredHelp())
 		return nil
 	}
 	// Root can tell whether a refused VPN left protected services blocked.
@@ -396,7 +423,11 @@ func (c *cli) status(args []string) error {
 	if i, ok := c.findInterface(cfg.VPNInterface); ok && i.Connected() {
 		vpnState = "connected"
 	}
-	daemonState := "not installed (run: sudo leakguard enable)"
+	daemonState, verifyHint := "not installed (run: sudo leakguard enable)", `run "sudo leakguard status" to verify the rules`
+	if windowsWords {
+		daemonState = `not installed (run "leakguard enable" in an administrator terminal)`
+		verifyHint = `run "leakguard status" in an administrator terminal to verify the rules`
+	}
 	if c.daemon().Installed() {
 		daemonState = "installed"
 	}
@@ -409,7 +440,7 @@ func (c *cli) status(args []string) error {
 	}
 	printStats(w, c.savedStats(), c.now())
 	if !c.env.IsRoot() {
-		fmt.Fprintf(w, "Firewall:\trun \"sudo leakguard status\" to verify the rules\n")
+		fmt.Fprintf(w, "Firewall:\t%s\n", verifyHint)
 		return w.Flush()
 	}
 	if isRefused {
@@ -434,7 +465,7 @@ func (c *cli) verify(cfg config.Config, services []catalog.Service) error {
 	case err != nil:
 		return err
 	case !on:
-		return fmt.Errorf("%s is disabled; turn it back on with: sudo leakguard apply", fw.Name())
+		return fmt.Errorf("%s is disabled; turn it back on with: %s", fw.Name(), adminCommand("apply"))
 	}
 	return fw.Verify(cfg.VPNInterface, services)
 }

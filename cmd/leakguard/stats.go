@@ -116,18 +116,18 @@ func (d *daemonStats) counterReset() {
 	d.record((*stats.Tracker).CounterReset)
 }
 
-// sampleVPN records whether the saved VPN is connected. Without a saved VPN,
-// or when the interfaces cannot be listed, there is nothing to record.
-func (d *daemonStats) sampleVPN() {
+// sampleVPN records whether the saved VPN is connected, and returns it.
+// Without a saved VPN, or when the interfaces cannot be listed, there is
+// nothing to record and ok is false.
+func (d *daemonStats) sampleVPN() (connected, ok bool) {
 	cfg, err := config.Load(d.c.configPath())
 	if err != nil || cfg.VPNInterface == "" {
-		return
+		return false, false
 	}
 	ifs, err := d.c.env.Interfaces()
 	if err != nil {
-		return
+		return false, false
 	}
-	connected := false
 	for _, i := range ifs {
 		if i.Name == cfg.VPNInterface {
 			connected = i.Connected()
@@ -137,6 +137,7 @@ func (d *daemonStats) sampleVPN() {
 	d.mu.Lock()
 	d.record(func(t *stats.Tracker) { t.ObserveVPN(now, connected) })
 	d.mu.Unlock()
+	return connected, true
 }
 
 // save writes the stats when they changed, at most once per

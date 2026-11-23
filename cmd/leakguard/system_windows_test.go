@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -9,6 +11,7 @@ import (
 	"golang.org/x/sys/windows/svc"
 
 	"github.com/Isaacpaezz/leakguard/internal/daemon"
+	"github.com/Isaacpaezz/leakguard/internal/wfp"
 )
 
 // requireRoot on Windows is the elevated token.
@@ -18,10 +21,17 @@ func TestSystemIsRootIsTheElevatedToken(t *testing.T) {
 	}
 }
 
-// main wires the Windows service, no firewall yet, the Windows help.
+// main wires the Windows Filtering Platform, the Windows service and the
+// Windows help and messages.
 func TestWindowsBackends(t *testing.T) {
-	if systemFirewall != nil {
-		t.Error("systemFirewall is set; the WFP backend is wired separately")
+	if systemFirewall == nil {
+		t.Fatal("systemFirewall is nil: Windows changes fail as unsupported")
+	}
+	if fw, ok := systemFirewall(systemEnv()).(wfp.Firewall); !ok || fw.Check == nil {
+		t.Errorf("systemFirewall() = %#v, want wfp.Firewall checking the VPN", systemFirewall(systemEnv()))
+	}
+	if !windowsWords || strings.Contains(notConfiguredHelp(), "sudo") || strings.Contains(errNotConfigured.Error(), "sudo") {
+		t.Errorf("Windows messages say sudo: %q, %q", notConfiguredHelp(), errNotConfigured)
 	}
 	if systemServices == nil {
 		t.Error("systemServices is nil")
@@ -48,6 +58,28 @@ func TestWindowsDefaultInterfaceReal(t *testing.T) {
 		t.Fatalf("windowsDefaultInterface() = %q, %v", name, err)
 	}
 	t.Logf("default route adapter: %q", name)
+}
+
+// GetIpInterfaceEntry reads the interface metric of each default route.
+func TestRouteTableReadsInterfaceMetrics(t *testing.T) {
+	rows, err := routeTable(false)
+	if err != nil {
+		t.Fatalf("routeTable() = %v", err)
+	}
+	found := false
+	for _, r := range rows {
+		if r.prefixLen != 0 {
+			continue
+		}
+		found = true
+		t.Logf("default route on interface %d: route metric %d, interface metric %d", r.ifIndex, r.metric, r.ifMetric)
+		if r.ifMetric == math.MaxUint32 {
+			t.Errorf("the interface metric of interface %d was not read", r.ifIndex)
+		}
+	}
+	if !found {
+		t.Fatal("no IPv4 default route")
+	}
 }
 
 // A test process is not a service: serve runs as usual.
@@ -83,15 +115,16 @@ func TestSCMHandlerExecute(t *testing.T) {
 		t.Helper()
 		select {
 		case st := <-changes:
-			if st.State != want || st.Accepts != accepts {
-				t.Fatalf("status = %+v, want state %d accepts %d", st, want, accepts)
+			pending := want == svc.StartPending || want == svc.StopPending
+			if st.State != want || st.Accepts != accepts || (st.WaitHint > 0) != pending {
+				t.Fatalf("status = %+v, want state %d accepts %d, a wait hint only while pending", st, want, accepts)
 			}
 		case <-time.After(5 * time.Second):
 			t.Fatalf("no status, want state %d", want)
 		}
 	}
 	running := svc.AcceptStop | svc.AcceptShutdown
-	next(svc.StartPending, 0)
+	next(svc.StartPending, running)
 	next(svc.Running, running)
 	r <- svc.ChangeRequest{Cmd: svc.Interrogate}
 	next(svc.Running, running)

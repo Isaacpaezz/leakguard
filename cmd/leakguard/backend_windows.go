@@ -1,14 +1,11 @@
 package main
 
-import (
-	"github.com/Isaacpaezz/leakguard/internal/daemon"
-	"github.com/Isaacpaezz/leakguard/internal/firewall"
-)
+import "github.com/Isaacpaezz/leakguard/internal/daemon"
 
-// The Windows backends: the Windows service; the firewall is not wired yet,
-// so every change fails closed with firewall.ErrUnsupported.
+// The Windows backends: the Windows Filtering Platform and the Windows
+// service.
 var (
-	systemFirewall         func(Env) firewall.Firewall
+	systemFirewall         = wfpFirewall
 	systemServices         = windowsServices
 	systemDefaultInterface = windowsDefaultInterface
 	systemNotifySocket     = func() string { return "" }

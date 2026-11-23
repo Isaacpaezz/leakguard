@@ -12,6 +12,7 @@ import (
 	"github.com/Isaacpaezz/leakguard/internal/firewall"
 	"github.com/Isaacpaezz/leakguard/internal/nft"
 	"github.com/Isaacpaezz/leakguard/internal/pf"
+	"github.com/Isaacpaezz/leakguard/internal/wfp"
 )
 
 // pfFirewall is the macOS firewall: the pf anchor, driven by env.Pfctl.
@@ -21,6 +22,13 @@ func pfFirewall(env Env) firewall.Firewall { return pf.Firewall{Runner: env.Pfct
 // It checks the VPN interface itself, so a refused one is never allowed.
 func nftFirewall(env Env) firewall.Firewall {
 	return nft.Firewall{Runner: env.Nft, Check: config.CheckVPNInterface}
+}
+
+// wfpFirewall is the Windows firewall: filters of the Windows Filtering
+// Platform. It checks the VPN adapter itself, so a refused one is never
+// permitted, and resolves its alias on every apply and verify.
+func wfpFirewall(Env) firewall.Firewall {
+	return wfp.Firewall{Check: config.CheckVPNInterface}
 }
 
 // launchdServices is the macOS background service: the LaunchDaemon.

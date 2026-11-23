@@ -39,8 +39,9 @@ type service struct {
 }
 
 // serve is what the LaunchDaemon runs: it loads the saved rules at start,
-// verifies them every applyInterval and loads them again only when the
-// check fails or the saved choice changed, unless paused. pf resets the
+// verifies them every applyInterval, and as soon as a VPN sample sees the
+// VPN connect or drop, and loads them again only when the check fails or
+// the saved choice changed, unless paused. pf resets the
 // rules' counters on each load, so the stats read them right before. It
 // answers the menu-bar app on the socket until it is stopped. Stats never
 // delay protection: the saved stats are read after the first load, and the
@@ -73,14 +74,15 @@ func (c *cli) serve(args []string) error {
 		c.env.Ready()
 	}
 	s.stats.load()
-	s.stats.sampleVPN()
+	vpn := vpnState{}
+	vpn.connected, vpn.known = s.stats.sampleVPN()
 	srv := &ipc.Server{Path: c.env.Socket, Handler: s.handle, Authorize: c.env.Authorize, Chown: c.env.ChownSocket}
 	saves := make(chan struct{}, 1)
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		s.loop(ctx, saves)
+		s.loop(ctx, saves, vpn)
 	}()
 	go func() {
 		defer wg.Done()
@@ -101,9 +103,17 @@ func (c *cli) serveContext() (context.Context, context.CancelFunc) {
 	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 }
 
-// loop verifies the rules and samples the VPN. It only asks the saver to
-// write the stats, so a slow disk never delays the next verify.
-func (s *service) loop(ctx context.Context, saves chan<- struct{}) {
+// vpnState is the last VPN sample: whether the saved VPN was connected,
+// known only when it could be read.
+type vpnState struct{ connected, known bool }
+
+// loop verifies the rules and samples the VPN. A sample that sees the VPN
+// connect or drop runs the check at once: on Windows the rules name the
+// VPN adapter, which exists only while connected, so its permits appear
+// within a sample; on macOS and Linux the rules verify and nothing loads.
+// It only asks the saver to write the stats, so a slow disk never delays
+// the next verify.
+func (s *service) loop(ctx context.Context, saves chan<- struct{}, last vpnState) {
 	check := time.NewTicker(interval(s.c.env.ApplyEvery, applyInterval))
 	defer check.Stop()
 	sample := time.NewTicker(interval(s.c.env.SampleEvery, sampleInterval))
@@ -115,7 +125,14 @@ func (s *service) loop(ctx context.Context, saves chan<- struct{}) {
 		case <-check.C:
 			s.check(false)
 		case <-sample.C:
-			s.stats.sampleVPN()
+			var now vpnState
+			now.connected, now.known = s.stats.sampleVPN()
+			if now.known && last.known && now.connected != last.connected {
+				s.check(false)
+			}
+			if now.known {
+				last = now
+			}
 		}
 		select {
 		case saves <- struct{}{}:
@@ -375,7 +392,7 @@ func (c *cli) daemonStatus() ipc.Status {
 // printDaemonStatus prints the daemon's answer like "sudo leakguard status".
 func (c *cli) printDaemonStatus(st ipc.Status) error {
 	if st.Reason == ipc.ReasonNotConfigured {
-		fmt.Fprintf(c.stdout, "leakguard is not configured yet.\n%s\n", notConfiguredHelp)
+		fmt.Fprintf(c.stdout, "leakguard is not configured yet.\n%s\n", notConfiguredHelp())
 		return nil
 	}
 	vpnState := "not connected"

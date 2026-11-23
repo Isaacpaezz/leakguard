@@ -199,8 +199,9 @@ Usage:
   leakguard serve   (admin)
       Run the background service that enable installs as the Windows
       service "leakguard": it loads the saved rules at start, checks them
-      every 30 seconds, and loads them again only when the check fails or
-      the saved choice changed. It logs each run to
+      every 30 seconds and as soon as the VPN connects or drops, and loads
+      them again only when the check fails or the saved choice changed.
+      It logs each run to
       %ProgramData%\leakguard\leakguard.log, keeps the session stats in
       %ProgramData%\leakguard\stats.json, and answers the tray app on
       \\.\pipe\leakguard. Only administrators can talk to it.
