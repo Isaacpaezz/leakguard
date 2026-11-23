@@ -6,6 +6,20 @@ All notable changes to leakguard are documented here. The format follows
 
 The newest section is shown automatically on the README landing page.
 
+## [0.3.0] - 2026-11-23
+
+leakguard for Windows (pre-release). Its firewall is tested
+automatically with real Windows Filtering Platform filters, but the tray app,
+the installer on a real PC and a real VPN drop have not yet been tried on a
+real Windows PC: please report any problem.
+
+### Added
+- Windows support: `setup.exe` installers for Windows 10 and 11 (amd64 and arm64), each with a SHA-256 checksum and an install guide in Spanish and English ([docs/install-windows.md](docs/install-windows.md)). They always install to Program Files, which only administrators can change (another folder is refused), with a Start menu entry; uninstalling from Settings > Apps also removes the protection, and running a newer installer restarts the background service with the new version, keeping your choices. Not signed with a certificate yet, so Windows asks you to allow it once ("More info", then "Run anyway").
+- On Windows, a Windows Filtering Platform firewall blocks protected destinations outside the VPN at once; its filters stay loaded across restarts of the background service, and only VPN adapters are accepted as the VPN: Ethernet, Wi-Fi, loopback and virtual machine adapters never are.
+- On Windows, a Windows service (`leakguard`, run as SYSTEM, started at boot and restarted when it fails) checks the rules every 30 seconds and as soon as the VPN connects or drops, and logs to `C:\ProgramData\leakguard\leakguard.log`; only administrators can change the protection through it, also from the tray app without elevation.
+- On Windows, the tray app with the same menu, 3-step setup, session stats, "Open at login" and uninstall as on macOS, in Spanish or English like Windows, with one administrator prompt (UAC) per change; when a change fails, it shows the reason. The blocks count is not shown on Windows yet.
+- Known limit on Windows: WSL2, Hyper-V virtual machines and Hyper-V containers do not go through leakguard yet, so if the VPN drops a program inside them can reach the protected services over the real connection; run Claude Code and similar tools directly on Windows.
+
 ## [0.2.0] - 2026-11-23
 
 leakguard for Linux (pre-release). Its firewall is tested automatically with

@@ -2,7 +2,9 @@ package main
 
 import (
 	"fmt"
+	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/Isaacpaezz/leakguard/internal/catalog"
 	"github.com/Isaacpaezz/leakguard/internal/config"
@@ -10,6 +12,7 @@ import (
 	"github.com/Isaacpaezz/leakguard/internal/firewall"
 	"github.com/Isaacpaezz/leakguard/internal/nft"
 	"github.com/Isaacpaezz/leakguard/internal/pf"
+	"github.com/Isaacpaezz/leakguard/internal/wfp"
 )
 
 // pfFirewall is the macOS firewall: the pf anchor, driven by env.Pfctl.
@@ -21,6 +24,13 @@ func nftFirewall(env Env) firewall.Firewall {
 	return nft.Firewall{Runner: env.Nft, Check: config.CheckVPNInterface}
 }
 
+// wfpFirewall is the Windows firewall: filters of the Windows Filtering
+// Platform. It checks the VPN adapter itself, so a refused one is never
+// permitted, and resolves its alias on every apply and verify.
+func wfpFirewall(Env) firewall.Firewall {
+	return wfp.Firewall{Check: config.CheckVPNInterface}
+}
+
 // launchdServices is the macOS background service: the LaunchDaemon.
 func launchdServices(env Env) daemon.Manager {
 	return daemon.Daemon{Root: env.Root, Launchctl: env.Launchctl, Secure: env.Secure}
@@ -29,6 +39,30 @@ func launchdServices(env Env) daemon.Manager {
 // systemdServices is the Linux background service: the systemd unit.
 func systemdServices(env Env) daemon.Manager {
 	return daemon.Systemd{Root: env.Root, Systemctl: env.Systemctl, Secure: env.Secure}
+}
+
+// windowsServices is the Windows background service, driven by env.SCM.
+// The service runs the copy in %ProgramFiles% with "serve".
+func windowsServices(env Env) daemon.Manager {
+	return daemon.WindowsService{
+		Binary:  rooted(env.Root, daemon.WindowsBinaryPath),
+		Command: daemon.ServiceCommand(daemon.WindowsBinaryPath),
+		Log:     rooted(env.Root, daemon.WindowsLogPath),
+		SCM:     env.SCM,
+	}
+}
+
+// rooted prefixes path with root, dropping a Windows volume name such as
+// "C:" so the result stays under root. Empty root returns path unchanged.
+func rooted(root, path string) string {
+	if root == "" {
+		return path
+	}
+	path = strings.TrimPrefix(path, filepath.VolumeName(path))
+	if len(path) >= 2 && path[1] == ':' {
+		path = path[2:]
+	}
+	return filepath.Join(root, path)
 }
 
 func (c *cli) firewall() firewall.Firewall {

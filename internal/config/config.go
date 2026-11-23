@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 
 	"github.com/Isaacpaezz/leakguard/internal/catalog"
 )
@@ -35,7 +36,8 @@ type Config struct {
 }
 
 // ValidInterfaceName reports whether name is a plain interface name, safe to
-// paste into firewall rules.
+// paste into firewall rules. On Windows it is an adapter alias: valid UTF-8,
+// 1 to 256 bytes, no control characters.
 func ValidInterfaceName(name string) bool {
 	return host.validName(name)
 }
@@ -43,7 +45,9 @@ func ValidInterfaceName(name string) bool {
 // CheckVPNInterface reports why name cannot be used as the VPN interface.
 // The firewall backends call it too, so a bad name never reaches the rules.
 // macOS judges by name; Linux by what the kernel says about the interface;
-// Windows refuses every interface for now. Every refusal wraps ErrVPNRefused.
+// Windows by what GetAdaptersAddresses says about the adapter. Linux and
+// Windows judge a missing interface by name. Every refusal wraps
+// ErrVPNRefused.
 func CheckVPNInterface(name string) error {
 	return host.check(name)
 }
@@ -79,15 +83,35 @@ func (c Config) ValidateServices(services []catalog.Service) error {
 	return nil
 }
 
-// VPNCandidates keeps the interface names that look like VPN tunnels.
+// CanonicalInterfaceName returns the interface name to store for name,
+// given the names of the interfaces that exist now. Windows resolves adapter
+// aliases ignoring case, but the firewall and the daemon look the saved
+// alias up exactly, so on Windows it returns the existing adapter's real
+// alias (an exact match first); a name no adapter matches is kept. macOS
+// and Linux names are case-sensitive: name is returned unchanged.
+func CanonicalInterfaceName(name string, names []string) string {
+	return host.canonical(name, names)
+}
+
+// SameInterface reports whether a and b name the same interface: ignoring
+// case on Windows, exactly elsewhere.
+func SameInterface(a, b string) bool {
+	return host.same(a, b)
+}
+
+// VPNCandidates keeps the interface names that look like VPN tunnels. On
+// Windows only connected VPN adapters are kept.
 func VPNCandidates(names []string) []string {
 	return host.candidates(names)
 }
 
-// Load reads the configuration at path. A missing file returns ErrNotConfigured.
+// Load reads the configuration at path. A missing file returns
+// ErrNotConfigured. On Windows a file someone other than SYSTEM and
+// Administrators may write, or a link, is refused with ErrUnsafePath, so
+// the SYSTEM daemon never runs a configuration a user planted.
 func Load(path string) (Config, error) {
 	var c Config
-	data, err := os.ReadFile(path)
+	data, err := readTrusted(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return c, ErrNotConfigured
 	}
@@ -105,14 +129,59 @@ func Load(path string) (Config, error) {
 	return c, nil
 }
 
+// readTrusted reads the file OpenTrusted opens.
+func readTrusted(path string) ([]byte, error) {
+	f, err := OpenTrusted(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(f)
+}
+
+// dataDirMu serializes this process's writers of the data directory. On
+// Windows PrepareDir opens the directory keeping writers out while it
+// checks it, and a rename into the directory opens it for adding a file,
+// so two writers of one process (a pause saved while the daemon saves its
+// stats) would refuse each other with a sharing violation.
+var dataDirMu sync.Mutex
+
+// WithDataDirLock runs fn while no other writer of this process changes the
+// data directory: Save, PrepareDir and other WithDataDirLock calls wait.
+// The daemon saves its session stats through it. fn must not call Save,
+// PrepareDir or WithDataDirLock.
+func WithDataDirLock(fn func() error) error {
+	dataDirMu.Lock()
+	defer dataDirMu.Unlock()
+	return fn()
+}
+
+// PrepareDir makes dir, the data directory, ready for files. On Windows
+// only SYSTEM and Administrators can write it afterwards, whoever created
+// it first: a junction is removed and a real directory made, a directory a
+// user created is taken over, every entry in it someone else could write,
+// or a link, is removed, and a directory in use is waited for about 2 s,
+// never removed. It fails when that cannot be done: nothing is saved then.
+// Elsewhere it creates dir, readable by everyone, when it is missing. It
+// holds the lock of WithDataDirLock.
+func PrepareDir(dir string) error {
+	return WithDataDirLock(func() error { return prepareDir(dir) })
+}
+
 // Save writes the configuration atomically, readable by everyone and writable
-// only by its owner.
+// only by its owner. The directory is made by PrepareDir: on Windows only
+// SYSTEM and Administrators can write it, and the new file replaces
+// whatever had the name (a file a user planted included) by a rename,
+// even while a reader holds it (see ReplaceFile). It holds the lock of
+// WithDataDirLock throughout. On failure no temporary file is left.
 func Save(path string, c Config) error {
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	dataDirMu.Lock()
+	defer dataDirMu.Unlock()
+	if err := prepareDir(filepath.Dir(path)); err != nil {
 		return err
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".config-*.json")
@@ -128,6 +197,10 @@ func Save(path string, c Config) error {
 		tmp.Close()
 		return err
 	}
+	if err := ownFile(tmp.Name()); err != nil {
+		tmp.Close()
+		return err
+	}
 	// Flush to disk before the rename, so a crash never leaves an empty file.
 	if err := tmp.Sync(); err != nil {
 		tmp.Close()
@@ -136,5 +209,5 @@ func Save(path string, c Config) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), path)
+	return ReplaceFile(tmp.Name(), path)
 }

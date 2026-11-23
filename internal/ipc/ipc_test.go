@@ -1,3 +1,8 @@
+//go:build !windows
+
+// These tests use Unix sockets; Windows uses a named pipe (see
+// transport_windows_test.go).
+
 package ipc
 
 import (

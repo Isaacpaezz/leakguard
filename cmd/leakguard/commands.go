@@ -5,7 +5,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"text/tabwriter"
@@ -18,12 +17,35 @@ import (
 	"github.com/Isaacpaezz/leakguard/internal/probe"
 )
 
-const notConfiguredHelp = `Start with: sudo leakguard enable --vpn IFACE SERVICE...
-See your VPN interfaces with: leakguard interfaces`
+// windowsWords makes messages name an administrator terminal instead of
+// sudo, and a VPN adapter instead of an interface.
+var windowsWords = runtime.GOOS == "windows"
 
-var errNotConfigured = errors.New("not configured yet; run: sudo leakguard enable --vpn IFACE SERVICE...")
+// adminCommand is how to run "leakguard args" as an administrator:
+// "sudo leakguard args", or on Windows "leakguard args (in an administrator
+// terminal)".
+func adminCommand(args string) string {
+	if windowsWords {
+		return "leakguard " + strings.ReplaceAll(args, "IFACE", "ADAPTER") + " (in an administrator terminal)"
+	}
+	return "sudo leakguard " + args
+}
 
-func (c *cli) configPath() string { return filepath.Join(c.env.Root, config.DefaultPath) }
+// notConfiguredHelp is what status prints before the first enable.
+func notConfiguredHelp() string {
+	return "Start with: " + adminCommand("enable --vpn IFACE SERVICE...") + "\nSee your VPN interfaces with: leakguard interfaces"
+}
+
+// notConfiguredError is errNotConfigured; its text follows windowsWords.
+type notConfiguredError struct{}
+
+func (notConfiguredError) Error() string {
+	return "not configured yet; run: " + adminCommand("enable --vpn IFACE SERVICE...")
+}
+
+var errNotConfigured error = notConfiguredError{}
+
+func (c *cli) configPath() string { return rooted(c.env.Root, config.DefaultPath) }
 
 // vpnRefusedError is a saved configuration that is valid except for its VPN
 // interface, which is refused (for example a real connection that now
@@ -51,7 +73,7 @@ func (e vpnRefusedError) reason(verr error) string {
 	if verr != nil {
 		return fmt.Sprintf("the saved VPN %q is not a VPN interface, and protected services are not blocked: %v", e.vpn, verr)
 	}
-	return fmt.Sprintf("protected services are blocked: the saved VPN %q is not a VPN interface; choose yours with: sudo leakguard enable --vpn IFACE", e.vpn)
+	return fmt.Sprintf("protected services are blocked: the saved VPN %q is not a VPN interface; choose yours with: %s", e.vpn, adminCommand("enable --vpn IFACE"))
 }
 
 // asVPNRefused reports whether err is a loadValid error for a configuration
@@ -113,11 +135,27 @@ func (c *cli) findInterface(name string) (Interface, bool) {
 		return Interface{}, false
 	}
 	for _, i := range ifs {
-		if i.Name == name {
+		if config.SameInterface(i.Name, name) {
 			return i, true
 		}
 	}
 	return Interface{}, false
+}
+
+// canonicalVPN returns the name to store for the VPN interface name: on
+// Windows the real alias of the adapter it names ignoring case, since the
+// firewall looks the saved alias up exactly; elsewhere, and when no
+// interface matches or they cannot be listed, name itself.
+func (c *cli) canonicalVPN(name string) string {
+	ifs, err := c.env.Interfaces()
+	if err != nil {
+		return name
+	}
+	names := make([]string, 0, len(ifs))
+	for _, i := range ifs {
+		names = append(names, i.Name)
+	}
+	return config.CanonicalInterfaceName(name, names)
 }
 
 func (c *cli) services(args []string) error {
@@ -197,7 +235,7 @@ func (c *cli) interfaces(args []string) error {
 	}
 	w.Flush()
 	fmt.Fprintln(c.stdout, "\nYour VPN is usually the one that appears when you connect it.")
-	fmt.Fprintln(c.stdout, "Use it with: sudo leakguard enable --vpn NAME SERVICE...")
+	fmt.Fprintln(c.stdout, "Use it with: "+adminCommand("enable --vpn NAME SERVICE..."))
 	return nil
 }
 
@@ -228,6 +266,7 @@ func (c *cli) detectVPN() (string, error) {
 func (c *cli) enable(args []string) error {
 	fs := flag.NewFlagSet("enable", flag.ContinueOnError)
 	vpn := fs.String("vpn", "", "VPN interface")
+	c.reportFlag(fs)
 	ids, err := c.parse(fs, args, true)
 	if err != nil {
 		return err
@@ -253,7 +292,11 @@ func (c *cli) enable(args []string) error {
 		cfg.Services = saved.Services
 	}
 	if len(cfg.Services) == 0 {
-		return usagef("name at least one service, for example: sudo leakguard enable anthropic (see leakguard services)")
+		example := "sudo leakguard enable anthropic (see leakguard services)"
+		if windowsWords {
+			example = "leakguard enable anthropic (in an administrator terminal; see leakguard services)"
+		}
+		return usagef("name at least one service, for example: %s", example)
 	}
 	if cfg.VPNInterface == "" {
 		cfg.VPNInterface = saved.VPNInterface
@@ -263,6 +306,7 @@ func (c *cli) enable(args []string) error {
 			return err
 		}
 	}
+	cfg.VPNInterface = c.canonicalVPN(cfg.VPNInterface)
 	if err := cfg.Validate(all); err != nil {
 		return err
 	}
@@ -293,7 +337,9 @@ func (c *cli) enable(args []string) error {
 }
 
 func (c *cli) disable(args []string) error {
-	if _, err := c.parse(flag.NewFlagSet("disable", flag.ContinueOnError), args, false); err != nil {
+	fs := flag.NewFlagSet("disable", flag.ContinueOnError)
+	c.reportFlag(fs)
+	if _, err := c.parse(fs, args, false); err != nil {
 		return err
 	}
 	if err := c.requireRoot("disable"); err != nil {
@@ -378,13 +424,13 @@ func (c *cli) status(args []string) error {
 	}
 	// Without root, the daemon verifies the rules for us when it answers.
 	if !c.env.IsRoot() && c.env.Socket != "" {
-		if st, err := (ipc.Client{Path: c.env.Socket}).Status(); err == nil {
+		if st, err := (ipc.Client{Path: c.env.Socket, CheckServer: c.env.CheckServer}).Status(); err == nil {
 			return c.printDaemonStatus(st)
 		}
 	}
 	cfg, services, err := c.loadValid()
 	if errors.Is(err, errNotConfigured) {
-		fmt.Fprintf(c.stdout, "leakguard is not configured yet.\n%s\n", notConfiguredHelp)
+		fmt.Fprintf(c.stdout, "leakguard is not configured yet.\n%s\n", notConfiguredHelp())
 		return nil
 	}
 	// Root can tell whether a refused VPN left protected services blocked.
@@ -397,7 +443,11 @@ func (c *cli) status(args []string) error {
 	if i, ok := c.findInterface(cfg.VPNInterface); ok && i.Connected() {
 		vpnState = "connected"
 	}
-	daemonState := "not installed (run: sudo leakguard enable)"
+	daemonState, verifyHint := "not installed (run: sudo leakguard enable)", `run "sudo leakguard status" to verify the rules`
+	if windowsWords {
+		daemonState = `not installed (run "leakguard enable" in an administrator terminal)`
+		verifyHint = `run "leakguard status" in an administrator terminal to verify the rules`
+	}
 	if c.daemon().Installed() {
 		daemonState = "installed"
 	}
@@ -410,7 +460,7 @@ func (c *cli) status(args []string) error {
 	}
 	printStats(w, c.savedStats(), c.now())
 	if !c.env.IsRoot() {
-		fmt.Fprintf(w, "Firewall:\trun \"sudo leakguard status\" to verify the rules\n")
+		fmt.Fprintf(w, "Firewall:\t%s\n", verifyHint)
 		return w.Flush()
 	}
 	if isRefused {
@@ -435,13 +485,13 @@ func (c *cli) verify(cfg config.Config, services []catalog.Service) error {
 	case err != nil:
 		return err
 	case !on:
-		return fmt.Errorf("%s is disabled; turn it back on with: sudo leakguard apply", fw.Name())
+		return fmt.Errorf("%s is disabled; turn it back on with: %s", fw.Name(), adminCommand("apply"))
 	}
 	return fw.Verify(cfg.VPNInterface, services)
 }
 
 func isVPN(iface string, cfg config.Config) bool {
-	return iface == cfg.VPNInterface || len(config.VPNCandidates([]string{iface})) > 0
+	return config.SameInterface(iface, cfg.VPNInterface) || len(config.VPNCandidates([]string{iface})) > 0
 }
 
 // realConnections returns the connected interfaces outside the VPN.

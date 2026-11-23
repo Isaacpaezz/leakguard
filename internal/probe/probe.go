@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -127,17 +128,23 @@ func (p Prober) Run(ctx context.Context, iface string, services []catalog.Servic
 	return results
 }
 
-// classify maps a dial error to an outcome. leakguard's pf rule uses
-// "block return", so a real block is always an immediate refusal. Unreachable
-// networks and timeouts also happen when the real connection is offline and
-// no rule is loaded, so they are untested, never blocked.
+// classify maps a dial error to an outcome on this OS (see classifyOn).
 func classify(err error) (Outcome, error) {
+	return classifyOn(runtime.GOOS, err)
+}
+
+// classifyOn maps a dial error to an outcome on goos. leakguard's pf rule
+// uses "block return", so a real block is always an immediate refusal (on
+// Windows also WFP's WSAEACCES; see refused). Unreachable networks and
+// timeouts also happen when the real connection is offline and no rule is
+// loaded, so they are untested, never blocked.
+func classifyOn(goos string, err error) (Outcome, error) {
 	if err == nil {
 		return Leak, nil
 	}
 	var ne net.Error
 	switch {
-	case errors.Is(err, syscall.ECONNREFUSED):
+	case refused(goos, err):
 		return Blocked, err
 	case errors.Is(err, syscall.EHOSTUNREACH),
 		errors.Is(err, syscall.ENETUNREACH),

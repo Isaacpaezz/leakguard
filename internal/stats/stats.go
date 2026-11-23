@@ -35,8 +35,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"syscall"
 	"time"
+
+	"github.com/Isaacpaezz/leakguard/internal/config"
 )
 
 // DefaultPath is where the daemon keeps the stats: root-owned, readable by
@@ -135,9 +136,10 @@ func Load(path string, loc *time.Location) (*Tracker, error) {
 
 // readFile reads a regular file of at most MaxFileSize bytes. The
 // non-blocking open returns at once even for a FIFO without a writer, which
-// is then refused.
+// is then refused. On Windows the open shares deleting, so Save can replace
+// the file while it is read.
 func readFile(path string) ([]byte, error) {
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	f, err := openRead(path)
 	if err != nil {
 		return nil, err
 	}
@@ -160,7 +162,8 @@ func readFile(path string) ([]byte, error) {
 }
 
 // Save writes s atomically, readable by everyone and writable only by its
-// owner.
+// owner. The new file replaces the old one even while a reader holds it
+// (see config.ReplaceFile). On failure no temporary file is left.
 func Save(path string, s State) error {
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
@@ -189,7 +192,7 @@ func Save(path string, s State) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), path)
+	return config.ReplaceFile(tmp.Name(), path)
 }
 
 // State returns a copy of the current state, for Save.

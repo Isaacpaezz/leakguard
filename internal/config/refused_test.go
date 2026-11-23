@@ -24,6 +24,7 @@ func TestEveryVPNRefusalWrapsErrVPNRefused(t *testing.T) {
 		{linux, []string{"", "wg/x", "eth0", "wlan0", "docker0", "lo", "usb0", "veth1a2b"}, []string{"tun0", "wg-mullvad", "wg9"}},
 		{unreadable, []string{"tun0"}, nil},
 		{rules{goos: "windows"}, []string{"", "utun4", "Ethernet 2"}, nil},
+		{windowsRules(windowsAdaptersFixture, nil), []string{"", "wg\n0", "Ethernet", "Wi-Fi", "Ethernet 2", "Teredo"}, []string{"WireGuard Tunnel", "Conexión VPN"}},
 	}
 	for _, tc := range cases {
 		for _, name := range tc.refused {
@@ -44,15 +45,15 @@ func TestEveryVPNRefusalWrapsErrVPNRefused(t *testing.T) {
 // Validate wraps ErrVPNRefused only for the VPN interface; ValidateServices
 // checks the rest without it.
 func TestValidateTellsAVPNRefusalApart(t *testing.T) {
-	vpn := Config{VPNInterface: "en0", Services: []string{"anthropic"}}
+	vpn := Config{VPNInterface: hostNames(t).physical, Services: []string{"anthropic"}}
 	if err := vpn.Validate(testCatalog); !errors.Is(err, ErrVPNRefused) {
-		t.Fatalf("Validate(en0) = %v, want ErrVPNRefused", err)
+		t.Fatalf("Validate(%q) = %v, want ErrVPNRefused", vpn.VPNInterface, err)
 	}
 	if err := vpn.ValidateServices(testCatalog); err != nil {
-		t.Fatalf("ValidateServices(en0) = %v", err)
+		t.Fatalf("ValidateServices(%q) = %v", vpn.VPNInterface, err)
 	}
-	if err := CheckVPNInterface("en0"); !errors.Is(err, ErrVPNRefused) {
-		t.Fatalf("CheckVPNInterface(en0) = %v, want ErrVPNRefused", err)
+	if err := CheckVPNInterface(vpn.VPNInterface); !errors.Is(err, ErrVPNRefused) {
+		t.Fatalf("CheckVPNInterface(%q) = %v, want ErrVPNRefused", vpn.VPNInterface, err)
 	}
 	for _, c := range []Config{
 		{VPNInterface: "utun4", Services: []string{"gemini"}},

@@ -9,8 +9,8 @@ import (
 	"time"
 )
 
-// ErrDaemonUnavailable means nothing listens on the socket: the daemon is not
-// installed or not running.
+// ErrDaemonUnavailable means nothing listens on the socket or the pipe: the
+// daemon is not installed or not running.
 var ErrDaemonUnavailable = errors.New("the leakguard background service is not running")
 
 // ErrNotAuthorized means the daemon refused the peer: it is not root or an
@@ -19,8 +19,16 @@ var ErrNotAuthorized = errors.New("not authorized")
 
 // Client talks to the daemon.
 type Client struct {
-	// Path is the socket path; empty means DefaultPath.
+	// Path is the socket path (the pipe name on Windows); empty means
+	// DefaultPath.
 	Path string
+	// CheckServer accepts or refuses the server right after connecting,
+	// before anything is sent. Nil means the platform check: on Windows
+	// the pipe must be owned by LocalSystem, as the leakguard service
+	// creates it (see authorizeServer); a Unix socket lives in a
+	// directory only root may write, so it is accepted. Tests that run
+	// their own daemon replace it.
+	CheckServer func(net.Conn) error
 }
 
 // Status returns the daemon's current status.
@@ -45,7 +53,7 @@ func (c Client) do(req Request) (Status, error) {
 	if path == "" {
 		path = DefaultPath
 	}
-	conn, err := net.DialTimeout("unix", path, DialTimeout)
+	conn, err := dial(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ECONNREFUSED) {
 			return Status{}, fmt.Errorf("%w (%v)", ErrDaemonUnavailable, err)
@@ -53,6 +61,13 @@ func (c Client) do(req Request) (Status, error) {
 		return Status{}, err
 	}
 	defer conn.Close()
+	check := c.CheckServer
+	if check == nil {
+		check = checkServer
+	}
+	if err := check(conn); err != nil {
+		return Status{}, err
+	}
 	conn.SetDeadline(time.Now().Add(Deadline))
 	// The server may answer and hang up before reading the request (an
 	// unauthorized peer), so a failed write still reads the answer.

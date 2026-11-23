@@ -1,11 +1,11 @@
 name: Release
 
-# Builds the macOS DMG and the Linux packages and publishes them on GitHub
-# Releases. Only the maintainer pushes v* tags; agents never do (AGENTS.md
-# rule 10). Every build runs without write access and keeps its files as a
-# workflow artifact; the publish job, the only one that may write, creates
-# the release with all of them once every build succeeded, so a release
-# never appears with a platform missing.
+# Builds the macOS DMG, the Linux packages and the Windows installers and
+# publishes them on GitHub Releases. Only the maintainer pushes v* tags;
+# agents never do (AGENTS.md rule 10). Every build runs without write
+# access and keeps its files as a workflow artifact; the publish job, the
+# only one that may write, creates the release with all of them once every
+# build succeeded, so a release never appears with a platform missing.
 on:
   push:
     tags: ['v*']
@@ -74,9 +74,38 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  windows:
+    name: Windows installers
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Windows keeps compiling
+        run: GOOS=windows go vet ./...
+      - name: Install NSIS
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq nsis
+      - name: Build the amd64 and arm64 installers
+        run: scripts/build-windows.sh "${TAG#v}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-packages
+          path: |
+            dist/*-setup.exe
+            dist/*-setup.exe.sha256
+          if-no-files-found: error
+          retention-days: 7
+
   publish:
     name: Publish the GitHub Release
-    needs: [macos, linux]
+    needs: [macos, linux, windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -100,6 +129,7 @@ jobs:
             "artifacts/macos-packages/leakguard-$version-macos.dmg"
             "artifacts/macos-packages/leakguard-$version-macos.dmg.sha256"
             artifacts/linux-packages/*
+            artifacts/windows-packages/*
           )
           # A re-run after a failed upload completes the existing release.
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then

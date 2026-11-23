@@ -347,20 +347,18 @@ func TestServeLogsBlockedOnlyAfterTheBlockAllRulesLoad(t *testing.T) {
 	}
 }
 
-// breakSave loads the rules, then puts a file where the configuration's
-// directory was, so saving the configuration fails, also as root.
+// breakSave loads the rules, then breaks the configuration's directory
+// (breakConfigDir), so saving the configuration fails, also as root.
 type breakSave struct {
 	firewall.Firewall
+	t   *testing.T
 	dir string
 }
 
 func (f breakSave) Apply(vpn string, s []catalog.Service) error {
 	err := f.Firewall.Apply(vpn, s)
-	if rerr := os.Rename(f.dir, f.dir+".moved"); rerr != nil {
-		return rerr
-	}
-	if werr := os.WriteFile(f.dir, nil, 0o644); werr != nil {
-		return werr
+	if berr := breakConfigDir(f.t, f.dir); berr != nil {
+		return berr
 	}
 	return err
 }
@@ -379,7 +377,7 @@ func TestApplyWithAFailedPauseSave(t *testing.T) {
 		h, p := statefulHarness(t)
 		h.saveConfig(t, config.Config{VPNInterface: tc.vpn, Services: []string{"anthropic"}, Paused: true})
 		h.env.Firewall = func(e Env) firewall.Firewall {
-			return breakSave{pfFirewall(e), filepath.Dir(h.path(config.DefaultPath))}
+			return breakSave{pfFirewall(e), t, filepath.Dir(h.path(config.DefaultPath))}
 		}
 		code, out, errOut := h.run("apply")
 		if code != 1 || out != "" || !strings.HasPrefix(errOut, tc.want) || strings.Count(errOut, "\n") != 1 {

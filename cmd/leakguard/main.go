@@ -17,13 +17,16 @@ import (
 )
 
 func main() {
+	if code, ok := runAsSystemService(os.Args[1:]); ok {
+		os.Exit(code)
+	}
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr, systemEnv()))
 }
 
 // systemEnv talks to the real system.
 func systemEnv() Env {
 	return Env{
-		IsRoot:     func() bool { return os.Geteuid() == 0 },
+		IsRoot:     systemIsRoot,
 		Pfctl:      pf.ExecRunner{},
 		Nft:        nft.ExecRunner{},
 		Launchctl:  daemon.ExecRunner{},
@@ -44,6 +47,7 @@ func systemEnv() Env {
 		Now:              time.Now,
 		Socket:           ipc.DefaultPath,
 		NotifySocket:     systemNotifySocket(),
+		SCM:              systemSCM,
 	}
 }
 

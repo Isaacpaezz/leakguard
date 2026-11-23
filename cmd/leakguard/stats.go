@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -49,7 +48,7 @@ func (c *cli) location() *time.Location {
 	return time.Local
 }
 
-func (c *cli) statsPath() string { return filepath.Join(c.env.Root, stats.DefaultPath) }
+func (c *cli) statsPath() string { return rooted(c.env.Root, stats.DefaultPath) }
 
 // newStats returns the stats of "serve", not loaded yet: the daemon loads
 // its rules first and the saved stats after, so stats file I/O never delays
@@ -117,20 +116,20 @@ func (d *daemonStats) counterReset() {
 	d.record((*stats.Tracker).CounterReset)
 }
 
-// sampleVPN records whether the saved VPN is connected. Without a saved VPN,
-// or when the interfaces cannot be listed, there is nothing to record.
-func (d *daemonStats) sampleVPN() {
+// sampleVPN records whether the saved VPN is connected, and returns it.
+// Without a saved VPN, or when the interfaces cannot be listed, there is
+// nothing to record and ok is false.
+func (d *daemonStats) sampleVPN() (connected, ok bool) {
 	cfg, err := config.Load(d.c.configPath())
 	if err != nil || cfg.VPNInterface == "" {
-		return
+		return false, false
 	}
 	ifs, err := d.c.env.Interfaces()
 	if err != nil {
-		return
+		return false, false
 	}
-	connected := false
 	for _, i := range ifs {
-		if i.Name == cfg.VPNInterface {
+		if config.SameInterface(i.Name, cfg.VPNInterface) {
 			connected = i.Connected()
 		}
 	}
@@ -138,6 +137,7 @@ func (d *daemonStats) sampleVPN() {
 	d.mu.Lock()
 	d.record(func(t *stats.Tracker) { t.ObserveVPN(now, connected) })
 	d.mu.Unlock()
+	return connected, true
 }
 
 // save writes the stats when they changed, at most once per
@@ -159,7 +159,10 @@ func (d *daemonStats) save(force bool) {
 	if d.c.env.SaveStats != nil {
 		save = d.c.env.SaveStats
 	}
-	err := save(d.path, st)
+	// Never while this process saves the configuration: on Windows both
+	// write into %ProgramData%\leakguard, and a rename into it while
+	// config.PrepareDir checks it fails with a sharing violation.
+	err := config.WithDataDirLock(func() error { return save(d.path, st) })
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if err == nil {

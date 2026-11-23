@@ -6,7 +6,11 @@
 // root:admin with mode 0660, and the server also checks the peer's
 // credentials and refuses anyone who is not root or in group admin. On
 // Linux the group is the first of sudo, wheel and admin that exists; without
-// one, the socket is root:root 0600 and only root is accepted.
+// one, the socket is root:root 0600 and only root is accepted. On Windows
+// the daemon listens on the named pipe \\.\pipe\leakguard, which only
+// SYSTEM, Administrators and interactive users may open, and accepts a
+// client only when its token is SYSTEM's or holds the Administrators group,
+// also without elevation.
 package ipc
 
 import (

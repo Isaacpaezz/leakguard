@@ -233,7 +233,28 @@ is the original work breakdown.
    Not verified live (no Linux machine, owner decision L3): the tray icon
    and dialogs on a real desktop, the pkexec prompt with the polkit policy,
    the systemd service at boot, and a real VPN dropping.
-4. Windows backend and tray app (release 0.3.0).
+4. 🧪 Built on `feat/windows-support` (draft PR #19, stacked on the Linux
+   PR #18), not released (`odd/tasks/linux-windows.md`). Windows backend
+   and tray app (release 0.3.0). Exists: `internal/wfp` on tailscale/wf
+   (persistent provider and sublayer, block weight 1 and permit-by-LUID
+   weight 2 per protected range at `ALE_AUTH_CONNECT_V4/V6`, add-then-delete
+   swap, `BlockCount` unsupported so the menu omits blocks), Windows
+   adapter rules (alias stored, VPN types and descriptions accepted,
+   Ethernet, Wi-Fi, loopback and VM adapters refused), the `leakguard`
+   Windows service running its own copy
+   `%ProgramFiles%\leakguard\service\leakguard.exe`, state in an
+   admin-only `%ProgramData%\leakguard`, the named pipe with a token check,
+   the `IP_UNICAST_IF` probe, the tray app (TaskDialogIndirect, UAC with a
+   report file that carries the CLI's error back, Run key) and NSIS
+   installers (`scripts/build-windows.sh`, `packaging/windows`).
+   Verified on `windows-latest` in CI: real WFP filters (permit wins on the
+   VPN adapter, blocked connects fail with `WSAEACCES` in about 1 ms,
+   weights read back 1 and 2 after the FWPM_FILTER0 layout fix), the pipe's SDDL and token rules, real adapter
+   classification, the data folder ACL, SCM queries, command-line quoting
+   and the elevated exit code. Not verified live (no Windows PC, owner
+   decision L3): the tray and its dialogs on a real desktop, the installer
+   and the UAC prompt on a real PC, the service at boot and a real VPN
+   dropping.
 5. Self-updating catalog (release 1.0, #16): a scheduled workflow refreshes ranges from their
    sources (ASN prefixes) and opens a PR; the app downloads a signed catalog.
    Domain-aware blocking for CDN-hosted services (OpenAI).

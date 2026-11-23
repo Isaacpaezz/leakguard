@@ -1,5 +1,5 @@
 // Package daemon installs the background service that runs "leakguard serve"
-// (the macOS LaunchDaemon, the Linux systemd unit):
+// (the macOS LaunchDaemon, the Linux systemd unit, the Windows service):
 // it loads the firewall rules at boot, verifies them periodically and loads
 // them again when OS updates or VPN clients flush them, counts what they
 // block, and answers the menu-bar app.
@@ -125,8 +125,11 @@ func (d Daemon) LastLogLine() (string, bool) { return lastLogLine(d.path(LogPath
 
 // lastLogLine returns the last non-empty line of the log at path, reading
 // only its tail. A missing or empty log returns false.
-func lastLogLine(path string) (string, bool) {
-	f, err := os.Open(path)
+func lastLogLine(path string) (string, bool) { return lastLine(path, os.Open) }
+
+// lastLine is lastLogLine with the log opened by open.
+func lastLine(path string, open func(string) (*os.File, error)) (string, bool) {
+	f, err := open(path)
 	if err != nil {
 		return "", false
 	}

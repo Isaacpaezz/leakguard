@@ -52,6 +52,166 @@ jobs:
           go test -c -o "$RUNNER_TEMP/nft.test" ./internal/nft/
           sudo LEAKGUARD_NFT_INTEGRATION=1 "$RUNNER_TEMP/nft.test" -test.count=1 -test.run Integration -test.v
 
+  test-windows-wfp:
+    name: Windows WFP integration (real filters, elevated)
+    runs-on: windows-latest
+    steps:
+      - name: The shell is elevated
+        shell: pwsh
+        run: |
+          $principal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+          if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+            Write-Error "The WFP integration test needs an elevated shell"
+            exit 1
+          }
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - name: Unit tests
+        run: go test ./internal/catalog/... ./internal/firewall/... ./internal/wfp/...
+      # The tests that only Windows can run: pipe and token, probe binding,
+      # real adapters, the data directory ACL, the SCM, the service handler,
+      # the service directory ACL, the default route and the CLI's Windows
+      # wiring. Required: they gate merges. Every package is run, then the
+      # step fails if one failed. Each name or pattern between the | of a
+      # -run must match a test that passed, so a typo or a renamed test
+      # fails the step instead of running nothing. Every -run must have the
+      # shape ^(a|b|c)$: one group anchored at both ends whose alternatives
+      # are split on |, with no group inside it. Any other shape fails the
+      # step, because its alternatives could not be checked one by one.
+      - name: Windows-only tests (required)
+        shell: bash
+        run: |
+          failed=0
+          t() {
+            local out rc=0 alt alts
+            if [[ $1 != '^('*')$' || $1 == '^('*[\(\)]*')$' ]]; then
+              echo "::error::$2: -run '$1' must have the shape ^(a|b)$"
+              failed=1
+              return
+            fi
+            out=$(go test -count=1 -v -run "$1" "$2" 2>&1) || rc=$?
+            printf '%s\n' "$out"
+            if [ "$rc" -ne 0 ]; then
+              echo "::error::$2: go test -run '$1' failed"
+              failed=1
+              return
+            fi
+            if grep -q 'no tests to run' <<<"$out"; then
+              echo "::error::$2: -run '$1' matches no test"
+              failed=1
+              return
+            fi
+            alts=${1#^(}
+            alts=${alts%)\$}
+            IFS='|' read -ra alts <<<"$alts"
+            for alt in "${alts[@]}"; do
+              if ! grep -Eq -- "^--- PASS: (${alt}) \(" <<<"$out"; then
+                echo "::error::$2: no test matching '$alt' passed"
+                failed=1
+              fi
+            done
+          }
+          t '^(TestPipe.*|TestDefaultPathIsThePipe|TestAuthorize.*Token.*|TestAuthorizeServer)$' ./internal/ipc/
+          t '^(TestBoundDial.*OnWindows)$' ./internal/probe/
+          t '^(TestRealWindowsAdapters.*|TestPrepareDir.*|TestLoadRefuses.*|TestCanonicalInterfaceName|TestSameInterface|TestSaveWhileAReaderHoldsTheConfig)$' ./internal/config/
+          t '^(TestSaveWhileAReaderHoldsTheStats)$' ./internal/stats/
+          t '^(TestSCM.*|TestWindowsDefaultPaths|TestWindowsLastLogLineReadsOnlyATrustedLog|TestWindowsInstallSecuresTheServiceDirectory|TestWindowsInstallReplacesAJunctionAtTheServiceDirectory)$' ./internal/daemon/
+          t '^(TestWindowsCommandLineRoundTrip|TestUserLang|TestProgramFiles|TestQuerySCM|TestCheckInstalledCLIWindows|TestDialogsWithoutManifest|TestShellExecuteInfoSize|TestRunElevatedExitCode|TestRegistryRunKey|TestTaskDialogIndirectWithManifest|TestRunElevatedWithReport|TestWindowsSetupCommandRealAliases)$' ./internal/menubar/
+          t '^(TestWindowsLoadsTheTrayIcons|TestWindowsPlatform)$' ./cmd/leakguard-menubar/
+          t '^(TestSystemIsRootIsTheElevatedToken|TestWindowsBackends|TestWFPFirewall|TestWindowsDefaultInterface.*|TestRouteTableReadsInterfaceMetrics|TestRunAsSystemServiceOutsideTheSCM|TestSCM.*|TestRunUnderSCM.*|TestUsageOnWindows|TestOpenServiceLog|TestEnableStoresTheAdaptersRealAlias|TestSetStoresTheAdaptersRealAlias|TestVPNSamplingIgnoresAliasCase|TestReportFileFlagIsDefinedOnWindows|TestReportOwnerOfAFileThisUserCreated|TestWriteReportRefusesAHardLink|TestStatusIgnoresAPipeTheServiceDoesNotOwn|TestServePauseKeepsTheDaemonRunning|TestServeChecksWhenTheVPNConnectsOrDrops|TestServeNeverSavesTheConfigDuringAStatsSave)$' ./cmd/leakguard/
+          exit $failed
+      # Loads real filters at ALE_AUTH_CONNECT and IPFORWARD, probes them and
+      # flushes them at the end; then proves another program's filters are
+      # never read or touched. Each named test must pass, not skip.
+      - name: Load real WFP filters and probe them
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          LEAKGUARD_WFP_INTEGRATION: "1"
+        run: |
+          rc=0
+          out=$(go test -count=1 -v -run '^(TestIntegrationRealFilters|TestIntegrationForeignFilters)$' ./internal/wfp/ 2>&1) || rc=$?
+          printf '%s\n' "$out"
+          if [ "$rc" -ne 0 ]; then exit "$rc"; fi
+          for name in TestIntegrationRealFilters TestIntegrationForeignFilters; do
+            if ! grep -q "^--- PASS: $name (" <<<"$out"; then
+              echo "::error::$name did not pass"
+              exit 1
+            fi
+          done
+      # Protected traffic from Windows containers on Docker's nat network.
+      # The test runs its own binary in Nano Server containers and probes a
+      # protected public address. Process isolation shares this kernel, so
+      # it must be blocked at once (WSAEACCES) with the VPN down, and Flush
+      # must restore it; with every filter loaded and the egress adapter as
+      # the VPN, this computer's own connect must succeed. Hyper-V isolation
+      # has its own kernel, like WSL2 and Hyper-V VMs: its traffic is NAT-
+      # translated inside the Hyper-V switch and is not filtered (a known
+      # gap, run 45127817057). The test logs it as KNOWN GAP without failing
+      # and this step turns that line into a warning on every run.
+      # Some runners come with the Docker service stopped or without Docker:
+      # it is started and waited for (about 60 s). A runner without Docker
+      # skips the container coverage with a warning, an environment reason,
+      # never a failure as if a filter regressed.
+      - name: Start Docker for the container traffic test
+        id: docker
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $available = $false
+          if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
+            Write-Output 'The docker CLI is not installed on this runner'
+          } elseif (-not (Get-Service -Name docker -ErrorAction SilentlyContinue)) {
+            Write-Output 'The docker service is not installed on this runner'
+          } else {
+            try { Start-Service -Name docker -ErrorAction Stop } catch { Write-Output "Start-Service docker: $_" }
+            for ($i = 0; $i -lt 60; $i++) {
+              docker version *> $null
+              if ($LASTEXITCODE -eq 0) { $available = $true; break }
+              Start-Sleep -Seconds 1
+            }
+          }
+          if ($available) {
+            docker version
+            "available=true" >> $env:GITHUB_OUTPUT
+          } else {
+            Write-Output '::warning::Container traffic coverage was skipped: Docker with Windows containers is not available on this runner (environment, not a filter regression)'
+            "available=false" >> $env:GITHUB_OUTPUT
+          }
+          exit 0
+      - name: Container traffic (ALE for process isolation, Hyper-V known gap)
+        if: ${{ !cancelled() && steps.docker.outputs.available == 'true' }}
+        shell: bash
+        env:
+          LEAKGUARD_WFP_FORWARD_INTEGRATION: "1"
+        run: |
+          rc=0
+          out=$(go test -count=1 -timeout 30m -v -run '^TestIntegrationForwardedTraffic$' ./internal/wfp/ 2>&1) || rc=$?
+          printf '%s\n' "$out"
+          if [ "$rc" -ne 0 ]; then exit "$rc"; fi
+          if ! grep -q '^--- PASS: TestIntegrationForwardedTraffic (' <<<"$out"; then
+            echo "::error::TestIntegrationForwardedTraffic did not pass"
+            exit 1
+          fi
+          { grep 'KNOWN GAP' <<<"$out" || true; } | while IFS= read -r line; do
+            line=$(sed -E 's/^[[:space:]]*[A-Za-z0-9_]+\.go:[0-9]+: //' <<<"$line")
+            line=${line//'%'/'%25'}
+            line=${line//$'\r'/}
+            echo "::warning::$line"
+          done
+      # The portable suite of these packages still assumes Unix in places:
+      # continue-on-error until it is ported (T14).
+      # The whole suites of these packages run on Windows too (T14c).
+      - name: Portable tests of the other packages
+        if: ${{ !cancelled() }}
+        run: go test -count=1 ./internal/ipc/ ./internal/probe/ ./internal/config/ ./internal/daemon/ ./cmd/leakguard/
+
   package-linux:
     name: Linux packages build (not uploaded)
     runs-on: ubuntu-latest
@@ -72,6 +232,272 @@ jobs:
           leakguard version
           leakguard services
           sudo apt-get remove -y -qq leakguard
+
+  package-windows:
+    name: Windows installers build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Install NSIS
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq nsis
+      - name: Build the amd64 and arm64 installers
+        run: scripts/build-windows.sh 0.0.0-ci
+      - name: No generated resource is left in the tree
+        run: |
+          if [ -n "$(git status --porcelain --ignored -- cmd/)" ]; then
+            git status --porcelain --ignored -- cmd/; exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer-amd64
+          path: |
+            dist/leakguard-0.0.0-ci-windows-amd64-setup.exe
+            dist/leakguard-0.0.0-ci-windows-amd64-setup.exe.sha256
+          if-no-files-found: error
+          retention-days: 3
+
+  install-windows:
+    name: Windows installer installs, upgrades and uninstalls
+    needs: package-windows
+    runs-on: windows-latest
+    env:
+      SETUP: leakguard-0.0.0-ci-windows-amd64-setup.exe
+      # The leakguard WFP provider's GUID. Source of truth: ProviderKey in
+      # internal/wfp/wfp.go; change both together.
+      WFP_PROVIDER: 1511ab70-ff32-4b5e-b8f5-2a0ca949c9e2
+    steps:
+      - name: The shell is elevated
+        shell: pwsh
+        run: |
+          $principal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+          if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+            Write-Error "The installer test needs an elevated shell"
+            exit 1
+          }
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-installer-amd64
+          path: ${{ runner.temp }}/installer
+      # The install folder is always Program Files: /D= elsewhere is refused,
+      # so nothing the tray or the uninstaller elevates can be user-writable.
+      - name: Another install folder is refused
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = Join-Path $env:RUNNER_TEMP "installer\$env:SETUP"
+          $elsewhere = Join-Path $env:RUNNER_TEMP 'elsewhere'
+          $p = Start-Process -FilePath $setup -ArgumentList "/S /D=$elsewhere" -Wait -PassThru
+          if ($p.ExitCode -ne 2) { throw "installing to $elsewhere exited with $($p.ExitCode), want 2" }
+          if (Test-Path -LiteralPath (Join-Path $elsewhere 'leakguard.exe')) { throw "files were written to $elsewhere" }
+          if (Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'leakguard')) { throw 'a refused install left files in Program Files' }
+      - name: Install silently
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = Join-Path $env:RUNNER_TEMP "installer\$env:SETUP"
+          $want = (Get-Content -LiteralPath "$setup.sha256" -Raw).Split(' ')[0].Trim()
+          $got = (Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash
+          if ($got -ne $want) { throw "sha256 $got, want $want" }
+          $p = Start-Process -FilePath $setup -ArgumentList '/S' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "the installer exited with $($p.ExitCode)" }
+      - name: Files, shortcut, uninstall entry, version and tray manifest
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dir = Join-Path $env:ProgramFiles 'leakguard'
+          foreach ($f in 'leakguard.exe', 'leakguard-tray.exe', 'uninstall.exe', 'LICENSE.txt', 'install-windows.md') {
+            if (-not (Test-Path -LiteralPath (Join-Path $dir $f) -PathType Leaf)) { throw "$f is not installed in $dir" }
+          }
+          $lnk = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\leakguard.lnk'
+          $target = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk).TargetPath
+          if ($target -ne (Join-Path $dir 'leakguard-tray.exe')) { throw "the Start menu shortcut opens '$target'" }
+          $key = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\leakguard'
+          $want = @{
+            DisplayName          = 'leakguard'
+            DisplayVersion       = '0.0.0-ci'
+            Publisher            = 'leakguard'
+            DisplayIcon          = "`"$dir\leakguard-tray.exe`""
+            UninstallString      = "`"$dir\uninstall.exe`""
+            QuietUninstallString = "`"$dir\uninstall.exe`" /S"
+            NoModify             = 1
+            NoRepair             = 1
+          }
+          foreach ($name in $want.Keys) {
+            if ($key.$name -ne $want[$name]) { throw "uninstall entry $name = '$($key.$name)', want '$($want[$name])'" }
+          }
+          if ($key.EstimatedSize -lt 1024) { throw "EstimatedSize = $($key.EstimatedSize) KB" }
+          $version = & (Join-Path $dir 'leakguard.exe') version
+          if ($LASTEXITCODE -ne 0 -or $version -ne 'leakguard 0.0.0-ci') { throw "leakguard.exe version: '$version' (exit $LASTEXITCODE)" }
+          # The tray's dialogs need Common Controls 6, which only its
+          # RT_MANIFEST resource (type 24, ID 1) asks for.
+          Add-Type -TypeDefinition @'
+          using System;
+          using System.ComponentModel;
+          using System.Runtime.InteropServices;
+          using System.Text;
+          public static class PEResource {
+            [DllImport("kernel32", SetLastError = true, CharSet = CharSet.Unicode)]
+            static extern IntPtr LoadLibraryEx(string path, IntPtr file, uint flags);
+            [DllImport("kernel32", SetLastError = true)]
+            static extern IntPtr FindResource(IntPtr module, IntPtr name, IntPtr type);
+            [DllImport("kernel32", SetLastError = true)]
+            static extern IntPtr LoadResource(IntPtr module, IntPtr info);
+            [DllImport("kernel32", SetLastError = true)]
+            static extern IntPtr LockResource(IntPtr data);
+            [DllImport("kernel32", SetLastError = true)]
+            static extern uint SizeofResource(IntPtr module, IntPtr info);
+            [DllImport("kernel32")]
+            static extern bool FreeLibrary(IntPtr module);
+            public static string Manifest(string path) {
+              // LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE
+              IntPtr m = LoadLibraryEx(path, IntPtr.Zero, 0x2 | 0x20);
+              if (m == IntPtr.Zero) throw new Win32Exception();
+              try {
+                IntPtr r = FindResource(m, (IntPtr)1, (IntPtr)24);
+                if (r == IntPtr.Zero) throw new Win32Exception();
+                uint n = SizeofResource(m, r);
+                IntPtr p = LockResource(LoadResource(m, r));
+                if (p == IntPtr.Zero || n == 0) throw new Win32Exception();
+                byte[] b = new byte[n];
+                Marshal.Copy(p, b, 0, (int)n);
+                return Encoding.UTF8.GetString(b);
+              } finally {
+                FreeLibrary(m);
+              }
+            }
+          }
+          '@
+          $manifest = [PEResource]::Manifest((Join-Path $dir 'leakguard-tray.exe'))
+          Write-Output $manifest
+          foreach ($needle in 'name="Microsoft.Windows.Common-Controls"', 'version="6.0.0.0"', 'publicKeyToken="6595b64144ccf1df"', 'level="asInvoker"', '>true</dpiAware>') {
+            if (-not $manifest.Contains($needle)) { throw "the tray's manifest lacks $needle" }
+          }
+      - name: A plain install does not install the service
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (Get-Service -Name leakguard -ErrorAction SilentlyContinue) { throw 'the installer installed the leakguard service' }
+          $service = Join-Path $env:ProgramFiles 'leakguard\service'
+          if (Test-Path -LiteralPath $service) { throw "$service exists" }
+      # The service, then an upgrade over it: reinstall-service restarts the
+      # service on its own new copy, with the saved choice and the filters.
+      - name: Enable, then upgrade with the service installed
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dir = Join-Path $env:ProgramFiles 'leakguard'
+          $provider = $env:WFP_PROVIDER
+          function Get-LeakguardService {
+            Get-CimInstance Win32_Service -Filter "Name='leakguard'"
+          }
+          function Wait-Running([int]$notPid) {
+            for ($i = 0; $i -lt 60; $i++) {
+              $s = Get-LeakguardService
+              if ($s -and $s.State -eq 'Running' -and $s.ProcessId -ne 0 -and $s.ProcessId -ne $notPid) { return $s }
+              Start-Sleep -Seconds 1
+            }
+            throw "the leakguard service is not running a new process: $($s | Format-List | Out-String)"
+          }
+          function Test-Filters {
+            $xml = Join-Path $env:RUNNER_TEMP 'filters.xml'
+            netsh wfp show filters file="$xml" | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "netsh wfp show filters exited with $LASTEXITCODE" }
+            Select-String -LiteralPath $xml -Pattern $provider -SimpleMatch -Quiet
+          }
+          & (Join-Path $dir 'leakguard.exe') enable --vpn 'WireGuard Tunnel' anthropic
+          if ($LASTEXITCODE -ne 0) { throw "enable exited with $LASTEXITCODE" }
+          $before = Wait-Running 0
+          $command = "`"$dir\service\leakguard.exe`" serve"
+          if ($before.PathName -ne $command -or $before.StartMode -ne 'Auto') { throw "service: $($before.PathName), $($before.StartMode)" }
+          if (-not (Test-Filters)) { throw 'no leakguard filter after enable' }
+          $setup = Join-Path $env:RUNNER_TEMP "installer\$env:SETUP"
+          $p = Start-Process -FilePath $setup -ArgumentList '/S' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "the upgrade exited with $($p.ExitCode)" }
+          $after = Wait-Running $before.ProcessId
+          if ($after.PathName -ne $command) { throw "service after the upgrade: $($after.PathName)" }
+          if (-not (Test-Filters)) { throw 'no leakguard filter after the upgrade' }
+          $status = ''
+          for ($i = 0; $i -lt 30; $i++) {
+            $status = (& (Join-Path $dir 'leakguard.exe') status 2>&1 | Out-String) + "(exit $LASTEXITCODE)"
+            if ($status -match 'anthropic' -and $status -match 'WireGuard Tunnel') { break }
+            Start-Sleep -Seconds 1
+          }
+          Write-Output $status
+          if (-not ($status -match 'anthropic' -and $status -match 'WireGuard Tunnel')) { throw 'the saved choice is not kept after the upgrade' }
+          # Only the checks above decide; not the exit status of status.
+          exit 0
+      # disable stops and deletes the service, then cannot remove its copy
+      # while this step holds it open without FILE_SHARE_DELETE, so it fails
+      # before the filters are flushed. The uninstaller must then remove
+      # nothing and exit with 2. enable then reinstalls the service, so the
+      # next step retries the uninstall over a running service.
+      - name: A failed disable keeps everything, so the uninstall can be retried
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dir = Join-Path $env:ProgramFiles 'leakguard'
+          $uninstallKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\leakguard'
+          $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+          $lnk = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\leakguard.lnk'
+          # The runner's user may have no Run key; -Force on an existing key would empty it.
+          if (-not (Test-Path -LiteralPath $runKey)) { New-Item -Path $runKey -Force | Out-Null }
+          New-ItemProperty -LiteralPath $runKey -Name leakguard -Value "`"$dir\leakguard-tray.exe`"" -Force | Out-Null
+          $lock = [IO.File]::Open((Join-Path $dir 'service\leakguard.exe'), [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+          try {
+            # _?= runs the uninstaller in place and waits for it, so its exit
+            # code is the uninstall's. It must come last, unquoted.
+            $p = Start-Process -FilePath (Join-Path $dir 'uninstall.exe') -ArgumentList "/S _?=$dir" -Wait -PassThru
+            if ($p.ExitCode -ne 2) { throw "the uninstaller exited with $($p.ExitCode), want 2" }
+          } finally {
+            $lock.Dispose()
+          }
+          foreach ($f in 'leakguard.exe', 'leakguard-tray.exe', 'uninstall.exe', 'LICENSE.txt', 'install-windows.md') {
+            if (-not (Test-Path -LiteralPath (Join-Path $dir $f) -PathType Leaf)) { throw "$f was removed" }
+          }
+          if (-not (Test-Path -LiteralPath $uninstallKey)) { throw 'the uninstall entry was removed' }
+          if (-not (Test-Path -LiteralPath $lnk)) { throw 'the Start menu shortcut was removed' }
+          if ($null -eq (Get-ItemProperty -LiteralPath $runKey -Name leakguard -ErrorAction SilentlyContinue)) { throw 'the Run value was removed' }
+          $xml = Join-Path $env:RUNNER_TEMP 'filters-failed.xml'
+          netsh wfp show filters file="$xml" | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "netsh wfp show filters exited with $LASTEXITCODE" }
+          if (-not (Select-String -LiteralPath $xml -Pattern $env:WFP_PROVIDER -SimpleMatch -Quiet)) { throw 'the filters were removed although disable failed' }
+          & (Join-Path $dir 'leakguard.exe') enable
+          if ($LASTEXITCODE -ne 0) { throw "enable exited with $LASTEXITCODE" }
+          for ($i = 0; $i -lt 60 -and (Get-Service -Name leakguard).Status -ne 'Running'; $i++) {
+            Start-Sleep -Seconds 1
+          }
+          if ((Get-Service -Name leakguard).Status -ne 'Running') { throw 'the leakguard service is not running after enable' }
+      - name: Uninstall silently, everything is gone
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dir = Join-Path $env:ProgramFiles 'leakguard'
+          $uninstallKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\leakguard'
+          $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+          # The runner's user may have no Run key; -Force on an existing key would empty it.
+          if (-not (Test-Path -LiteralPath $runKey)) { New-Item -Path $runKey -Force | Out-Null }
+          New-ItemProperty -LiteralPath $runKey -Name leakguard -Value "`"$dir\leakguard-tray.exe`"" -Force | Out-Null
+          $p = Start-Process -FilePath (Join-Path $dir 'uninstall.exe') -ArgumentList '/S' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "the uninstaller exited with $($p.ExitCode)" }
+          # The uninstaller runs from a copy in %TEMP%: wait for it to finish.
+          for ($i = 0; $i -lt 120 -and ((Test-Path -LiteralPath $dir) -or (Test-Path -LiteralPath $uninstallKey)); $i++) {
+            Start-Sleep -Seconds 1
+          }
+          if (Test-Path -LiteralPath $dir) { throw "$dir is still there: $(Get-ChildItem -LiteralPath $dir -Recurse | Out-String)" }
+          if (Test-Path -LiteralPath $uninstallKey) { throw 'the uninstall entry is still there' }
+          $lnk = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\leakguard.lnk'
+          if (Test-Path -LiteralPath $lnk) { throw 'the Start menu shortcut is still there' }
+          if ($null -ne (Get-ItemProperty -LiteralPath $runKey -Name leakguard -ErrorAction SilentlyContinue)) { throw 'the Run value is still there' }
+          if (Get-Service -Name leakguard -ErrorAction SilentlyContinue) { throw 'the leakguard service is still there' }
+          $xml = Join-Path $env:RUNNER_TEMP 'filters-after.xml'
+          netsh wfp show filters file="$xml" | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "netsh wfp show filters exited with $LASTEXITCODE" }
+          if (Select-String -LiteralPath $xml -Pattern $env:WFP_PROVIDER -SimpleMatch -Quiet) { throw 'leakguard filters are still loaded' }
 
   test-macos:
     name: Test on macOS (real pfctl and plutil checks)

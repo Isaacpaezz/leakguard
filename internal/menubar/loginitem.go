@@ -95,12 +95,14 @@ func checkExe(exe string) error {
 }
 
 // loginItem is where one system keeps the login item and the app's
-// choices, and how it writes the login item. The macOS LaunchAgent and the
-// Linux autostart entry share every rule below.
+// choices, and how it writes the login item. The macOS LaunchAgent, the
+// Linux autostart entry and the Windows Run value share every rule below.
 type loginItem struct {
-	// base is the folder both files live under (the home folder, or the XDG
-	// config folder); it must be absolute.
-	base, path, prefs string
+	// base is the folder the choices live under (the home folder, the XDG
+	// config folder or %APPDATA%); it must be absolute.
+	base, prefs string
+	// store holds the login item itself.
+	store itemStore
 	// content renders the login item that runs exe.
 	content func(exe string) ([]byte, error)
 	// manages reports whether the login item may be touched for exe at all
@@ -108,10 +110,54 @@ type loginItem struct {
 	manages, canChange func(exe string) bool
 }
 
+// itemStore holds a login item: a file, or the Windows Run value.
+type itemStore interface {
+	// read returns the login item; exists is false only when it is
+	// missing. One that cannot be read counts as existing with no data, so
+	// it is replaced when it should be there.
+	read() (data []byte, exists bool)
+	write(data []byte) error
+	// remove deletes it; one already gone is fine.
+	remove() error
+	present() bool
+}
+
+// fileStore is a login item file at its path.
+type fileStore string
+
+func (f fileStore) read() ([]byte, bool) {
+	data, err := readRegular(string(f), maxLoginItem)
+	if err != nil {
+		// Unreadable, too big or not a regular file: replace it when it
+		// should be there.
+		return nil, !errors.Is(err, fs.ErrNotExist)
+	}
+	return data, true
+}
+
+func (f fileStore) write(data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(string(f)), 0o755); err != nil {
+		return err
+	}
+	return writeFileAtomic(string(f), data, 0o644)
+}
+
+func (f fileStore) remove() error {
+	if err := os.Remove(string(f)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+func (f fileStore) present() bool {
+	_, err := os.Lstat(string(f))
+	return err == nil
+}
+
 func macLoginItem(home string, readOnly ReadOnlyFunc) loginItem {
 	return loginItem{
 		base:    home,
-		path:    LoginItemPath(home),
+		store:   fileStore(LoginItemPath(home)),
 		prefs:   PrefsPath(home),
 		content: LoginItemPlist,
 		manages: func(exe string) bool {
@@ -253,28 +299,16 @@ func (li loginItem) apply(exe string, on bool) error {
 	if !li.canChange(exe) {
 		return nil
 	}
-	path := li.path
-	data, err := readRegular(path, maxLoginItem)
-	exists := err == nil
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		// Unreadable, too big or not a regular file: replace it when it
-		// should be there.
-		data, exists = nil, true
-	}
+	data, exists := li.store.read()
 	switch li.decide(exe, on, data, exists) {
 	case LoginWrite:
 		want, err := li.content(exe)
 		if err != nil {
 			return err
 		}
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			return err
-		}
-		return writeFileAtomic(path, want, 0o644)
+		return li.store.write(want)
 	case LoginRemove:
-		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return err
-		}
+		return li.store.remove()
 	}
 	return nil
 }
@@ -316,10 +350,11 @@ func (li loginItem) remove() error {
 		return err
 	}
 	var errs []error
-	for _, p := range []string{li.path, li.prefs} {
-		if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			errs = append(errs, err)
-		}
+	if err := li.store.remove(); err != nil {
+		errs = append(errs, err)
+	}
+	if err := os.Remove(li.prefs); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		errs = append(errs, err)
 	}
 	// The leakguard folder goes too when nothing else is in it.
 	os.Remove(filepath.Dir(li.prefs))
@@ -474,6 +509,5 @@ func (li loginItem) present() bool {
 	if checkHome(li.base) != nil {
 		return false
 	}
-	_, err := os.Lstat(li.path)
-	return err == nil
+	return li.store.present()
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/netip"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -223,7 +224,17 @@ destination: default
 	if _, err := ParseDefaultRoute("route: writing to routing socket: not in table\n"); err == nil {
 		t.Fatal("ParseDefaultRoute() without interface = nil error")
 	}
-	if _, err := ParseDefaultRoute("  interface: en0;rm\n"); err == nil {
+	if _, err := ParseDefaultRoute(invalidRouteLine(runtime.GOOS)); err == nil {
 		t.Fatal("ParseDefaultRoute() accepted an invalid interface name")
 	}
+}
+
+// invalidRouteLine is a default-route line whose interface name the host's
+// rules refuse. A Windows adapter alias may hold ";" (any character but a
+// control one), so there the name holds a control character instead.
+func invalidRouteLine(goos string) string {
+	if goos == "windows" {
+		return "  interface: en0\x7frm\n"
+	}
+	return "  interface: en0;rm\n"
 }

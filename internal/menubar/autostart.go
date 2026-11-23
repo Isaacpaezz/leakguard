@@ -82,7 +82,7 @@ func linuxLoginItem(configDir string) loginItem {
 	managed := func(exe string) bool { return filepath.IsAbs(exe) && filepath.Clean(exe) == exe }
 	return loginItem{
 		base:      configDir,
-		path:      AutostartPath(configDir),
+		store:     fileStore(AutostartPath(configDir)),
 		prefs:     LinuxPrefsPath(configDir),
 		content:   AutostartEntry,
 		manages:   managed,
