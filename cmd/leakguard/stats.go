@@ -129,7 +129,7 @@ func (d *daemonStats) sampleVPN() (connected, ok bool) {
 		return false, false
 	}
 	for _, i := range ifs {
-		if i.Name == cfg.VPNInterface {
+		if config.SameInterface(i.Name, cfg.VPNInterface) {
 			connected = i.Connected()
 		}
 	}

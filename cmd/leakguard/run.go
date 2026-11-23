@@ -62,6 +62,10 @@ type Env struct {
 	ChownSocket func(path string, uid, gid int) error
 	// Authorize checks a peer of the socket. Nil means the ipc peer check.
 	Authorize func(net.Conn) error
+	// CheckServer checks the daemon "status" asks before sending to it.
+	// Nil means the ipc check (on Windows the pipe must belong to the
+	// leakguard service); tests that run their own daemon replace it.
+	CheckServer func(net.Conn) error
 	// ApplyEvery is how often "serve" verifies the rules, and loads them
 	// again when they fail. Zero means applyInterval.
 	ApplyEvery time.Duration

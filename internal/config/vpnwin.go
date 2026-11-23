@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -88,6 +89,29 @@ func (r rules) listAdapters() ([]windowsAdapter, error) {
 		return nil, errors.New("the network adapters cannot be listed")
 	}
 	return r.adapters()
+}
+
+// same compares interface names like the system resolves them: Windows
+// adapter aliases ignoring case, other names exactly.
+func (r rules) same(a, b string) bool {
+	if r.goos == "windows" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
+}
+
+// canonical returns the name of names that is name, ignoring case on
+// Windows (an exact match first), or name when none is.
+func (r rules) canonical(name string, names []string) string {
+	if r.goos != "windows" || slices.Contains(names, name) {
+		return name
+	}
+	for _, n := range names {
+		if strings.EqualFold(n, name) {
+			return n
+		}
+	}
+	return name
 }
 
 // windowsCandidates keeps the names of connected VPN adapters.

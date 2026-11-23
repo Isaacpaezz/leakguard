@@ -135,11 +135,27 @@ func (c *cli) findInterface(name string) (Interface, bool) {
 		return Interface{}, false
 	}
 	for _, i := range ifs {
-		if i.Name == name {
+		if config.SameInterface(i.Name, name) {
 			return i, true
 		}
 	}
 	return Interface{}, false
+}
+
+// canonicalVPN returns the name to store for the VPN interface name: on
+// Windows the real alias of the adapter it names ignoring case, since the
+// firewall looks the saved alias up exactly; elsewhere, and when no
+// interface matches or they cannot be listed, name itself.
+func (c *cli) canonicalVPN(name string) string {
+	ifs, err := c.env.Interfaces()
+	if err != nil {
+		return name
+	}
+	names := make([]string, 0, len(ifs))
+	for _, i := range ifs {
+		names = append(names, i.Name)
+	}
+	return config.CanonicalInterfaceName(name, names)
 }
 
 func (c *cli) services(args []string) error {
@@ -290,6 +306,7 @@ func (c *cli) enable(args []string) error {
 			return err
 		}
 	}
+	cfg.VPNInterface = c.canonicalVPN(cfg.VPNInterface)
 	if err := cfg.Validate(all); err != nil {
 		return err
 	}
@@ -407,7 +424,7 @@ func (c *cli) status(args []string) error {
 	}
 	// Without root, the daemon verifies the rules for us when it answers.
 	if !c.env.IsRoot() && c.env.Socket != "" {
-		if st, err := (ipc.Client{Path: c.env.Socket}).Status(); err == nil {
+		if st, err := (ipc.Client{Path: c.env.Socket, CheckServer: c.env.CheckServer}).Status(); err == nil {
 			return c.printDaemonStatus(st)
 		}
 	}
@@ -474,7 +491,7 @@ func (c *cli) verify(cfg config.Config, services []catalog.Service) error {
 }
 
 func isVPN(iface string, cfg config.Config) bool {
-	return iface == cfg.VPNInterface || len(config.VPNCandidates([]string{iface})) > 0
+	return config.SameInterface(iface, cfg.VPNInterface) || len(config.VPNCandidates([]string{iface})) > 0
 }
 
 // realConnections returns the connected interfaces outside the VPN.

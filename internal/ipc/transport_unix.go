@@ -22,6 +22,10 @@ func dial(path string) (net.Conn, error) {
 	return net.DialTimeout("unix", path, DialTimeout)
 }
 
+// checkServer accepts every server: the socket lives in a directory only
+// root may write, so only root can have created it.
+func checkServer(net.Conn) error { return nil }
+
 // systemSocketOwner is the socket's owner on this computer.
 func systemSocketOwner() socketOwner {
 	return socketOwnership(runtime.GOOS, user.LookupGroup)

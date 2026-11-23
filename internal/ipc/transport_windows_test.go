@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -86,7 +87,7 @@ func TestPipeRoundTripWithTheRealTokenCheck(t *testing.T) {
 	path := testPipe()
 	var calls atomic.Int32
 	stop := startPipeServer(t, &Server{Path: path, Handler: pauseHandler(&calls)})
-	c := Client{Path: path}
+	c := Client{Path: path, CheckServer: anyServer}
 	if !currentUserIsAdmin(t) {
 		if _, err := c.Pause(); !errors.Is(err, ErrNotAuthorized) {
 			t.Fatalf("Pause() as a standard user = %v, want not authorized", err)
@@ -139,8 +140,9 @@ func TestPipeRefusesAClientWithoutAReadableToken(t *testing.T) {
 	}
 }
 
-// S8: the pipe carries exactly pipeSDDL: a protected DACL that gives SYSTEM
-// and Administrators full access and interactive users read and write.
+// S8: the pipe carries exactly pipeDACL: a protected DACL that gives SYSTEM
+// and Administrators full access and interactive users read and write
+// without FILE_CREATE_PIPE_INSTANCE.
 func TestPipeHasTheSecurityDescriptor(t *testing.T) {
 	path := testPipe()
 	startPipeServer(t, &Server{Path: path, Handler: pauseHandler(new(atomic.Int32))})
@@ -166,13 +168,13 @@ func TestPipeHasTheSecurityDescriptor(t *testing.T) {
 	}
 	const (
 		fileAll       = 0x1F01FF // FILE_ALL_ACCESS, what GA maps to
-		fileReadWrite = 0x12019F // FILE_GENERIC_READ | FILE_GENERIC_WRITE, what GRGW maps to
+		fileReadWrite = 0x12019B // FILE_GENERIC_READ | FILE_GENERIC_WRITE without FILE_CREATE_PIPE_INSTANCE
 	)
 	// Each SID's mask, as written (generic) or as mapped for a file object.
 	want := map[string][2]windows.ACCESS_MASK{
 		sidLocalSystem:    {windows.GENERIC_ALL, fileAll},
 		sidAdministrators: {windows.GENERIC_ALL, fileAll},
-		"S-1-5-4":         {windows.GENERIC_READ | windows.GENERIC_WRITE, fileReadWrite},
+		"S-1-5-4":         {fileReadWrite, fileReadWrite},
 	}
 	if dacl.AceCount != uint16(len(want)) {
 		t.Fatalf("DACL has %d entries, want %d", dacl.AceCount, len(want))
@@ -192,6 +194,45 @@ func TestPipeHasTheSecurityDescriptor(t *testing.T) {
 			t.Fatalf("entry %d allows %#x to %s; want only %v once each", i, ace.Mask, sid, want)
 		}
 		seen[sid] = true
+	}
+}
+
+// anyServer accepts the test's own daemon, which does not run as
+// LocalSystem.
+func anyServer(net.Conn) error { return nil }
+
+// S8 (SF1): a client refuses, before sending anything, a pipe that the
+// leakguard service (LocalSystem) did not create: this test process is an
+// administrator, not LocalSystem, so its pipe has another owner.
+func TestPipeClientRefusesAServerThatIsNotTheService(t *testing.T) {
+	path := testPipe()
+	var calls atomic.Int32
+	startPipeServer(t, &Server{Path: path, Handler: pauseHandler(&calls)})
+	c := Client{Path: path}
+	if _, err := c.Set("Wintun VPN", []string{"anthropic"}); !errors.Is(err, ErrUntrustedServer) ||
+		err.Error() != "the leakguard pipe is not served by the leakguard service" {
+		t.Fatalf("Set() = %v, want %v", err, ErrUntrustedServer)
+	}
+	if _, err := c.Status(); !errors.Is(err, ErrUntrustedServer) {
+		t.Fatalf("Status() = %v, want %v", err, ErrUntrustedServer)
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("handler ran %d times for a refused server", calls.Load())
+	}
+	// The owner is read through a handle opened with the client's own
+	// rights, and it is not LocalSystem.
+	conn, err := dial(path)
+	if err != nil {
+		t.Fatalf("dial() = %v", err)
+	}
+	defer conn.Close()
+	owner, err := pipeOwner(conn)
+	if err != nil || owner == "" || owner == sidLocalSystem {
+		t.Fatalf("pipeOwner() = %q, %v; want this process's owner, not LocalSystem", owner, err)
+	}
+	t.Logf("test pipe owner: %s", owner)
+	if err := checkServer(conn); !errors.Is(err, ErrUntrustedServer) {
+		t.Fatalf("checkServer() = %v, want %v", err, ErrUntrustedServer)
 	}
 }
 

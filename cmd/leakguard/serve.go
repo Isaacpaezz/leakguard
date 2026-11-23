@@ -267,9 +267,10 @@ func (s *service) handle(req ipc.Request) ipc.Response {
 	var err error
 	switch req.Cmd {
 	case ipc.CmdSet:
-		err = s.c.set(req.VPNInterface, req.Services, pfHooks{before: s.blockCounter()})
+		var cfg config.Config
+		cfg, err = s.c.set(req.VPNInterface, req.Services, pfHooks{before: s.blockCounter()})
 		if err == nil {
-			s.loaded(config.Config{VPNInterface: req.VPNInterface, Services: req.Services}, nil)
+			s.loaded(cfg, nil)
 		}
 	case ipc.CmdPause:
 		// The flush resets the counter even when saving the pause fails.
@@ -296,19 +297,21 @@ func runHook(f func()) {
 	}
 }
 
-// set validates, saves and applies a new choice, and ends a pause. An invalid
-// choice changes nothing; a failed apply leaves the old rules loaded.
-func (c *cli) set(vpn string, ids []string, hooks pfHooks) error {
+// set validates, saves and applies a new choice, and ends a pause, and
+// returns the saved choice: the VPN is stored as the adapter's real alias
+// (see canonicalVPN). An invalid choice changes nothing; a failed apply
+// leaves the old rules loaded.
+func (c *cli) set(vpn string, ids []string, hooks pfHooks) (config.Config, error) {
 	all, err := catalog.Embedded()
 	if err != nil {
-		return err
+		return config.Config{}, err
 	}
-	cfg := config.Config{VPNInterface: vpn, Services: ids}
+	cfg := config.Config{VPNInterface: c.canonicalVPN(vpn), Services: ids}
 	if err := cfg.Validate(all); err != nil {
-		return err
+		return config.Config{}, err
 	}
 	if err := config.Save(c.configPath(), cfg); err != nil {
-		return fmt.Errorf("could not save the configuration: %w", err)
+		return config.Config{}, fmt.Errorf("could not save the configuration: %w", err)
 	}
 	runHook(hooks.before)
 	err = c.firewall().Apply(cfg.VPNInterface, selected(cfg, all))
@@ -317,9 +320,9 @@ func (c *cli) set(vpn string, ids []string, hooks pfHooks) error {
 	}
 	c.logApply(cfg, err)
 	if err != nil {
-		return fmt.Errorf("could not apply the firewall rules: %w", err)
+		return config.Config{}, fmt.Errorf("could not apply the firewall rules: %w", err)
 	}
-	return nil
+	return cfg, nil
 }
 
 // pause removes the rules and saves the pause, keeping the choices. If the

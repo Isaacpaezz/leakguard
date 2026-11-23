@@ -63,6 +63,14 @@ func reportFile(t *testing.T) string {
 	return path
 }
 
+// withReportFileFlag defines --report-file for the test, as on Windows.
+func withReportFileFlag(t *testing.T) {
+	t.Helper()
+	old := reportFileFlag
+	reportFileFlag = true
+	t.Cleanup(func() { reportFileFlag = old })
+}
+
 func runReport(env Env, args ...string) (int, string, string) {
 	var stdout, stderr bytes.Buffer
 	code := run(args, &stdout, &stderr, env)
@@ -82,6 +90,7 @@ func readReport(t *testing.T, path string) string {
 // file, the same text stderr shows after "leakguard: ", and exit as
 // without the flag.
 func TestReportFileGetsTheFinalError(t *testing.T) {
+	withReportFileFlag(t)
 	flushFailed := errors.New("the filter engine is busy")
 	tests := []struct {
 		name     string
@@ -125,6 +134,7 @@ func TestReportFileGetsTheFinalError(t *testing.T) {
 
 // S1: a successful run writes nothing to the report file.
 func TestReportFileStaysEmptyOnSuccess(t *testing.T) {
+	withReportFileFlag(t)
 	report := reportFile(t)
 	code, out, errOut := runReport(reportEnv(t, true, nil), "disable", "--report-file", report)
 	expect(t, code, out, errOut, 0, []string{"Protection disabled."}, nil)
@@ -137,6 +147,7 @@ func TestReportFileStaysEmptyOnSuccess(t *testing.T) {
 // elevated command never creates a file, never follows a link, and a
 // report it cannot write is a warning that keeps the exit status.
 func TestReportFileIsNeverCreatedOrFollowed(t *testing.T) {
+	withReportFileFlag(t)
 	dir := t.TempDir()
 	missing := filepath.Join(dir, "missing.txt")
 	code, _, errOut := runReport(reportEnv(t, false, nil), "disable", "--report-file", missing)
@@ -195,6 +206,7 @@ func TestReportFileIsCapped(t *testing.T) {
 // S1: the flag is internal: no help text names it, and the commands that
 // do not take it still refuse it.
 func TestReportFileIsHidden(t *testing.T) {
+	withReportFileFlag(t)
 	for _, goos := range []string{"darwin", "linux", "windows"} {
 		if strings.Contains(usageFor(goos), "report") {
 			t.Errorf("the %s help names the report file", goos)
@@ -203,5 +215,69 @@ func TestReportFileIsHidden(t *testing.T) {
 	code, _, errOut := runReport(reportEnv(t, true, nil), "apply", "--report-file", reportFile(t))
 	if code != 2 || !strings.Contains(errOut, "flag provided but not defined: -report-file") {
 		t.Errorf("apply --report-file: exit %d, stderr %q", code, errOut)
+	}
+}
+
+// S1 (SF4): the report file must have a single link: an elevated run never
+// writes through a hard link to a file the user may not write.
+func TestWriteReportRefusesAHardLink(t *testing.T) {
+	withReportFileFlag(t)
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.txt")
+	if err := os.WriteFile(target, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link.txt")
+	if err := os.Link(target, link); err != nil {
+		t.Fatalf("hard link: %v", err)
+	}
+	err := writeReport(link, errors.New("the filter engine is busy"))
+	if err == nil || err.Error() != link+" has more than one link" {
+		t.Errorf("writeReport(hard link) = %v, want %q", err, link+" has more than one link")
+	}
+	code, _, errOut := runReport(reportEnv(t, false, nil), "disable", "--report-file", link)
+	if code != 1 || !strings.Contains(errOut, "leakguard: "+needAdmin("disable")+"\n") ||
+		!strings.Contains(errOut, "leakguard: warning: could not write the report file: "+link+" has more than one link\n") {
+		t.Errorf("hard-linked report file: exit %d, stderr %q", code, errOut)
+	}
+	for _, p := range []string{target, link} {
+		if got := readReport(t, p); got != "keep" {
+			t.Errorf("%s became %q", p, got)
+		}
+	}
+	// With the second link gone, the file is written again.
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeReport(target, errors.New("short")); err != nil || readReport(t, target) != "short\n" {
+		t.Errorf("single link: writeReport() = %v, report %q", err, readReport(t, target))
+	}
+}
+
+// S1 (SF4): on Windows the report file must be owned by the user who
+// started the elevated run (its token's user or default owner): a file
+// someone else owns, or an unknown owner, is refused.
+func TestReportOwnerDecision(t *testing.T) {
+	const user, admins = "S-1-5-21-1-2-3-1001", "S-1-5-32-544"
+	invoker := []string{user, admins}
+	for _, owner := range []string{user, admins} {
+		if err := reportOwnedBy("r.txt", owner, invoker); err != nil {
+			t.Errorf("owner %s: %v", owner, err)
+		}
+	}
+	for _, tc := range []struct {
+		owner   string
+		invoker []string
+	}{
+		{"S-1-5-21-1-2-3-1002", invoker},
+		{"S-1-5-18", invoker},
+		{"", invoker},
+		{user, nil},
+		{"", []string{""}},
+	} {
+		err := reportOwnedBy("r.txt", tc.owner, tc.invoker)
+		if err == nil || err.Error() != "r.txt is not owned by the user who started leakguard" {
+			t.Errorf("owner %q, invoker %q: %v", tc.owner, tc.invoker, err)
+		}
 	}
 }

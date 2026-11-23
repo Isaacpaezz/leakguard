@@ -82,6 +82,22 @@ func (c Config) ValidateServices(services []catalog.Service) error {
 	return nil
 }
 
+// CanonicalInterfaceName returns the interface name to store for name,
+// given the names of the interfaces that exist now. Windows resolves adapter
+// aliases ignoring case, but the firewall and the daemon look the saved
+// alias up exactly, so on Windows it returns the existing adapter's real
+// alias (an exact match first); a name no adapter matches is kept. macOS
+// and Linux names are case-sensitive: name is returned unchanged.
+func CanonicalInterfaceName(name string, names []string) string {
+	return host.canonical(name, names)
+}
+
+// SameInterface reports whether a and b name the same interface: ignoring
+// case on Windows, exactly elsewhere.
+func SameInterface(a, b string) bool {
+	return host.same(a, b)
+}
+
 // VPNCandidates keeps the interface names that look like VPN tunnels. On
 // Windows only connected VPN adapters are kept.
 func VPNCandidates(names []string) []string {
