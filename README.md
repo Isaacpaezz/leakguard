@@ -596,6 +596,14 @@ también quita la protección. Guía completa, con la ruta por terminal:
   (puedes escribir en español).
 - ¿Quieres colaborar? Lee [CONTRIBUTING.md](CONTRIBUTING.md).
 
+## Built with Gentle-AI
+
+<p align="center">
+  <a href="https://github.com/Gentleman-Programming/gentle-ai">
+    <img width="220" src="https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/docs/assets/brand/built-with-gentle-ai.png" alt="Built with Gentle-AI" />
+  </a>
+</p>
+
 ## License
 
 [MIT](LICENSE) © 2026 Isaac Paez
